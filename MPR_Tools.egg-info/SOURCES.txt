@@ -1,0 +1,8 @@
+README.txt
+setup.py
+MPR_Tools/MPR_Tools.py
+MPR_Tools/__init__.py
+MPR_Tools.egg-info/PKG-INFO
+MPR_Tools.egg-info/SOURCES.txt
+MPR_Tools.egg-info/dependency_links.txt
+MPR_Tools.egg-info/top_level.txt

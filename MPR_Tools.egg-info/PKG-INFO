@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: MPR-Tools
+Version: 1.0
+Summary: Toolkit for analyzing MPR Neutron Spectrometers
+Author: Shon Mackie
+Author-email: smackie@mit.edu
+License: MIT
