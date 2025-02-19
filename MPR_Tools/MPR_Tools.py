@@ -144,11 +144,29 @@ class acceptance:
         E0 - MeV, initial energy
         L - m, distance traveled through material
         N - number of discretizations of path through foil
+        --------------------------------------------------
+        return the energy of proton after transitting foil
         '''
         dL = L/N
         E=E0
         for i in range(N):
             E-=self.SP(E)*dL*1e3 #SP is in MeV/mm, convert to MeV/m
+        return E
+
+    def SRIM_reverse(self, E_0, L, N=1000):
+        '''
+        calculate the initial energy of a proton by reversing the slowing down in the foil (neglects straggling which for thin foils is small, this assumption gets worse as E decreases)
+        E0 - MeV, initial energy
+        L - m, distance traveled through material
+        N - number of discretizations of path through foil
+        --------------------------------------------------
+        return the energy of the proton before transitting foil
+        '''
+        dL = L/N
+        E = E_0
+        # E0=E_0
+        for i in range(N):
+            E +=self.SP(E)*dL*1e3 #SP is in MeV/mm, convert to MeV/m
         return E
 
     def sigma_np_total(self, E):
@@ -202,22 +220,22 @@ class acceptance:
         lim=np.arctan((self.rf+self.ra)/self.L) #max angle that is accepted in order to increase computational efficiency
         scatter_grid = np.linspace(0, lim, N_s) #don't sample beyond what could possibly be accepted
         dsdO = self.diff_xs_LAB(E, scatter_grid)
-        dsdO /= np.sum(dsdO)
-        g=0
-        loop=True #should the loop be executed?
-        while loop==True:
+        dsdO_cdf = np.cumsum(dsdO) / np.sum(dsdO)
+        if z_samp=='exp': Pz=np.exp(-(self.zf_grid+self.T)*(self.sigma_np_total(E)*self.np+self.sigma_nC12_total(E)*self.nC))
+        if z_samp=='uni': Pz=np.ones_like(self.zf_grid)
+        Pz_cdf = np.cumsum(Pz) / np.sum(Pz)
+        while True:
             #generate initial coordinates in foil
             rf = self.rf*np.sqrt(np.random.rand())
             thetaf = 2*np.pi*np.random.rand()
             x0=rf*np.cos(thetaf)
             y0=rf*np.sin(thetaf)
-            if z_samp=='exp': Pz=np.exp(-(self.zf_grid+self.T)*(self.sigma_np_total(E)*self.np+self.sigma_nC12_total(E)*self.nC))
-            if z_samp=='uni': Pz=np.ones_like(self.zf_grid)
-            z0=np.random.choice(self.zf_grid, p=Pz/np.sum(Pz))
+            
+            z0=self.zf_grid[np.searchsorted(Pz_cdf, np.random.rand())] #sample z0 using cdf method
 
             #select random scattering angles using differential scattering information
             phi_s = 2*np.pi*np.random.rand() #azimuthal scatteirng angle
-            theta_s = np.random.choice(scatter_grid, p=dsdO)
+            theta_s = scatter_grid[np.searchsorted(dsdO_cdf, np.random.rand())]
             pina=self.check_ray(x0, y0, theta_s, phi_s) #bool, is proton in aperture?
             if pina:
                 if Kinematic:
@@ -227,9 +245,7 @@ class acceptance:
                     E=self.SRIM(E, L_SRIM)
                 x0+=z0*np.tan(theta_s)*np.cos(phi_s) #adjust initial x,y coords to account for transport through foil
                 y0+=z0*np.tan(theta_s)*np.cos(phi_s)
-                loop=False #once a proton which enters is generated, stop looping
-            g+=1
-        return x0, y0, theta_s, phi_s, E
+                return x0, y0, theta_s, phi_s, E
 
     def check_ray(self, x0, y0, theta_s, phi_s):
         '''
@@ -281,15 +297,19 @@ class acceptance:
         bar.finish()
         return eps_acpt*eps_scat#, eps_scat, eps_acpt
     
-    def get_Ep_dist(self, En, N=int(1e2)):
+    def get_Ep_dist(self, En, f_En, N=int(1e2)):
         '''
-        returns the proton energy distribution at exit of foil
-        En - neutron energy [MeV]
+        returns the proton energy distribution at exit of foil for a given neutron energy distribution
+        En - neutron energy range [MeV]
+        f_En - distribution of neutron energies evaluated on En 
         N - number of protons to simulate
         '''
         Eps = np.zeros(N)
+        f_En*=self.sigma_np_total(En)
+        f_En=f_En/np.sum(f_En)
         for i in range(N):
-            r=self.generate_ray(En, True, True)
+            E=np.random.choice(En,p=f_En)
+            r=self.generate_ray(E, True, True)
             Eps[i]=r[4]
         return Eps
 
@@ -297,6 +317,7 @@ class acceptance:
 class hodoscope:
     '''
     detector array at the focal plane. detectors are assumed to be centered on the final position of the reference ray
+    TODO - add functionality to load hodo config from file
     '''
     def __init__(self, NL, NR, w, h):
         '''
@@ -328,18 +349,28 @@ class hodoscope:
     def get_detector_centers(self):
         return self.det_c
 
+    def get_num_channels(self):
+        return self.N
 
 
 class MPR:
     '''
     This class represents a full MPR system
     '''
-    def __init__(self, acceptance, map_path, refE, hodoscope, fig_dir):
+    def __init__(self, acceptance, map_path, refE, bite, hodoscope, fig_dir):
+        '''
+        Initialize MPR system
+        acceptance - acceptance object
+        map_path - path to COSY transfer map
+        refE - MeV, reference energy
+        bite - float, energy bite of the spectrometer expressed as fraction of reference energy (eg 0.25 = +-25% about E0)
+        '''
         print('Initializing Magnetic Proton Recoil Spectrometer...')
         self.acceptance = acceptance
         self.map = np.genfromtxt(map_path, unpack=True)
         print('loaded COSY transfer map from ', map_path, '\n')
         self.refE=refE
+        self.bite=bite
         self.hodoscope=hodoscope
         self.fig_dir=fig_dir
         #run horizontal axis initialization routine
@@ -395,7 +426,7 @@ class MPR:
         print('Initialized', self.beam_in[:,0].size, 'protons')
         print('repeated ', repeat, ' times')
 
-    def GenRays(self, E, f_E, Np, kinematics=False, SRIM=False, z_samp='exp'):
+    def GenRays(self, E, f_E, Np, kinematics=True, SRIM=True, z_samp='exp'):
         '''
         Method for generating rays from arbitrary neutron energy distribution
         E: Array of initial energies over which to sample [MeV]
@@ -451,15 +482,21 @@ class MPR:
         bar.finish()
         print('Map Applied!')
 
-    def assess_monoenergetic_performance(self, E, N=10000, kinematics = True, SRIM=True, drawfig=False, fig_name='DEFAULT', prints=False):
+    def assess_monoenergetic_performance(self, E, N=10000, kinematics = True, SRIM=True, drawfig=False, fig_name='DEFAULT', prints=False, verbose_outputs = False):
         '''
         evaluate the performance for a monoenergetic incident neutron beam interms of image full width at half max and resolution
         E: MeV
         N: number of protons
-        return average position, FWHM of position distribution, and resolution
+        kinematics: bool, include cos^2 energy loss
+        SRIM: bool, include stopping power
+        drawfig: bool, generate a figure
+        fig_name: string, name of output figure
+        prints: bool, print statements
+        verbose_outputs: bool, if True returns mean, std, R_E, + distributions of x, y, E
+                        if False, return average position, std, and resolution
         '''
         print('Assessing performance for %.3f MeV monoenergetic neutrons...' %E)
-        self.GenRays(np.array([E]), np.array([1]), N, kinematics, SRIM)
+        self.GenRays(np.array([E]), np.array([1.]), N, kinematics, SRIM)
         self.Apply_Map(order=5)
         #get gaussian fit parameters 
         #TODO - consider more sophisticated method for evaluating resolution
@@ -495,7 +532,33 @@ class MPR:
             print(' Standard Deviation [cm]: ', std*100)
             print(' FWHM [cm]:    ', FWHM*100)
             print(' Resolution [%]', R_E*100)
-        return mean, std, FWHM, R_E
+        if verbose_outputs: return mean, std, R_E, self.beam_out[:,0], self.beam_out[:,2], self.beam_in[:,4]*self.refE+self.refE
+        else: return mean, std, FWHM, R_E
+
+    def generate_dispersion_curve(self, NE=15, Np= 100, kinematics=True, SRIM=True, file_name='DEFAULT', drawfig=False):
+        '''
+        generate a dispersion curve for the MPR spectrometer. propagates a monoenergetic beam through the spectrometer and records the final x positions
+        NE: number of distinct energies to simulate
+        Np: number of protons to simulate at each energy
+        file_name: string, name of output file
+        '''
+        E = np.linspace(self.refE*(1-self.bite), self.refE*(1+self.bite), NE)
+        mean = np.zeros_like(E)
+        std = np.zeros_like(E)
+        for i, e in enumerate(E):
+            mean[i], std[i] = self.assess_monoenergetic_performance(e, Np, kinematics=kinematics, SRIM=SRIM, drawfig=False, prints=False, verbose_outputs=False)[0:2]
+        if file_name=='DEFAULT':
+            file_name='DispersionCurve'
+        np.savetxt(file_name+'.txt', np.array([E, mean, std]))
+        if drawfig:
+            fig, ax = plt.subplots(1,1, figsize=(5,5))
+            ax.plot(E, mean)
+            ax.fill_between(E, mean-std, mean+std, alpha=0.5)
+            ax.set_title('Dispersion Curve')
+            ax.set_xlabel('neutron energy [MeV]')
+            ax.set_ylabel('proton position [m]')
+            plt.savefig(file_name+'.png')
+
 
     def get_proton_density(self, dx=0.01, dy=0.01):
         '''
