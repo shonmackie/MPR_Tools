@@ -469,6 +469,7 @@ class MPR:
         bar = Bar('Applying order %i transfer map...' %order, max=len(self.beam_in[:,0]))
         self.beam_out = np.zeros_like(self.beam_in)
         for i, b in enumerate(self.beam_in):
+            self.beam_out[i]=[0,0,0,0,b[4]]
             for j, index in enumerate(self.map[-1]):
                 digits = get_digits(index)
                 if digits.sum()<=order:
@@ -476,8 +477,7 @@ class MPR:
                     af = self.map[1, j]*b[0]**digits[0]*b[1]**digits[1]*b[2]**digits[2]*b[3]**digits[3]*b[4]**digits[5]
                     yf = self.map[2, j]*b[0]**digits[0]*b[1]**digits[1]*b[2]**digits[2]*b[3]**digits[3]*b[4]**digits[5]
                     bf = self.map[3, j]*b[0]**digits[0]*b[1]**digits[1]*b[2]**digits[2]*b[3]**digits[3]*b[4]**digits[5]
-                    Ef = self.map[5, j]*b[0]**digits[0]*b[1]**digits[1]*b[2]**digits[2]*b[3]**digits[3]*b[4]**digits[5]
-                    self.beam_out[i] += [xf, af, yf, bf, Ef] 
+                    self.beam_out[i] += [xf, af, yf, bf, 0] 
             bar.next()
         bar.finish()
         print('Map Applied!')
