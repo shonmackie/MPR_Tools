@@ -1532,6 +1532,174 @@ class MPRSpectrometer:
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
         print(f'Proton density heatmap saved to {filename}')
+        
+    def plot_characteristic_rays(
+        self,
+        radial_points: int = 3,
+        angular_points: int = 0, 
+        aperture_radial_points: int = 0,
+        aperture_angular_points: int = 0,
+        energy_points: int = 1,
+        min_energy: Optional[float] = None,
+        max_energy: Optional[float] = None,
+        filename: str = 'default',
+        show_foil_aperture: bool = True,
+        ray_alpha: float = 0.6,
+        max_rays_to_plot: int = 100
+    ) -> None:
+        """
+        Generate and plot characteristic rays through the spectrometer system.
+        
+        This function generates characteristic rays using the generate_characteristic_rays()
+        method, applies the transfer map, and visualizes both the input geometry and 
+        output focal plane distribution.
+        
+        Args:
+            radial_points: Number of radial points in foil (0 for on-axis only)
+            angular_points: Number of angular points in foil
+            aperture_radial_points: Number of radial points in aperture
+            aperture_angular_points: Number of angular points in aperture
+            energy_points: Number of energy points around reference
+            min_energy: Minimum energy in MeV (defaults to class value)
+            max_energy: Maximum energy in MeV (defaults to class value)
+            filename: Output filename for the plot
+            show_foil_aperture: Whether to show foil and aperture geometry
+            ray_alpha: Transparency of ray lines
+            max_rays_to_plot: Maximum number of rays to plot (for clarity)
+        """
+        if filename == 'default':
+            filename = f'{self.figure_directory}characteristic_rays.png'
+        
+        # Set default energy range if not provided
+        if min_energy is None:
+            min_energy = self.min_energy
+        if max_energy is None:
+            max_energy = self.max_energy
+        
+        print(f'Generating characteristic rays from {min_energy:.2f} to {max_energy:.2f} MeV...')
+        
+        # Generate characteristic rays
+        self.generate_characteristic_rays(
+            radial_points=radial_points,
+            angular_points=angular_points,
+            aperture_radial_points=aperture_radial_points,
+            aperture_angular_points=aperture_angular_points,
+            energy_points=energy_points,
+            min_energy=min_energy,
+            max_energy=max_energy
+        )
+        
+        # Apply transfer map
+        self.apply_transfer_map(map_order=5)
+        
+        # Create subplots
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig.suptitle('Characteristic Ray Analysis', fontsize=16)
+        
+        # Plot 1: Input ray geometry (X-Z projection)
+        ax1 = axes[0]
+        
+        if show_foil_aperture:
+            # Draw foil and aperture
+            foil_radius = self.conversion_foil.foil_radius
+            aperture_distance = self.conversion_foil.aperture_distance
+            aperture_radius = self.conversion_foil.aperture_radius
+            
+            ax1.axvline(0, -foil_radius, foil_radius, color='blue', linewidth=3, label='Foil')
+            ax1.axvline(aperture_distance, -aperture_radius, aperture_radius, 
+                    color='red', linewidth=3, label='Aperture')
+        
+        # Plot subset of rays for clarity
+        num_rays = len(self.input_beam)
+        ray_indices = np.linspace(0, num_rays-1, min(max_rays_to_plot, num_rays), dtype=int)
+        
+        # Color rays by energy
+        ray_energies = self.input_beam[ray_indices, 4] * self.reference_energy + self.reference_energy
+        
+        z_coords = np.linspace(0, self.conversion_foil.aperture_distance, 50)
+        
+        for i, ray_idx in enumerate(ray_indices):
+            ray = self.input_beam[ray_idx]
+            x0, angle_x = ray[0], ray[1]
+            
+            # Calculate ray trajectory
+            x_trajectory = x0 + z_coords * np.tan(angle_x)
+            
+            # Color by energy
+            color = plt.cm.viridis((ray_energies[i] - min_energy) / (max_energy - min_energy))
+            ax1.plot(z_coords, x_trajectory, alpha=ray_alpha, color=color, linewidth=0.8)
+        
+        ax1.set_xlabel('Z Distance [m]')
+        ax1.set_ylabel('X Position [m]')
+        ax1.set_title('Input Ray Geometry (X-Z)')
+        ax1.grid(True, alpha=0.3)
+        if show_foil_aperture:
+            ax1.legend()
+        
+        # Plot 2: Focal plane distribution
+        ax2 = axes[1]
+        
+        # Scatter plot colored by energy
+        output_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
+        scatter = ax2.scatter(
+            self.output_beam[:, 0] * 100,  # Convert to cm
+            self.output_beam[:, 2] * 100,  # Convert to cm
+            c=output_energies,
+            s=20,
+            cmap='viridis',
+            alpha=0.7,
+            edgecolors='black',
+            linewidths=0.5
+        )
+        
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax2)
+        cbar.set_label('Proton Energy [MeV]')
+        
+        ax2.set_xlabel('X Position [cm]')
+        ax2.set_ylabel('Y Position [cm]')
+        ax2.set_title('Focal Plane Distribution')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_aspect('equal')
+        
+        # Plot 3: X-position vs Energy dispersion
+        ax3 = axes[2]
+        
+        ax3.scatter(
+            output_energies,
+            self.output_beam[:, 0] * 100,  # Convert to cm
+            c=output_energies,
+            s=20,
+            cmap='viridis',
+            alpha=0.7,
+            edgecolors='black',
+            linewidths=0.5
+        )
+        
+        ax3.set_xlabel('Proton Energy [MeV]')
+        ax3.set_ylabel('X Position [cm]')
+        ax3.set_title('Energy Dispersion')
+        ax3.grid(True, alpha=0.3)
+        
+        # Add energy resolution information
+        if len(np.unique(output_energies)) > 1:
+            # Fit linear relationship for dispersion
+            slope, intercept = np.polyfit(output_energies, self.output_beam[:, 0] * 100, 1)
+            ax3.plot(output_energies, slope * output_energies + intercept, 
+                    'r--', linewidth=2, label=f'Dispersion: {slope:.2f} cm/MeV')
+            ax3.legend()
+        
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # Print summary statistics
+        print(f'Characteristic ray analysis complete:')
+        print(f'  Total rays generated: {len(self.input_beam)}')
+        print(f'  Energy range: {min_energy:.2f} - {max_energy:.2f} MeV')
+        print(f'  X position range: {self.output_beam[:, 0].min()*100:.2f} - {self.output_beam[:, 0].max()*100:.2f} cm')
+        print(f'  Y position range: {self.output_beam[:, 2].min()*100:.2f} - {self.output_beam[:, 2].max()*100:.2f} cm')
+        print(f'Characteristic ray plot saved to {filename}')
     
     def get_system_summary(self) -> dict:
         """
