@@ -513,6 +513,48 @@ class ConversionFoil:
         print(f'Total efficiency: {total_efficiency:.4f}')
         
         return total_efficiency
+    
+    def get_proton_energy_distribution(
+        self, 
+        neutron_energies: np.ndarray, 
+        energy_distribution: np.ndarray, 
+        num_protons: int = int(1e2)
+    ) -> np.ndarray:
+        """
+        Calculate the proton energy distribution at foil exit for a given neutron energy distribution.
+        
+        Args:
+            neutron_energies: Array of neutron energies in MeV
+            energy_distribution: Distribution of neutron energies (will be normalized)
+            num_protons: Number of protons to simulate
+            
+        Returns:
+            Array of proton energies at foil exit
+        """
+        proton_energies = np.zeros(num_protons)
+        
+        # Weight distribution by n-p scattering cross section and normalize
+        weighted_distribution = energy_distribution * self.get_nh_cross_section(neutron_energies)
+        weighted_distribution = weighted_distribution / np.sum(weighted_distribution)
+        
+        progress_bar = Bar('Calculating proton energy distribution...', max=num_protons)
+        
+        for i in range(num_protons):
+            # Sample neutron energy from weighted distribution
+            neutron_energy = np.random.choice(neutron_energies, p=weighted_distribution)
+            
+            # Generate scattered proton and extract final energy
+            _, _, _, _, proton_energy = self.generate_scattered_hydron(
+                neutron_energy, 
+                include_kinematics=True, 
+                include_stopping_power_loss=True
+            )
+            
+            proton_energies[i] = proton_energy
+            progress_bar.next()
+        
+        progress_bar.finish()
+        return proton_energies
 
 
 class Hodoscope:
@@ -614,7 +656,7 @@ class MPRSpectrometer:
         min_energy: float,
         max_energy: float,
         hodoscope: Hodoscope,
-        figure_directory: str = './'
+        figure_directory: str = '.'
     ):
         """
         Initialize complete MPR spectrometer system.
@@ -925,7 +967,7 @@ class MPRSpectrometer:
             if figure_name == 'default':
                 figure_name = (
                     f'''
-                    {self.figure_directory}Monoenergetic_En{neutron_energy:.2f}MeV_
+                    {self.figure_directory}/Monoenergetic_En{neutron_energy:.2f}MeV_
                     T{self.conversion_foil.thickness_um:.0f}um_
                     f'E0{self.reference_energy:.2f}MeV.png
                     ''')
@@ -1040,7 +1082,7 @@ class MPRSpectrometer:
         
         # Save dispersion data
         if output_filename == 'default':
-            output_filename = f'{self.figure_directory}dispersion_curve'
+            output_filename = f'{self.figure_directory}/dispersion_curve'
         
         dispersion_data = np.column_stack([energies, mean_positions, std_deviations])
         np.savetxt(f'{output_filename}.txt', dispersion_data, 
@@ -1093,7 +1135,7 @@ class MPRSpectrometer:
             point_size: Size of scatter plot points
         """
         if filename == 'default':
-            filename = f'{self.figure_directory}focal_plane_distribution.png'
+            filename = f'{self.figure_directory}/focal_plane_distribution.png'
         
         fig, ax = plt.subplots(figsize=(10, 8))
         
@@ -1153,7 +1195,7 @@ class MPRSpectrometer:
             filename: Output filename for the plot
         """
         if filename == 'default':
-            filename = f'{self.figure_directory}phase_space_portraits.png'
+            filename = f'{self.figure_directory}/phase_space_portraits.png'
         
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
         fig.suptitle('Phase Space Portraits', fontsize=16)
@@ -1225,6 +1267,271 @@ class MPRSpectrometer:
         
         channel_numbers = np.arange(self.hodoscope.total_channels)
         return channel_numbers, channel_counts
+    
+    def get_proton_density_map(
+        self, 
+        dx: float = 0.01, 
+        dy: float = 0.01
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Calculate the density of proton impact sites in the focal plane.
+        
+        Args:
+            dx: X-direction resolution in meters
+            dy: Y-direction resolution in meters
+            
+        Returns:
+            Tuple of (density_array, X_meshgrid, Y_meshgrid)
+        """
+        if len(self.output_beam) == 0:
+            raise ValueError("No output beam data available. Run apply_transfer_map() first.")
+        
+        x_positions = self.output_beam[:, 0]
+        y_positions = self.output_beam[:, 2]
+        
+        # Define grid boundaries
+        x_min, x_max = np.min(x_positions), np.max(x_positions)
+        y_min, y_max = np.min(y_positions), np.max(y_positions)
+        
+        # Create coordinate arrays
+        x_coords = np.linspace(x_min, x_max, int((x_max - x_min) / dx) + 1)
+        y_coords = np.linspace(y_min, y_max, int((y_max - y_min) / dy) + 1)
+        
+        print(f"Grid bounds: X=[{x_min:.4f}, {x_max:.4f}], Y=[{y_min:.4f}, {y_max:.4f}]")
+        
+        # Create meshgrids
+        Y_mesh, X_mesh = np.meshgrid(y_coords, x_coords)
+        density = np.zeros_like(X_mesh)
+        
+        # Bin protons into grid cells
+        total_protons = len(self.output_beam)
+        for x_pos, y_pos in zip(x_positions, y_positions):
+            # Convert coordinates to grid indices
+            x_idx = int((x_pos - x_min) / dx)
+            y_idx = int((y_pos - y_min) / dy)
+            
+            # Ensure indices are within bounds
+            x_idx = max(0, min(x_idx, density.shape[1] - 1))
+            y_idx = max(0, min(y_idx, density.shape[0] - 1))
+            
+            density[y_idx, x_idx] += 1 / total_protons
+        
+        return density, X_mesh, Y_mesh
+
+    def plot_simple_position_histogram(
+        self, 
+        filename: str = 'default', 
+        num_bins: int = 40
+    ) -> None:
+        """
+        Plot a simple histogram of proton counts vs horizontal position.
+        
+        Args:
+            filename: Output filename for the plot
+            num_bins: Number of histogram bins
+        """
+        if filename == 'default':
+            filename = f'{self.figure_directory}/counts_vs_position.png'
+        
+        if len(self.output_beam) == 0:
+            raise ValueError("No output beam data available. Run apply_transfer_map() first.")
+        
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        
+        x_positions = self.output_beam[:, 0]
+        x_range = (x_positions.min(), x_positions.max())
+        
+        counts, bins, patches = ax.hist(
+            x_positions, 
+            bins=np.linspace(x_range[0], x_range[1], num_bins),
+            alpha=0.7,
+            color='steelblue',
+            edgecolor='black',
+            linewidth=0.5
+        )
+        
+        ax.set_xlabel('Horizontal Position [m]')
+        ax.set_ylabel('Counts')
+        ax.set_title('Proton Counts vs Position')
+        ax.grid(True, alpha=0.3)
+        
+        # Add statistics text
+        mean_pos = np.mean(x_positions)
+        std_pos = np.std(x_positions)
+        ax.axvline(mean_pos, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_pos:.4f} m')
+        ax.legend()
+        
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Position histogram saved to {filename}')
+
+
+    def plot_compact_phase_space(self, filename: str = 'default') -> None:
+        """
+        Generate a compact 2x2 phase space plot.
+        
+        Args:
+            filename: Output filename for the plot
+        """
+        if filename == 'default':
+            filename = f'{self.figure_directory}/compact_phase_space.png'
+        
+        if len(self.output_beam) == 0:
+            raise ValueError("No output beam data available. Run apply_transfer_map() first.")
+        
+        fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+        fig.suptitle('Compact Phase Space Analysis', fontsize=16)
+        
+        # Color by proton energy
+        proton_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
+        
+        # X-Y scatter (top left)
+        scatter1 = axes[0, 0].scatter(
+            self.output_beam[:, 0] * 100, self.output_beam[:, 2] * 100,
+            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
+        )
+        axes[0, 0].set_xlabel('X [cm]')
+        axes[0, 0].set_ylabel('Y [cm]')
+        axes[0, 0].set_title('X-Y Phase Plot')
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # X position vs X angle (top right)
+        scatter2 = axes[0, 1].scatter(
+            self.output_beam[:, 0] * 100, self.output_beam[:, 1],
+            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
+        )
+        axes[0, 1].set_xlabel('X [cm]')
+        axes[0, 1].set_ylabel('Theta_X [rad]')
+        axes[0, 1].set_title('X-Angle Phase Plot')
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # X position vs initial energy (bottom left)
+        scatter3 = axes[1, 0].scatter(
+            self.output_beam[:, 0] * 100, self.input_beam[:, 4] * 100,
+            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
+        )
+        axes[1, 0].set_xlabel('X [cm]')
+        axes[1, 0].set_ylabel('dE/E [%]')
+        axes[1, 0].set_title('X-Energy Phase Plot')
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Y position vs Y angle (bottom right)
+        scatter4 = axes[1, 1].scatter(
+            self.output_beam[:, 2] * 100, self.output_beam[:, 3],
+            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
+        )
+        axes[1, 1].set_xlabel('Y [cm]')
+        axes[1, 1].set_ylabel('Theta_Y [rad]')
+        axes[1, 1].set_title('Y-Angle Phase Plot')
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        # Add shared colorbar
+        fig.colorbar(scatter1, ax=axes.ravel().tolist(), 
+                    label='Proton Energy [MeV]', shrink=0.8, aspect=30)
+        
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Compact phase space plot saved to {filename}')
+
+
+    def plot_input_ray_geometry(self, filename: str = 'default') -> None:
+        """
+        Draw the input beam ray geometry showing rays from foil to aperture.
+        
+        Args:
+            filename: Output filename for the plot
+        """
+        if filename == 'default':
+            filename = f'{self.figure_directory}/input_ray_geometry.png'
+        
+        if len(self.input_beam) == 0:
+            raise ValueError("No input beam data available. Generate rays first.")
+        
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Draw foil and aperture boundaries
+        foil_radius = self.conversion_foil.foil_radius
+        aperture_distance = self.conversion_foil.aperture_distance
+        aperture_radius = self.conversion_foil.aperture_radius
+        
+        # Foil (vertical line at z=0)
+        ax.axvline(0, -foil_radius, foil_radius, color='blue', linewidth=3, label='Conversion Foil')
+        
+        # Aperture (vertical line at aperture distance)
+        ax.axvline(aperture_distance, -aperture_radius, aperture_radius, 
+                color='red', linewidth=3, label='Aperture')
+        
+        # Draw sample of input rays
+        num_rays_to_plot = min(len(self.input_beam), 200)  # Limit for clarity
+        z_coords = np.linspace(0, aperture_distance, 20)
+        
+        for i in range(0, len(self.input_beam), max(1, len(self.input_beam) // num_rays_to_plot)):
+            ray = self.input_beam[i]
+            x0, angle_x, y0, angle_y = ray[:4]
+            
+            # Calculate ray trajectory (assuming small angles)
+            slope = np.tan(angle_x)
+            x_trajectory = slope * z_coords + x0
+            
+            # Only plot rays that stay within reasonable bounds
+            if np.all(np.abs(x_trajectory) < 2 * max(foil_radius, aperture_radius)):
+                ax.plot(z_coords, x_trajectory, alpha=0.4, color='green', linewidth=0.5)
+        
+        ax.set_xlabel('Z Distance [m]')
+        ax.set_ylabel('X Position [m]')
+        ax.set_title('Input Ray Geometry (X-Z Projection)')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Set reasonable axis limits
+        ax.set_xlim(-0.1 * aperture_distance, 1.1 * aperture_distance)
+        max_extent = 1.5 * max(foil_radius, aperture_radius)
+        ax.set_ylim(-max_extent, max_extent)
+        
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Input ray geometry plot saved to {filename}')
+
+    def plot_proton_density_heatmap(
+        self, 
+        filename: str = 'default',
+        dx: float = 0.01, 
+        dy: float = 0.01
+    ) -> None:
+        """
+        Plot a heatmap of proton density in the focal plane.
+        
+        Args:
+            filename: Output filename for the plot
+            dx: X-direction resolution in meters
+            dy: Y-direction resolution in meters
+        """
+        if filename == 'default':
+            filename = f'{self.figure_directory}/proton_density_heatmap.png'
+        
+        density, X_mesh, Y_mesh = self.get_proton_density_map(dx, dy)
+        
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Create heatmap
+        im = ax.pcolormesh(X_mesh, Y_mesh, density, cmap='hot', shading='auto')
+        
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Proton Density [normalized]')
+        
+        ax.set_xlabel('X Position [m]')
+        ax.set_ylabel('Y Position [m]')
+        ax.set_title('Proton Density in Focal Plane')
+        ax.set_aspect('equal')
+        
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Proton density heatmap saved to {filename}')
     
     def get_system_summary(self) -> dict:
         """
