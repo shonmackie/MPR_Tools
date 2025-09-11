@@ -881,7 +881,7 @@ class MPRSpectrometer:
                 # Only include terms up to specified order
                 if np.sum(term_powers) <= map_order:
                     # Calculate monomial term
-                    # TODO: Why is the last term multiplied by term_powers[5], but shouldn't it be term_powers[4]?
+                    # TODO: Why is the last term multiplied by term_powers[5], but should it be term_powers[4]?
                     monomial = np.prod([input_ray[k]**term_powers[k] for k in range(4)]) * input_ray[4]**term_powers[5]
                     
                     # Add contributions to each coordinate
@@ -966,11 +966,8 @@ class MPRSpectrometer:
         if generate_figure:
             if figure_name == 'default':
                 figure_name = (
-                    f'''
-                    {self.figure_directory}/Monoenergetic_En{neutron_energy:.2f}MeV_
-                    T{self.conversion_foil.thickness_um:.0f}um_
-                    f'E0{self.reference_energy:.2f}MeV.png
-                    ''')
+                    f'{self.figure_directory}/Monoenergetic_En{neutron_energy:.1f}MeV_T{self.conversion_foil.thickness_um:.0f}um_E0{self.reference_energy:.1f}MeV.png'
+                )
             
             self._plot_monoenergetic_analysis(figure_name, neutron_energy, mean_position, std_deviation)
         
@@ -994,18 +991,16 @@ class MPRSpectrometer:
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         
         # Histogram of x positions
-        x_positions = self.output_beam[:, 0]
-        counts, bins = np.histogram(x_positions, bins=30)
-        bin_centers = (bins[:-1] + bins[1:]) / 2
+        x_positions = self.output_beam[:, 0]*100 # cm
         
         axes[0].hist(x_positions, bins=30, alpha=0.7, density=True, label='Simulation')
         
         # Gaussian fit overlay
         x_fit = np.linspace(x_positions.min(), x_positions.max(), 100)
-        gaussian_fit = norm.pdf(x_fit, mean_pos, std_dev)
+        gaussian_fit = norm.pdf(x_fit, mean_pos * 100, std_dev * 100)
         axes[0].plot(x_fit, gaussian_fit, 'r-', label='Gaussian Fit', linewidth=2)
         
-        axes[0].set_xlabel('X Position [m]')
+        axes[0].set_xlabel('X Position [cm]')
         axes[0].set_ylabel('Probability Density')
         axes[0].set_title(f'X-Position Distribution\n{neutron_energy:.1f} MeV Neutrons')
         axes[0].grid(True, alpha=0.3)
@@ -1014,27 +1009,28 @@ class MPRSpectrometer:
         # Scatter plot
         hydron_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
         scatter = axes[1].scatter(
-            self.output_beam[:, 0], 
-            self.output_beam[:, 2], 
-            c=hydron_energies, 
-            s=1.0, 
-            cmap='viridis',
+            self.output_beam[:, 0]*100,
+            self.output_beam[:, 2]*100,
+            c=hydron_energies,
+            s=1.0,
+            cmap='plasma',
             alpha=0.6
         )
         
         plt.colorbar(scatter, ax=axes[1], label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]')
-        axes[1].set_xlabel('X Position [m]')
-        axes[1].set_ylabel('Y Position [m]')
+        axes[1].set_xlabel('X Position [cm]')
+        axes[1].set_ylabel('Y Position [cm]')
         axes[1].set_title(f'Focal Plane Distribution\n{neutron_energy:.1f} MeV Neutrons')
         axes[1].grid(True, alpha=0.3)
         
         plt.tight_layout()
+        print(filename)
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
     
     def generate_dispersion_curve(
         self,
-        num_energies: int = 15,
+        num_energies: int = 40,
         num_hydrons_per_energy: int = 100,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -1106,12 +1102,12 @@ class MPRSpectrometer:
         """Generate dispersion curve plot."""
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         
-        ax.plot(energies, positions, 'b-', linewidth=2, label='Mean Position')
+        ax.plot(energies, positions*100, 'b-', linewidth=2, label='Mean Position')
         ax.fill_between(energies, positions - uncertainties, positions + uncertainties,
                        alpha=0.3, color='blue', label='±1σ')
         
         ax.set_xlabel('Neutron Energy [MeV]')
-        ax.set_ylabel(f'{self.conversion_foil.particle.capitalize()} Position [m]')
+        ax.set_ylabel(f'{self.conversion_foil.particle.capitalize()} Position [cm]')
         ax.set_title('Energy Dispersion Curve')
         ax.grid(True, alpha=0.3)
         ax.legend()
@@ -1153,32 +1149,32 @@ class MPRSpectrometer:
                 # Vertical lines for detector edges
                 line_style = '-' if i == 0 else '--'
                 line_width = 1.0 if i == 0 else 0.5
-                ax.axvline(left_edge, -detector_height/2, detector_height/2, 
+                ax.vlines(left_edge, -detector_height/2, detector_height/2, 
                           color='black', linestyle=line_style, linewidth=line_width)
                 if i == len(centers) - 1:  # Last detector
-                    ax.axvline(right_edge, -detector_height/2, detector_height/2,
+                    ax.vlines(right_edge, -detector_height/2, detector_height/2,
                               color='black', linestyle='-', linewidth=1.0)
             
             # Horizontal lines for detector top/bottom
-            ax.axhline(detector_height/2, centers[0] - detector_width/2, 
+            ax.hlines(detector_height/2, centers[0] - detector_width/2, 
                       centers[-1] + detector_width/2, color='black', linewidth=1.0)
-            ax.axhline(-detector_height/2, centers[0] - detector_width/2,
+            ax.hlines(-detector_height/2, centers[0] - detector_width/2,
                       centers[-1] + detector_width/2, color='black', linewidth=1.0)
         
         # Scatter plot of hydron positions
         hydron_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
         scatter = ax.scatter(
-            self.output_beam[:, 0], 
-            self.output_beam[:, 2],
+            self.output_beam[:, 0]*100, 
+            self.output_beam[:, 2]*100,
             c=hydron_energies,
             s=point_size,
-            cmap='viridis',
+            cmap='plasma',
             alpha=0.7
         )
         
         plt.colorbar(scatter, label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]')
-        ax.set_xlabel('Horizontal Position [m]')
-        ax.set_ylabel('Vertical Position [m]')
+        ax.set_xlabel('Horizontal Position [cm]')
+        ax.set_ylabel('Vertical Position [cm]')
         ax.set_title(f'{self.conversion_foil.particle.capitalize()} Distribution in Focal Plane')
         ax.grid(True, alpha=0.3)
         
@@ -1187,18 +1183,18 @@ class MPRSpectrometer:
         plt.close()
         print(f'Focal plane plot saved to {filename}')
     
-    def plot_phase_space_portraits(self, filename: str = 'default') -> None:
+    def plot_phase_space(self, filename: str = 'default') -> None:
         """
-        Generate phase space portrait plots.
+        Generate phase space plots.
         
         Args:
             filename: Output filename for the plot
         """
         if filename == 'default':
-            filename = f'{self.figure_directory}/phase_space_portraits.png'
+            filename = f'{self.figure_directory}/phase_space.png'
         
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        fig.suptitle('Phase Space Portraits', fontsize=16)
+        fig.suptitle('Phase Space', fontsize=16)
         
         # Color by hydron energy
         hydron_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
@@ -1206,7 +1202,7 @@ class MPRSpectrometer:
         # X-Y position plot
         scatter1 = axes[0, 0].scatter(
             self.output_beam[:, 0] * 100, self.output_beam[:, 2] * 100,
-            c=hydron_energies, s=2.0, cmap='viridis', alpha=0.7
+            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
         )
         axes[0, 0].set_xlabel('X Position [cm]')
         axes[0, 0].set_ylabel('Y Position [cm]')
@@ -1216,7 +1212,7 @@ class MPRSpectrometer:
         # X position vs X angle
         scatter2 = axes[0, 1].scatter(
             self.output_beam[:, 0] * 100, self.output_beam[:, 1] * 1000,
-            c=hydron_energies, s=2.0, cmap='viridis', alpha=0.7
+            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
         )
         axes[0, 1].set_xlabel('X Position [cm]')
         axes[0, 1].set_ylabel('X Angle [mrad]')
@@ -1226,7 +1222,7 @@ class MPRSpectrometer:
         # X position vs energy
         scatter3 = axes[1, 0].scatter(
             self.output_beam[:, 0] * 100, self.input_beam[:, 4] * 100,
-            c=hydron_energies, s=2.0, cmap='viridis', alpha=0.7
+            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
         )
         axes[1, 0].set_xlabel('X Position [cm]')
         axes[1, 0].set_ylabel('ΔE/E [%]')
@@ -1236,7 +1232,7 @@ class MPRSpectrometer:
         # Y position vs Y angle
         scatter4 = axes[1, 1].scatter(
             self.output_beam[:, 2] * 100, self.output_beam[:, 3] * 1000,
-            c=hydron_energies, s=2.0, cmap='viridis', alpha=0.7
+            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
         )
         axes[1, 1].set_xlabel('Y Position [cm]')
         axes[1, 1].set_ylabel('Y Angle [mrad]')
@@ -1338,7 +1334,7 @@ class MPRSpectrometer:
         
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         
-        x_positions = self.output_beam[:, 0]
+        x_positions = self.output_beam[:, 0]*100 # cm
         x_range = (x_positions.min(), x_positions.max())
         
         counts, bins, patches = ax.hist(
@@ -1350,7 +1346,7 @@ class MPRSpectrometer:
             linewidth=0.5
         )
         
-        ax.set_xlabel('Horizontal Position [m]')
+        ax.set_xlabel('Horizontal Position [cm]')
         ax.set_ylabel('Counts')
         ax.set_title('Proton Counts vs Position')
         ax.grid(True, alpha=0.3)
@@ -1365,77 +1361,7 @@ class MPRSpectrometer:
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
         print(f'Position histogram saved to {filename}')
-
-
-    def plot_compact_phase_space(self, filename: str = 'default') -> None:
-        """
-        Generate a compact 2x2 phase space plot.
         
-        Args:
-            filename: Output filename for the plot
-        """
-        if filename == 'default':
-            filename = f'{self.figure_directory}/compact_phase_space.png'
-        
-        if len(self.output_beam) == 0:
-            raise ValueError("No output beam data available. Run apply_transfer_map() first.")
-        
-        fig, axes = plt.subplots(2, 2, figsize=(10, 10))
-        fig.suptitle('Compact Phase Space Analysis', fontsize=16)
-        
-        # Color by proton energy
-        proton_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
-        
-        # X-Y scatter (top left)
-        scatter1 = axes[0, 0].scatter(
-            self.output_beam[:, 0] * 100, self.output_beam[:, 2] * 100,
-            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
-        )
-        axes[0, 0].set_xlabel('X [cm]')
-        axes[0, 0].set_ylabel('Y [cm]')
-        axes[0, 0].set_title('X-Y Phase Plot')
-        axes[0, 0].grid(True, alpha=0.3)
-        
-        # X position vs X angle (top right)
-        scatter2 = axes[0, 1].scatter(
-            self.output_beam[:, 0] * 100, self.output_beam[:, 1],
-            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
-        )
-        axes[0, 1].set_xlabel('X [cm]')
-        axes[0, 1].set_ylabel('Theta_X [rad]')
-        axes[0, 1].set_title('X-Angle Phase Plot')
-        axes[0, 1].grid(True, alpha=0.3)
-        
-        # X position vs initial energy (bottom left)
-        scatter3 = axes[1, 0].scatter(
-            self.output_beam[:, 0] * 100, self.input_beam[:, 4] * 100,
-            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
-        )
-        axes[1, 0].set_xlabel('X [cm]')
-        axes[1, 0].set_ylabel('dE/E [%]')
-        axes[1, 0].set_title('X-Energy Phase Plot')
-        axes[1, 0].grid(True, alpha=0.3)
-        
-        # Y position vs Y angle (bottom right)
-        scatter4 = axes[1, 1].scatter(
-            self.output_beam[:, 2] * 100, self.output_beam[:, 3],
-            c=proton_energies, s=0.8, cmap='viridis', alpha=0.7
-        )
-        axes[1, 1].set_xlabel('Y [cm]')
-        axes[1, 1].set_ylabel('Theta_Y [rad]')
-        axes[1, 1].set_title('Y-Angle Phase Plot')
-        axes[1, 1].grid(True, alpha=0.3)
-        
-        # Add shared colorbar
-        fig.colorbar(scatter1, ax=axes.ravel().tolist(), 
-                    label='Proton Energy [MeV]', shrink=0.8, aspect=30)
-        
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f'Compact phase space plot saved to {filename}')
-
-
     def plot_input_ray_geometry(self, filename: str = 'default') -> None:
         """
         Draw the input beam ray geometry showing rays from foil to aperture.
@@ -1452,15 +1378,16 @@ class MPRSpectrometer:
         fig, ax = plt.subplots(figsize=(12, 8))
         
         # Draw foil and aperture boundaries
-        foil_radius = self.conversion_foil.foil_radius
-        aperture_distance = self.conversion_foil.aperture_distance
-        aperture_radius = self.conversion_foil.aperture_radius
+        # Convert all lengths to cm
+        foil_radius = self.conversion_foil.foil_radius * 100
+        aperture_distance = self.conversion_foil.aperture_distance * 100
+        aperture_radius = self.conversion_foil.aperture_radius * 100
         
         # Foil (vertical line at z=0)
-        ax.axvline(0, -foil_radius, foil_radius, color='blue', linewidth=3, label='Conversion Foil')
+        ax.vlines(0, -foil_radius, foil_radius, color='blue', linewidth=3, label='Conversion Foil')
         
         # Aperture (vertical line at aperture distance)
-        ax.axvline(aperture_distance, -aperture_radius, aperture_radius, 
+        ax.vlines(aperture_distance, -aperture_radius, aperture_radius, 
                 color='red', linewidth=3, label='Aperture')
         
         # Draw sample of input rays
@@ -1470,6 +1397,8 @@ class MPRSpectrometer:
         for i in range(0, len(self.input_beam), max(1, len(self.input_beam) // num_rays_to_plot)):
             ray = self.input_beam[i]
             x0, angle_x, y0, angle_y = ray[:4]
+            x0 *= 100 # cm
+            y0 *= 100 # cm
             
             # Calculate ray trajectory (assuming small angles)
             slope = np.tan(angle_x)
@@ -1479,8 +1408,8 @@ class MPRSpectrometer:
             if np.all(np.abs(x_trajectory) < 2 * max(foil_radius, aperture_radius)):
                 ax.plot(z_coords, x_trajectory, alpha=0.4, color='green', linewidth=0.5)
         
-        ax.set_xlabel('Z Distance [m]')
-        ax.set_ylabel('X Position [m]')
+        ax.set_xlabel('Z Distance [cm]')
+        ax.set_ylabel('X Position [cm]')
         ax.set_title('Input Ray Geometry (X-Z Projection)')
         ax.legend()
         ax.grid(True, alpha=0.3)
@@ -1498,8 +1427,8 @@ class MPRSpectrometer:
     def plot_proton_density_heatmap(
         self, 
         filename: str = 'default',
-        dx: float = 0.01, 
-        dy: float = 0.01
+        dx: float = 0.001, 
+        dy: float = 0.001
     ) -> None:
         """
         Plot a heatmap of proton density in the focal plane.
@@ -1517,14 +1446,14 @@ class MPRSpectrometer:
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        im = ax.pcolormesh(X_mesh, Y_mesh, density, cmap='hot', shading='auto')
+        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, density, cmap='hot', shading='auto')
         
         # Add colorbar
         cbar = plt.colorbar(im, ax=ax)
         cbar.set_label('Proton Density [normalized]')
         
-        ax.set_xlabel('X Position [m]')
-        ax.set_ylabel('Y Position [m]')
+        ax.set_xlabel('X Position [cm]')
+        ax.set_ylabel('Y Position [cm]')
         ax.set_title('Proton Density in Focal Plane')
         ax.set_aspect('equal')
         
@@ -1568,7 +1497,7 @@ class MPRSpectrometer:
             max_rays_to_plot: Maximum number of rays to plot (for clarity)
         """
         if filename == 'default':
-            filename = f'{self.figure_directory}characteristic_rays.png'
+            filename = f'{self.figure_directory}/characteristic_rays.png'
         
         # Set default energy range if not provided
         if min_energy is None:
@@ -1593,105 +1522,32 @@ class MPRSpectrometer:
         self.apply_transfer_map(map_order=5)
         
         # Create subplots
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig, ax = plt.subplots(figsize=(16, 8))
         fig.suptitle('Characteristic Ray Analysis', fontsize=16)
         
-        # Plot 1: Input ray geometry (X-Z projection)
-        ax1 = axes[0]
-        
-        if show_foil_aperture:
-            # Draw foil and aperture
-            foil_radius = self.conversion_foil.foil_radius
-            aperture_distance = self.conversion_foil.aperture_distance
-            aperture_radius = self.conversion_foil.aperture_radius
-            
-            ax1.axvline(0, -foil_radius, foil_radius, color='blue', linewidth=3, label='Foil')
-            ax1.axvline(aperture_distance, -aperture_radius, aperture_radius, 
-                    color='red', linewidth=3, label='Aperture')
-        
-        # Plot subset of rays for clarity
-        num_rays = len(self.input_beam)
-        ray_indices = np.linspace(0, num_rays-1, min(max_rays_to_plot, num_rays), dtype=int)
-        
-        # Color rays by energy
-        ray_energies = self.input_beam[ray_indices, 4] * self.reference_energy + self.reference_energy
-        
-        z_coords = np.linspace(0, self.conversion_foil.aperture_distance, 50)
-        
-        for i, ray_idx in enumerate(ray_indices):
-            ray = self.input_beam[ray_idx]
-            x0, angle_x = ray[0], ray[1]
-            
-            # Calculate ray trajectory
-            x_trajectory = x0 + z_coords * np.tan(angle_x)
-            
-            # Color by energy
-            color = plt.cm.viridis((ray_energies[i] - min_energy) / (max_energy - min_energy))
-            ax1.plot(z_coords, x_trajectory, alpha=ray_alpha, color=color, linewidth=0.8)
-        
-        ax1.set_xlabel('Z Distance [m]')
-        ax1.set_ylabel('X Position [m]')
-        ax1.set_title('Input Ray Geometry (X-Z)')
-        ax1.grid(True, alpha=0.3)
-        if show_foil_aperture:
-            ax1.legend()
-        
-        # Plot 2: Focal plane distribution
-        ax2 = axes[1]
-        
+        # Focal plane distribution        
         # Scatter plot colored by energy
         output_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
-        scatter = ax2.scatter(
+        scatter = ax.scatter(
             self.output_beam[:, 0] * 100,  # Convert to cm
             self.output_beam[:, 2] * 100,  # Convert to cm
             c=output_energies,
             s=20,
-            cmap='viridis',
+            cmap='plasma',
             alpha=0.7,
             edgecolors='black',
             linewidths=0.5
         )
         
         # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax2)
+        cbar = plt.colorbar(scatter, ax=ax)
         cbar.set_label('Proton Energy [MeV]')
         
-        ax2.set_xlabel('X Position [cm]')
-        ax2.set_ylabel('Y Position [cm]')
-        ax2.set_title('Focal Plane Distribution')
-        ax2.grid(True, alpha=0.3)
-        ax2.set_aspect('equal')
-        
-        # Plot 3: X-position vs Energy dispersion
-        ax3 = axes[2]
-        
-        ax3.scatter(
-            output_energies,
-            self.output_beam[:, 0] * 100,  # Convert to cm
-            c=output_energies,
-            s=20,
-            cmap='viridis',
-            alpha=0.7,
-            edgecolors='black',
-            linewidths=0.5
-        )
-        
-        ax3.set_xlabel('Proton Energy [MeV]')
-        ax3.set_ylabel('X Position [cm]')
-        ax3.set_title('Energy Dispersion')
-        ax3.grid(True, alpha=0.3)
-        
-        # Add energy resolution information
-        if len(np.unique(output_energies)) > 1:
-            # Fit linear relationship for dispersion
-            slope, intercept = np.polyfit(output_energies, self.output_beam[:, 0] * 100, 1)
-            ax3.plot(output_energies, slope * output_energies + intercept, 
-                    'r--', linewidth=2, label=f'Dispersion: {slope:.2f} cm/MeV')
-            ax3.legend()
-        
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        ax.set_xlabel('X Position [cm]')
+        ax.set_ylabel('Y Position [cm]')
+        ax.set_title('Focal Plane Distribution')
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal')
         
         # Print summary statistics
         print(f'Characteristic ray analysis complete:')
