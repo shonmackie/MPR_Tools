@@ -578,8 +578,8 @@ class Hodoscope:
         Args:
             channels_left: Number of channels to the left (low energy)
             channels_right: Number of channels to the right (high energy)  
-            detector_width: Detector width in cm
-            detector_height: Detector height in cm
+            detector_width: Total detector width in cm
+            detector_height: Total detector height in cm
         """
         self.channels_left = channels_left
         self.channels_right = channels_right
@@ -589,13 +589,25 @@ class Hodoscope:
         self.detector_height = detector_height * 1e-2  # cm to m
         
         # Calculate detector centers
-        self._calculate_detector_centers()
+        self._calculate_channel_edges()
     
-    def _calculate_detector_centers(self) -> None:
-        """Calculate the center positions of all detectors."""
-        start_pos = -(self.channels_left + 0.5) * self.detector_width
-        end_pos = (self.channels_right + 0.5) * self.detector_width
-        self.detector_centers = np.linspace(start_pos, end_pos, self.total_channels)
+    def _calculate_channel_edges(self) -> None:
+        """Calculate the center positions of all channels."""        
+        # Calculate individual channel width
+        self.channel_width = self.detector_width / self.total_channels
+        
+        # The central channel (index = channels_left) should be centered at x=0
+        # So its left edge is at -channel_width/2 and right edge is at +channel_width/2
+        central_left_edge = -self.channel_width / 2
+        
+        # Calculate all channel edges starting from the leftmost
+        leftmost_edge = central_left_edge - self.channels_left * self.channel_width
+        
+        # Create array of all channel edges (N+1 edges for N channels)
+        self.channel_edges = np.linspace(leftmost_edge, leftmost_edge + self.detector_width, self.total_channels + 1)
+        
+        # Calculate channel centers for convenience
+        self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2
     
     @property
     def detector_width_cm(self) -> float:
@@ -610,15 +622,15 @@ class Hodoscope:
     def set_detector_width(self, width_cm: float) -> None:
         """Set detector width in cm."""
         self.detector_width = width_cm * 1e-2
-        self._calculate_detector_centers()
+        self._calculate_channel_edges()
     
     def set_detector_height(self, height_cm: float) -> None:
         """Set detector height in cm."""
         self.detector_height = height_cm * 1e-2
     
-    def get_detector_centers(self) -> np.ndarray:
+    def get_channel_centers(self) -> np.ndarray:
         """Get array of detector center positions in meters."""
-        return self.detector_centers
+        return self.channel_centers
     
     def get_channel_for_position(self, x_position: float) -> Optional[int]:
         """
@@ -630,14 +642,13 @@ class Hodoscope:
         Returns:
             Channel number (0-indexed) or None if outside detector array
         """
-        for i, center in enumerate(self.detector_centers):
-            left_edge = center - self.detector_width / 2
-            right_edge = center + self.detector_width / 2
-            
-            if left_edge <= x_position < right_edge:
-                return i
-                
-        return None
+        # Check if position is within hodoscope bounds
+        if x_position < self.channel_edges[0] or x_position >= self.channel_edges[-1]:
+            return None
+        
+        # Find which channel the position falls into
+        channel = np.searchsorted(self.channel_edges[1:], x_position)
+        return int(channel)
 
 
 class MPRSpectrometer:
@@ -960,7 +971,7 @@ class MPRSpectrometer:
         
         # Calculate energy resolution
         dispersion = self.transfer_map[0, 5]  # Assuming this is the dispersion term
-        energy_resolution = 1 / (dispersion / fwhm) if fwhm > 0 else 0
+        energy_resolution = self.reference_energy / (dispersion / fwhm) if fwhm > 0 else 0
         
         # Generate figure if requested
         if generate_figure:
@@ -1052,7 +1063,7 @@ class MPRSpectrometer:
             Tuple of (energies, mean_positions, std_deviations)
         """
         print('Generating energy dispersion curve...')
-        
+        # TODO: plot resolution vs energy
         # Energy range
         energies = np.linspace(self.min_energy, self.max_energy, num_energies)
         
@@ -1103,7 +1114,7 @@ class MPRSpectrometer:
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         
         ax.plot(energies, positions*100, 'b-', linewidth=2, label='Mean Position')
-        ax.fill_between(energies, positions - uncertainties, positions + uncertainties,
+        ax.fill_between(energies, (positions - uncertainties) * 100, (positions + uncertainties) * 100,
                        alpha=0.3, color='blue', label='±1σ')
         
         ax.set_xlabel('Neutron Energy [MeV]')
@@ -1137,29 +1148,27 @@ class MPRSpectrometer:
         
         # Draw hodoscope if requested
         if include_hodoscope:
-            detector_width = self.hodoscope.detector_width
-            detector_height = self.hodoscope.detector_height
-            centers = self.hodoscope.get_detector_centers()
+            # Convert to cm
+            detector_width = self.hodoscope.detector_width * 100
+            detector_height = self.hodoscope.detector_height * 100
+            edges = self.hodoscope.channel_edges * 100
             
             # Draw detector boundaries
-            for i, center in enumerate(centers):
-                left_edge = center - detector_width / 2
-                right_edge = center + detector_width / 2
-                
+            for i, edge in enumerate(edges):                
                 # Vertical lines for detector edges
-                line_style = '-' if i == 0 else '--'
-                line_width = 1.0 if i == 0 else 0.5
-                ax.vlines(left_edge, -detector_height/2, detector_height/2, 
+                # Left-most and right-most edges
+                if i == 0 or i == len(edges) - 1:
+                    line_style = '-'
+                    line_width = 1.0
+                else:
+                    line_style = '--'
+                    line_width = 0.5
+                ax.vlines(edge, -detector_height/2, detector_height/2, 
                           color='black', linestyle=line_style, linewidth=line_width)
-                if i == len(centers) - 1:  # Last detector
-                    ax.vlines(right_edge, -detector_height/2, detector_height/2,
-                              color='black', linestyle='-', linewidth=1.0)
             
             # Horizontal lines for detector top/bottom
-            ax.hlines(detector_height/2, centers[0] - detector_width/2, 
-                      centers[-1] + detector_width/2, color='black', linewidth=1.0)
-            ax.hlines(-detector_height/2, centers[0] - detector_width/2,
-                      centers[-1] + detector_width/2, color='black', linewidth=1.0)
+            ax.hlines([-detector_height/2, detector_height/2], edges[0], 
+                      edges[-1], color='black', linewidth=1.0)
         
         # Scatter plot of hydron positions
         hydron_energies = self.input_beam[:, 4] * self.reference_energy + self.reference_energy
@@ -1193,7 +1202,7 @@ class MPRSpectrometer:
         if filename == 'default':
             filename = f'{self.figure_directory}/phase_space.png'
         
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10), layout='constrained')
         fig.suptitle('Phase Space', fontsize=16)
         
         # Color by hydron energy
@@ -1242,7 +1251,6 @@ class MPRSpectrometer:
         # Add colorbar
         fig.colorbar(scatter1, ax=axes, label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]', shrink=0.8)
         
-        plt.tight_layout()
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
         print(f'Phase space portraits saved to {filename}')
@@ -1296,7 +1304,7 @@ class MPRSpectrometer:
         print(f"Grid bounds: X=[{x_min:.4f}, {x_max:.4f}], Y=[{y_min:.4f}, {y_max:.4f}]")
         
         # Create meshgrids
-        Y_mesh, X_mesh = np.meshgrid(y_coords, x_coords)
+        X_mesh, Y_mesh = np.meshgrid(x_coords, y_coords)
         density = np.zeros_like(X_mesh)
         
         # Bin protons into grid cells
@@ -1427,8 +1435,8 @@ class MPRSpectrometer:
     def plot_proton_density_heatmap(
         self, 
         filename: str = 'default',
-        dx: float = 0.001, 
-        dy: float = 0.001
+        dx: float = 0.01, 
+        dy: float = 0.01
     ) -> None:
         """
         Plot a heatmap of proton density in the focal plane.
@@ -1446,7 +1454,7 @@ class MPRSpectrometer:
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, density, cmap='hot', shading='auto')
+        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, density, cmap='plasma', shading='auto')
         
         # Add colorbar
         cbar = plt.colorbar(im, ax=ax)
