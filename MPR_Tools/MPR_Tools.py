@@ -738,7 +738,7 @@ class MPRSpectrometer:
         )
         energy_offset_values = energy_values - self.reference_energy
         
-        self.input_beam = np.zeros((num_rays, 5))
+        self.input_beam = np.zeros((num_rays, 6))
         print(f'Characteristic ray energy range: {min_energy:.3f}-{max_energy:.3f} MeV')
         
         progress_bar = Bar(f'Generating {num_rays} characteristic rays...', max=num_rays)
@@ -747,11 +747,11 @@ class MPRSpectrometer:
         duplicates = 0
         
         # Energy loop
-        for energy_offset in energy_offset_values:
+        for energy_offset, energy in zip(energy_offset_values, energy_values):
             
             if radial_points == 0:
                 # On-axis ray only
-                self.input_beam[ray_index] = [0, 0, 0, 0, energy_offset]
+                self.input_beam[ray_index] = [0, 0, 0, 0, energy_offset, energy]
                 ray_index += 1
             else:
                 # Full phase space grid
@@ -776,7 +776,7 @@ class MPRSpectrometer:
                                 angle_y = np.arctan((y_aperture - y_foil) / self.conversion_foil.aperture_distance)
                                 
                                 # Check for duplicates
-                                ray = [x_foil, -angle_x, y_foil, -angle_y, energy_offset]
+                                ray = [x_foil, -angle_x, y_foil, -angle_y, energy_offset, energy]
                                 is_duplicate = False
                                 
                                 for prev_idx in range(ray_index):
@@ -802,7 +802,8 @@ class MPRSpectrometer:
         num_hydrons: int,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
-        z_sampling: Literal['exp', 'uni'] = 'exp'
+        z_sampling: Literal['exp', 'uni'] = 'exp',
+        save_beam: bool = True
     ) -> None:
         """
         Generate hydron rays from neutron energy distribution using Monte Carlo.
@@ -814,10 +815,11 @@ class MPRSpectrometer:
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             z_sampling: Depth sampling method ('exp' or 'uni')
+            save_beam: Whether or not to save input beam to csv
         """
         progress_bar = Bar('Generating Monte Carlo hydron trajectories...', max=num_hydrons)
         
-        self.input_beam = np.zeros((num_hydrons, 5))
+        self.input_beam = np.zeros((num_hydrons, 6))
         
         # Weight energy distribution by n-h scattering cross section
         # This is not fully correct, but is sufficient for these calculations.
@@ -853,7 +855,7 @@ class MPRSpectrometer:
                     # Store relative energy
                     energy_relative = (hydron_energy - self.reference_energy) / self.reference_energy
                     
-                    self.input_beam[generated_count] = [x0, angle_x, y0, angle_y, energy_relative]
+                    self.input_beam[generated_count] = [x0, angle_x, y0, angle_y, energy_relative, neutron_energy]
                     generated_count += 1
                     progress_bar.next()
                 
@@ -867,21 +869,35 @@ class MPRSpectrometer:
             if total_attempts > num_hydrons * 10:
                 print(f"Warning: High rejection rate. Generated {generated_count}/{num_hydrons} hydrons")
                 break
-        
+         
         progress_bar.finish()
         print(f'Generated {generated_count} hydrons from {total_attempts} attempts')
+            
+        # Save input beam to file
+        if save_beam:
+            df = pd.DataFrame({
+                'x0': self.input_beam[:, 0],
+                'angle_x': self.input_beam[:, 1],
+                'y0': self.input_beam[:, 2],
+                'angle_y': self.input_beam[:, 3],
+                'energy_relative': self.input_beam[:, 4],
+                'neutron_energy': self.input_beam[:, 5]
+            })
+            df.to_csv(f'{self.figure_directory}/input_beam.csv', index=False)
+            print('Input beam saved!')
     
-    def apply_transfer_map(self, map_order: int = 5) -> None:
+    def apply_transfer_map(self, map_order: int = 5, save_beam: bool = True) -> None:
         """
         Apply ion optical transfer map to transport hydrons through spectrometer.
         
         Args:
             map_order: Order of transfer map to apply (1-5 typically)
+            save_beam: Whether or not to save output beam to csv
         """        
         num_hydrons = len(self.input_beam)
         progress_bar = Bar(f'Applying order {map_order} transfer map...', max=num_hydrons)
         
-        self.output_beam = np.zeros_like(self.input_beam)
+        self.output_beam = np.zeros((num_hydrons, 5))
         
         for i, input_ray in enumerate(self.input_beam):
             # Initialize output ray with input energy
@@ -907,6 +923,18 @@ class MPRSpectrometer:
         progress_bar.finish()
         print('Transfer map applied successfully!')
         
+        # Save output beam to file
+        if save_beam:
+            df = pd.DataFrame({
+                'x0': self.output_beam[:, 0],
+                'angle_x': self.output_beam[:, 1],
+                'y0': self.output_beam[:, 2],
+                'angle_y': self.output_beam[:, 3],
+                'energy_relative': self.output_beam[:, 4]
+            })
+            df.to_csv(f'{self.figure_directory}/output_beam.csv', index=False)
+            print('Output beam saved!')
+        
     def _extract_digits(self, number: float) -> np.ndarray:
         """
         Extract digits from a number for transfer map indexing.
@@ -927,6 +955,32 @@ class MPRSpectrometer:
                 digit_idx += 1
                 
         return digits
+    
+    def read_beams(
+        self,
+        input_beam_path: Optional[str] = None,
+        output_beam_path: Optional[str] = None
+    ) -> None:
+        """
+        Read input and output beams from file
+        
+        Args:
+            input_beam_path: Input beam path location 
+            output_beam_path: Output beam path location 
+        """
+        # Read input beam
+        if input_beam_path == None:
+            input_beam_path = f'{self.figure_directory}/input_beam.csv'
+            
+        input_beam_df = pd.read_csv(input_beam_path)
+        self.input_beam = input_beam_df.to_numpy()
+        
+        # Read output beam
+        if output_beam_path == None:
+            output_beam_path = f'{self.figure_directory}/output_beam.csv'
+            
+        output_beam_df = pd.read_csv(output_beam_path)
+        self.output_beam = output_beam_df.to_numpy()
     
     def analyze_monoenergetic_performance(
         self,
@@ -961,9 +1015,10 @@ class MPRSpectrometer:
             np.array([1.0]), 
             num_hydrons, 
             include_kinematics, 
-            include_stopping_power_loss
+            include_stopping_power_loss,
+            save_beam=False
         )
-        self.apply_transfer_map(map_order=5)
+        self.apply_transfer_map(map_order=5, save_beam=False)
         
         # Analyze focal plane distribution
         x_positions = self.output_beam[:, 0]
@@ -1209,10 +1264,10 @@ class MPRSpectrometer:
         print(f'\nPerformance Summary:')
         print(f'  Energy range: {energies.min():.2f} - {energies.max():.2f} MeV')
         print(f'  Position range: {positions.min()*100:.2f} - {positions.max()*100:.2f} cm')
-        print(f'  Average resolution: {np.mean(energy_resolutions)*100:.1f}%')
-        print(f'  Average efficiency: {np.mean(efficiencies)*100:.3f}%')
-        print(f'  Best resolution: {np.min(energy_resolutions)*100:.1f}% at {energies[np.argmin(energy_resolutions)]:.2f} MeV')
-        print(f'  Best efficiency: {np.max(efficiencies)*100:.3f}% at {energies[np.argmax(efficiencies)]:.2f} MeV')
+        print(f'  Average resolution: {np.mean(energy_resolutions)*1000:.1f} keV')
+        print(f'  Average efficiency: {np.mean(efficiencies):.3e}')
+        print(f'  Best resolution: {np.min(energy_resolutions)*1000:.1f} keV at {energies[np.argmin(energy_resolutions)]:.2f} MeV')
+        print(f'  Best efficiency: {np.max(efficiencies):.3f} at {energies[np.argmax(efficiencies)]:.2f} MeV')
         print(f'Comprehensive performance plot saved to {filename}')
     
     def plot_focal_plane_distribution(
@@ -1318,11 +1373,11 @@ class MPRSpectrometer:
         
         # X position vs energy
         scatter3 = axes[1, 0].scatter(
-            self.output_beam[:, 0] * 100, self.input_beam[:, 4] * 100,
+            self.output_beam[:, 0] * 100, self.input_beam[:, 4] * self.reference_energy + self.reference_energy,
             c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
         )
         axes[1, 0].set_xlabel('X Position [cm]')
-        axes[1, 0].set_ylabel('ΔE/E [%]')
+        axes[1, 0].set_ylabel('E$_{proton}$ [MeV]')
         axes[1, 0].set_title('X Position-Energy')
         axes[1, 0].grid(True, alpha=0.3)
         
@@ -1445,6 +1500,7 @@ class MPRSpectrometer:
         ax.set_xlabel('Horizontal Position [cm]')
         ax.set_ylabel('Counts')
         ax.set_title('Proton Counts vs Position')
+        ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
         
         # Add statistics text
@@ -1523,8 +1579,8 @@ class MPRSpectrometer:
     def plot_proton_density_heatmap(
         self, 
         filename: Optional[str] = None,
-        dx: float = 0.01, 
-        dy: float = 0.01
+        dx: float = 0.005, 
+        dy: float = 0.005
     ) -> None:
         """
         Plot a heatmap of proton density in the focal plane.
@@ -1542,11 +1598,11 @@ class MPRSpectrometer:
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, density, cmap='plasma', shading='auto')
+        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, np.log10(density), cmap='plasma', shading='auto')
         
         # Add colorbar
-        cbar = plt.colorbar(im, ax=ax)
-        cbar.set_label('Proton Density [normalized]')
+        cbar = plt.colorbar(im, ax=ax, shrink=0.6)
+        cbar.set_label('log$_10$(Proton Density [normalized])')
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
@@ -1609,7 +1665,7 @@ class MPRSpectrometer:
         )
         
         # Apply transfer map
-        self.apply_transfer_map(map_order=5)
+        self.apply_transfer_map(map_order=5, save_beam=False)
         
         # Create subplots
         fig, ax = plt.subplots(figsize=(16, 8))
