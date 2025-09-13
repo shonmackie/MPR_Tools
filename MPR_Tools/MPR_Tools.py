@@ -27,6 +27,8 @@ import numpy as np
 from scipy.stats import norm
 import matplotlib.pyplot as plt
 from progress.bar import Bar
+import pandas as pd
+from labellines import labelLines
 
 def calculate_fwhm(data: np.ndarray, domain: np.ndarray) -> float:
     """
@@ -453,7 +455,7 @@ class ConversionFoil:
     def calculate_efficiency(
         self, 
         neutron_energy: float, 
-        num_samples: int = int(1e5),
+        num_samples: int = int(1e6),
         num_angle_samples: int = 10000
     ) -> float:
         """
@@ -933,7 +935,7 @@ class MPRSpectrometer:
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         generate_figure: bool = False,
-        figure_name: str = 'default',
+        figure_name: Optional[str] = None,
         verbose: bool = False
     ) -> Tuple[float, float, float, float]:
         """
@@ -975,7 +977,7 @@ class MPRSpectrometer:
         
         # Generate figure if requested
         if generate_figure:
-            if figure_name == 'default':
+            if figure_name == None:
                 figure_name = (
                     f'{self.figure_directory}/Monoenergetic_En{neutron_energy:.1f}MeV_T{self.conversion_foil.thickness_um:.0f}um_E0{self.reference_energy:.1f}MeV.png'
                 )
@@ -987,7 +989,7 @@ class MPRSpectrometer:
             print(f'  Mean position [cm]: {mean_position * 100:.3f}')
             print(f'  Standard deviation [cm]: {std_deviation * 100:.3f}')
             print(f'  FWHM [cm]: {fwhm * 100:.3f}')
-            print(f'  Energy resolution [%]: {energy_resolution * 100:.2f}')
+            print(f'  Energy resolution [keV]: {energy_resolution * 1000:.2f}')
         
         return mean_position, std_deviation, fwhm, energy_resolution
     
@@ -1039,97 +1041,183 @@ class MPRSpectrometer:
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
     
-    def generate_dispersion_curve(
+    def generate_performance_curve(
         self,
         num_energies: int = 40,
-        num_hydrons_per_energy: int = 100,
+        num_hydrons_per_energy: int = 1000,
+        num_efficiency_samples: int = int(1e4),
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
-        output_filename: str = 'default',
-        generate_figure: bool = False
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        output_filename: Optional[str] = None,
+        generate_figure: bool = True,
+        reset: bool = True
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Generate energy dispersion curve for the spectrometer.
+        Generate comprehensive performance analysis including dispersion, resolution, and efficiency.
         
         Args:
             num_energies: Number of energy points to simulate
-            num_hydrons_per_energy: Number of hydrons per energy point
+            num_hydrons_per_energy: Number of hydrons per energy point for dispersion/resolution
+            num_efficiency_samples: Number of samples for efficiency calculation
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
-            generate_figure: Whether to generate dispersion plot
+            generate_figure: Whether to generate comprehensive plot
+            reset: Whether to regenerate the dataset or load an existing one
             
         Returns:
-            Tuple of (energies, mean_positions, std_deviations)
+            Tuple of (energies, positions_mean, positions_std, energy_resolutions, efficiencies)
         """
-        print('Generating energy dispersion curve...')
-        # TODO: plot resolution vs energy
-        # Energy range
-        energies = np.linspace(self.min_energy, self.max_energy, num_energies)
+        print('Generating comprehensive performance analysis...')
         
-        mean_positions = np.zeros_like(energies)
-        std_deviations = np.zeros_like(energies)
+        # Save comprehensive data
+        if output_filename == None:
+            output_filename = f'{self.figure_directory}/comprehensive_performance.csv'
         
-        progress_bar = Bar('Calculating dispersion...', max=num_energies)
+        if reset:
+            # Energy range
+            energies = np.linspace(self.min_energy, self.max_energy, num_energies)
+            
+            positions_mean = np.zeros_like(energies)
+            positions_std = np.zeros_like(energies)
+            energy_resolutions = np.zeros_like(energies)
+            efficiencies = np.zeros_like(energies)
+            
+            progress_bar = Bar('Calculating performance metrics...', max=num_energies)
+            
+            for i, energy in enumerate(energies):
+                # Calculate dispersion and resolution from monoenergetic analysis
+                mean_pos, std_dev, fwhm, energy_res = self.analyze_monoenergetic_performance(
+                    energy, 
+                    num_hydrons_per_energy, 
+                    include_kinematics, 
+                    include_stopping_power_loss,
+                    generate_figure=False,
+                    verbose=False
+                )
+                positions_mean[i] = mean_pos
+                positions_std[i] = std_dev
+                energy_resolutions[i] = energy_res
+                
+                # Calculate efficiency for this energy
+                efficiency = self.conversion_foil.calculate_efficiency(
+                    energy, 
+                    num_samples=num_efficiency_samples
+                )
+                efficiencies[i] = efficiency
+                
+                progress_bar.next()
+            
+            progress_bar.finish()
+            
+            # Save results to a csv
+            df = pd.DataFrame({
+                'energy [MeV]': energies,
+                'position mean [m]': positions_mean,
+                'position std [m]': positions_std,
+                'resolution [MeV]': energy_resolutions,
+                'efficiency': efficiencies
+            })
+            df.to_csv(output_filename, index=False)
+            
+            print(f'Comprehensive performance data saved to {output_filename}')
         
-        for i, energy in enumerate(energies):
-            mean_pos, std_dev, _, _ = self.analyze_monoenergetic_performance(
-                energy, 
-                num_hydrons_per_energy, 
-                include_kinematics, 
-                include_stopping_power_loss,
-                generate_figure=False,
-                verbose=False
-            )
-            mean_positions[i] = mean_pos
-            std_deviations[i] = std_dev
-            progress_bar.next()
+        else:
+            df = pd.read_csv(f'{output_filename}')
+            energies = df['energy [MeV]'].to_numpy()
+            positions_mean = df['position mean [m]'].to_numpy()
+            positions_std = df['position std [m]'].to_numpy()
+            energy_resolutions = df['resolution [MeV]'].to_numpy()
+            efficiencies = df['efficiency'].to_numpy()
         
-        progress_bar.finish()
-        
-        # Save dispersion data
-        if output_filename == 'default':
-            output_filename = f'{self.figure_directory}/dispersion_curve'
-        
-        dispersion_data = np.column_stack([energies, mean_positions, std_deviations])
-        np.savetxt(f'{output_filename}.txt', dispersion_data, 
-                  header='Energy[MeV] MeanPosition[m] StdDeviation[m]')
-        
-        # Generate figure if requested
+        # Generate performance figure if requested
         if generate_figure:
-            self._plot_dispersion_curve(f'{output_filename}.png', energies, 
-                                      mean_positions, std_deviations)
+            figure_name = output_filename.replace('.csv', '.png')
+            self._plot_performance(
+                figure_name, 
+                energies, positions_mean, positions_std, 
+                energy_resolutions, efficiencies
+            )
         
-        print(f'Dispersion curve saved to {output_filename}.txt')
-        return energies, mean_positions, std_deviations
-    
-    def _plot_dispersion_curve(
+        return energies, positions_mean, positions_std, energy_resolutions, efficiencies
+
+    def _plot_performance(
         self, 
         filename: str, 
         energies: np.ndarray, 
         positions: np.ndarray, 
-        uncertainties: np.ndarray
+        position_uncertainties: np.ndarray,
+        energy_resolutions: np.ndarray,
+        efficiencies: np.ndarray
     ) -> None:
-        """Generate dispersion curve plot."""
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        """Generate comprehensive performance plot with shared x-axis."""
+        fig, ax1 = plt.subplots(1, 1, figsize=(6, 4))
+        fig.suptitle('Comprehensive MPR Spectrometer Performance', fontsize=16)
         
-        ax.plot(energies, positions*100, 'b-', linewidth=2, label='Mean Position')
-        ax.fill_between(energies, (positions - uncertainties) * 100, (positions + uncertainties) * 100,
-                       alpha=0.3, color='blue', label='±1σ')
+        # Left y-axis: Dispersion
+        color_dispersion = 'tab:blue'
+        ax1.set_xlabel('Neutron Energy [MeV]')
+        ax1.set_ylabel('Proton Position [cm]', color=color_dispersion)
         
-        ax.set_xlabel('Neutron Energy [MeV]')
-        ax.set_ylabel(f'{self.conversion_foil.particle.capitalize()} Position [cm]')
-        ax.set_title('Energy Dispersion Curve')
-        ax.grid(True, alpha=0.3)
-        ax.legend()
+        # Plot dispersion curve
+        ax1.plot(energies, positions * 100, color=color_dispersion, linewidth=2,
+                 label=f'Dispersion')
+        ax1.fill_between(energies, (positions - position_uncertainties) * 100, 
+                        (positions + position_uncertainties) * 100,
+                        alpha=0.3, color=color_dispersion)
+        ax1.grid(True, alpha=0.3)
+        ax1.tick_params(axis='y', labelcolor=color_dispersion)
+        
+        # Right y-axis: Resolution and Efficiency
+        ax2 = ax1.twinx()
+        
+        # Plot energy resolution
+        color_resolution = 'tab:red'
+        ax2.plot(energies, energy_resolutions * 1000, color=color_resolution, 
+                        linewidth=2, marker='o', markersize=4,
+                        label=f'Resolution')
+        ax2.set_ylabel('Energy Resolution [keV]', color=color_resolution)
+        ax2.tick_params(axis='y', labelcolor=color_resolution)
+        
+        # Detection Efficiency
+        ax3 = ax1.twinx()
+        # Offset the third axis to the right
+        ax3.spines['right'].set_position(('outward', 60))
+        color_efficiency = 'tab:green'
+        ax3.plot(energies, efficiencies*1e6, color=color_efficiency, 
+                        linewidth=2, marker='s', markersize=4,
+                        label=f'Efficiency')
+        ax3.set_ylabel(r'Efficiency[$\times$1e6]', color=color_efficiency)
+        ax3.tick_params(axis='y', labelcolor=color_efficiency)
+        
+        # Label lines on their respective axes
+        range = energies.max() - energies.min()
+        labelLines(ax1.get_lines(), xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
+        labelLines(ax2.get_lines(), xvals=[energies.min() + 0.5 * range], align=True, fontsize=12)
+        labelLines(ax3.get_lines(), xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
+        
+        # Make sure x-axis limits are consistent
+        x_min, x_max = energies.min(), energies.max()
+        x_margin = (x_max - x_min) * 0.02
+        ax1.set_xlim(x_min - x_margin, x_max + x_margin)
         
         plt.tight_layout()
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
+        
+        # Print summary statistics
+        print(f'\nPerformance Summary:')
+        print(f'  Energy range: {energies.min():.2f} - {energies.max():.2f} MeV')
+        print(f'  Position range: {positions.min()*100:.2f} - {positions.max()*100:.2f} cm')
+        print(f'  Average resolution: {np.mean(energy_resolutions)*100:.1f}%')
+        print(f'  Average efficiency: {np.mean(efficiencies)*100:.3f}%')
+        print(f'  Best resolution: {np.min(energy_resolutions)*100:.1f}% at {energies[np.argmin(energy_resolutions)]:.2f} MeV')
+        print(f'  Best efficiency: {np.max(efficiencies)*100:.3f}% at {energies[np.argmax(efficiencies)]:.2f} MeV')
+        print(f'Comprehensive performance plot saved to {filename}')
     
     def plot_focal_plane_distribution(
         self, 
-        filename: str = 'default',
+        filename: Optional[str] = None,
         include_hodoscope: bool = False,
         point_size: float = 1.0
     ) -> None:
@@ -1141,7 +1229,7 @@ class MPRSpectrometer:
             include_hodoscope: Whether to overlay hodoscope geometry
             point_size: Size of scatter plot points
         """
-        if filename == 'default':
+        if filename == None:
             filename = f'{self.figure_directory}/focal_plane_distribution.png'
         
         fig, ax = plt.subplots(figsize=(10, 8))
@@ -1192,14 +1280,14 @@ class MPRSpectrometer:
         plt.close()
         print(f'Focal plane plot saved to {filename}')
     
-    def plot_phase_space(self, filename: str = 'default') -> None:
+    def plot_phase_space(self, filename: Optional[str] = None) -> None:
         """
         Generate phase space plots.
         
         Args:
             filename: Output filename for the plot
         """
-        if filename == 'default':
+        if filename == None:
             filename = f'{self.figure_directory}/phase_space.png'
         
         fig, axes = plt.subplots(2, 2, figsize=(12, 10), layout='constrained')
@@ -1324,7 +1412,7 @@ class MPRSpectrometer:
 
     def plot_simple_position_histogram(
         self, 
-        filename: str = 'default', 
+        filename: Optional[str] = None, 
         num_bins: int = 40
     ) -> None:
         """
@@ -1334,7 +1422,7 @@ class MPRSpectrometer:
             filename: Output filename for the plot
             num_bins: Number of histogram bins
         """
-        if filename == 'default':
+        if filename == None:
             filename = f'{self.figure_directory}/counts_vs_position.png'
         
         if len(self.output_beam) == 0:
@@ -1370,14 +1458,14 @@ class MPRSpectrometer:
         plt.close()
         print(f'Position histogram saved to {filename}')
         
-    def plot_input_ray_geometry(self, filename: str = 'default') -> None:
+    def plot_input_ray_geometry(self, filename: Optional[str] = None) -> None:
         """
         Draw the input beam ray geometry showing rays from foil to aperture.
         
         Args:
             filename: Output filename for the plot
         """
-        if filename == 'default':
+        if filename == None:
             filename = f'{self.figure_directory}/input_ray_geometry.png'
         
         if len(self.input_beam) == 0:
@@ -1434,7 +1522,7 @@ class MPRSpectrometer:
 
     def plot_proton_density_heatmap(
         self, 
-        filename: str = 'default',
+        filename: Optional[str] = None,
         dx: float = 0.01, 
         dy: float = 0.01
     ) -> None:
@@ -1446,7 +1534,7 @@ class MPRSpectrometer:
             dx: X-direction resolution in meters
             dy: Y-direction resolution in meters
         """
-        if filename == 'default':
+        if filename == None:
             filename = f'{self.figure_directory}/proton_density_heatmap.png'
         
         density, X_mesh, Y_mesh = self.get_proton_density_map(dx, dy)
@@ -1479,10 +1567,7 @@ class MPRSpectrometer:
         energy_points: int = 1,
         min_energy: Optional[float] = None,
         max_energy: Optional[float] = None,
-        filename: str = 'default',
-        show_foil_aperture: bool = True,
-        ray_alpha: float = 0.6,
-        max_rays_to_plot: int = 100
+        filename: Optional[str] = None,
     ) -> None:
         """
         Generate and plot characteristic rays through the spectrometer system.
@@ -1500,11 +1585,8 @@ class MPRSpectrometer:
             min_energy: Minimum energy in MeV (defaults to class value)
             max_energy: Maximum energy in MeV (defaults to class value)
             filename: Output filename for the plot
-            show_foil_aperture: Whether to show foil and aperture geometry
-            ray_alpha: Transparency of ray lines
-            max_rays_to_plot: Maximum number of rays to plot (for clarity)
         """
-        if filename == 'default':
+        if filename == None:
             filename = f'{self.figure_directory}/characteristic_rays.png'
         
         # Set default energy range if not provided
