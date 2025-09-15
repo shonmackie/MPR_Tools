@@ -872,7 +872,7 @@ class MPRSpectrometer:
                 if current_count > last_count:
                     pbar.update(current_count - last_count)
                     last_count = current_count
-                time.sleep(0.5)  # Check every 100ms
+                time.sleep(0.5)  # Check every x ms
             
             # Final update for any remaining progress
             final_count = progress_counter.value
@@ -975,37 +975,89 @@ class MPRSpectrometer:
         
         return batch_results, attempts
     
-    def apply_transfer_map(self, map_order: int = 5, save_beam: bool = True) -> None:
+    def apply_transfer_map(
+        self,
+        map_order: int = 5,
+        save_beam: bool = True,
+        max_workers: Optional[int] = None
+    ) -> None:
         """
-        Apply ion optical transfer map to transport hydrons through spectrometer.
+        Apply ion optical transfer map to transport hydrons through spectrometer using multiprocessing.
         
         Args:
             map_order: Order of transfer map to apply (1-5 typically)
             save_beam: Whether or not to save output beam to csv
+            max_workers: Maximum number of worker processes (None for CPU count)
         """        
+        if max_workers is None:
+            max_workers = mp.cpu_count()
+        
         num_hydrons = len(self.input_beam)
+        
+        if num_hydrons == 0:
+            print("Warning: No input beam data available. Generate rays first.")
+            return
+        
+        print(f'Applying order {map_order} transfer map to {num_hydrons} hydrons using {max_workers} processes...')
         
         self.output_beam = np.zeros((num_hydrons, 5))
         
-        for i, input_ray in enumerate(tqdm(self.input_beam, desc=f'Applying order {map_order} transfer map...')):
-            # Initialize output ray with input energy
-            output_ray = np.array([0.0, 0.0, 0.0, 0.0, input_ray[4]])
+        # Calculate hydrons per process
+        hydrons_per_process = num_hydrons // max_workers
+        remaining_hydrons = num_hydrons % max_workers
+        
+        # Create shared counter for progress tracking
+        manager = mp.Manager()
+        progress_counter = manager.Value('i', 0)
+        progress_lock = manager.Lock()
+        
+        # Initialize progress bar
+        pbar = tqdm(total=num_hydrons, desc=f'Applying order {map_order} transfer map')
+        
+        # Execute in parallel
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
             
-            # Apply each map term
-            for j, term_index in enumerate(self.transfer_map[-1]):
-                term_powers = self._extract_digits(term_index)
-                
-                # Only include terms up to specified order
-                if np.sum(term_powers) <= map_order:
-                    # Calculate monomial term
-                    # TODO: Why is the last term multiplied by term_powers[5], but should it be term_powers[4]?
-                    monomial = np.prod([input_ray[k]**term_powers[k] for k in range(4)]) * input_ray[4]**term_powers[5]
+            # Submit jobs
+            start_idx = 0
+            for i in range(max_workers):
+                batch_size = hydrons_per_process + (1 if i < remaining_hydrons else 0)
+                if batch_size > 0:  # Only submit if there's work to do
+                    end_idx = start_idx + batch_size
                     
-                    # Add contributions to each coordinate
-                    for coord in range(4):  # x, angle_x, y, angle_y
-                        output_ray[coord] += self.transfer_map[coord, j] * monomial
+                    # Package parameters for worker
+                    worker_args = (
+                        self.input_beam[start_idx:end_idx],
+                        self.transfer_map,
+                        map_order,
+                        progress_counter,
+                        progress_lock
+                    )
+                    
+                    future = executor.submit(self._apply_transfer_map_worker, *worker_args)
+                    futures.append((future, start_idx, end_idx))
+                    start_idx = end_idx
             
-            self.output_beam[i] = output_ray
+            # Monitor progress while processes run
+            last_count = 0
+            while any(not future[0].done() for future in futures):
+                current_count = progress_counter.value
+                if current_count > last_count:
+                    pbar.update(current_count - last_count)
+                    last_count = current_count
+                time.sleep(0.5)  # Check every x ms
+            
+            # Final update for any remaining progress
+            final_count = progress_counter.value
+            if final_count > last_count:
+                pbar.update(final_count - last_count)
+            
+            # Collect results and place them in the correct positions
+            for future, start_idx, end_idx in futures:
+                batch_output = future.result()
+                self.output_beam[start_idx:end_idx] = batch_output
+        
+        pbar.close()
         
         print('Transfer map applied successfully!')
         
@@ -1020,7 +1072,58 @@ class MPRSpectrometer:
             })
             df.to_csv(f'{self.figure_directory}/output_beam.csv', index=False)
             print('Output beam saved!')
+
+    def _apply_transfer_map_worker(
+        self,
+        input_batch: np.ndarray,
+        transfer_map: np.ndarray,
+        map_order: int,
+        progress_counter,
+        progress_lock
+    ) -> np.ndarray:
+        """
+        Worker method to apply transfer map to a batch of hydrons.
         
+        Args:
+            input_batch: Batch of input rays [N x 6]
+            transfer_map: Transfer map coefficients
+            map_order: Order of transfer map to apply
+            progress_counter: Shared counter for progress tracking
+            progress_lock: Lock for thread-safe progress updates
+            
+        Returns:
+            Batch of output rays [N x 5]
+        """
+        import numpy as np
+        
+        batch_size = len(input_batch)
+        output_batch = np.zeros((batch_size, 5))
+        
+        for i, input_ray in enumerate(input_batch):
+            # Initialize output ray with input energy
+            output_ray = np.array([0.0, 0.0, 0.0, 0.0, input_ray[4]])
+            
+            # Apply each map term
+            for j, term_index in enumerate(transfer_map[-1]):
+                term_powers = self._extract_digits(term_index)
+                
+                # Only include terms up to specified order
+                if np.sum(term_powers) <= map_order:
+                    # Calculate monomial term
+                    monomial = np.prod([input_ray[k]**term_powers[k] for k in range(4)]) * input_ray[4]**term_powers[5]
+                    
+                    # Add contributions to each coordinate
+                    for coord in range(4):  # x, angle_x, y, angle_y
+                        output_ray[coord] += transfer_map[coord, j] * monomial
+            
+            output_batch[i] = output_ray
+            
+            # Update progress counter thread-safely
+            with progress_lock:
+                progress_counter.value += 1
+        
+        return output_batch
+    
     def _extract_digits(self, number: float) -> np.ndarray:
         """
         Extract digits from a number for transfer map indexing.
