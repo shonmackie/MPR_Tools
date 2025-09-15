@@ -22,15 +22,16 @@ Useful resources:
 - ENDF data: https://www.nndc.bnl.gov/sigma/index.jsp?as=1&lib=endfb7.1&nsub=10
 """
 
-from typing import Tuple, Optional, Literal
+from typing import Tuple, Optional, Literal, List
 import numpy as np
 from scipy.stats import norm
 import matplotlib.pyplot as plt
-from progress.bar import Bar
+from tqdm import tqdm
 import pandas as pd
 from labellines import labelLines
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
+import time
 
 def calculate_fwhm(data: np.ndarray, domain: np.ndarray) -> float:
     """
@@ -280,12 +281,12 @@ class ConversionFoil:
             energy_MeV: Incident neutron energy in MeV
             
         Returns:
-            Cross section in m²
+            Cross section in m^2
         """
         energy_eV = energy_MeV * 1e6
         cross_section_barns = np.interp(energy_eV, self.nh_cross_section_data[0], 
                                        self.nh_cross_section_data[1])
-        return cross_section_barns * 1e-28  # barns to m²
+        return cross_section_barns * 1e-28  # barns to m^2
     
     def get_nc12_cross_section(self, energy_MeV: float) -> float:
         """
@@ -295,12 +296,12 @@ class ConversionFoil:
             energy_MeV: Incident neutron energy in MeV
             
         Returns:
-            Cross section in m²
+            Cross section in m^2
         """
         energy_eV = energy_MeV * 1e6
         cross_section_barns = np.interp(energy_eV, self.nc12_cross_section_data[0], 
                                        self.nc12_cross_section_data[1])
-        return cross_section_barns * 1e-28  # barns to m²
+        return cross_section_barns * 1e-28  # barns to m^2
     
     def calculate_differential_xs_CM(self, energy_MeV: float, cos_theta_cm: float) -> float:
         """
@@ -364,7 +365,7 @@ class ConversionFoil:
         
         Args:
             neutron_energy: Incident neutron energy in MeV
-            include_kinematics: Include cos²θ energy loss in scattering
+            include_kinematics: Include cos^2θ energy loss in scattering
             include_stopping_power_loss: Include SRIM energy loss calculation
             num_angle_samples: Number of scattering angle samples
             z_sampling: Depth sampling method ('exp' or 'uni')
@@ -495,9 +496,8 @@ class ConversionFoil:
         diff_xs /= np.sum(diff_xs)  # Normalize
         
         accepted_count = 0
-        progress_bar = Bar('Calculating acceptance...', max=num_samples)
         
-        for _ in range(num_samples):
+        for _ in tqdm(range(num_samples), desc='Calculating acceptance...'):
             # Sample random position in foil
             radius = self.foil_radius * np.sqrt(np.random.rand())
             angle = 2 * np.pi * np.random.rand()
@@ -510,10 +510,6 @@ class ConversionFoil:
             
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
                 accepted_count += 1
-                
-            progress_bar.next()
-        
-        progress_bar.finish()
         
         geometric_efficiency = accepted_count / num_samples
         total_efficiency = scattering_efficiency * geometric_efficiency
@@ -547,9 +543,7 @@ class ConversionFoil:
         weighted_distribution = energy_distribution * self.get_nh_cross_section(neutron_energies)
         weighted_distribution = weighted_distribution / np.sum(weighted_distribution)
         
-        progress_bar = Bar('Calculating proton energy distribution...', max=num_protons)
-        
-        for i in range(num_protons):
+        for i in tqdm(range(num_protons), desc='Calculating proton energy distribution...'):
             # Sample neutron energy from weighted distribution
             neutron_energy = np.random.choice(neutron_energies, p=weighted_distribution)
             
@@ -561,9 +555,7 @@ class ConversionFoil:
             )
             
             proton_energies[i] = proton_energy
-            progress_bar.next()
-        
-        progress_bar.finish()
+            
         return proton_energies
 
 
@@ -749,13 +741,11 @@ class MPRSpectrometer:
         self.input_beam = np.zeros((num_rays, 6))
         print(f'Characteristic ray energy range: {min_energy:.3f}-{max_energy:.3f} MeV')
         
-        progress_bar = Bar(f'Generating {num_rays} characteristic rays...', max=num_rays)
-        
         ray_index = 0
         duplicates = 0
         
         # Energy loop
-        for energy_offset, energy in zip(energy_offset_values, energy_values):
+        for energy_offset, energy in tqdm(zip(energy_offset_values, energy_values), desc=f'Generating {num_rays} characteristic rays...'):
             
             if radial_points == 0:
                 # On-axis ray only
@@ -796,10 +786,7 @@ class MPRSpectrometer:
                                 if not is_duplicate:
                                     self.input_beam[ray_index] = ray
                                     ray_index += 1
-                                
-                                progress_bar.next()
         
-        progress_bar.finish()
         print(f'Generated {ray_index} unique rays')
         print(f'Found {duplicates} duplicate rays')
         
@@ -815,7 +802,7 @@ class MPRSpectrometer:
         max_workers: Optional[int] = None
     ) -> None:
         """
-        Generate hydron rays from neutron energy distribution using Monte Carlo.
+        Generate hydron rays from neutron energy distribution using Monte Carlo with multiprocessing.
         
         Args:
             neutron_energies: Array of neutron energies in MeV
@@ -825,125 +812,92 @@ class MPRSpectrometer:
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             z_sampling: Depth sampling method ('exp' or 'uni')
             save_beam: Whether or not to save input beam to csv
-            max_workers: Maximum number of worker threads (None for CPU count)
+            max_workers: Maximum number of worker processes (None for CPU count)
         """
-        progress_bar = Bar('Generating Monte Carlo hydron trajectories...', max=num_hydrons)
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        import multiprocessing as mp
+        import time
         
-        self.input_beam = np.zeros((num_hydrons, 6))
+        if max_workers is None:
+            max_workers = mp.cpu_count()
+        
+        print(f'Generating {num_hydrons} Monte Carlo hydron trajectories using {max_workers} processes...')
+        
+        # Calculate hydrons per process
+        hydrons_per_process = num_hydrons // max_workers
+        remaining_hydrons = num_hydrons % max_workers
         
         # Weight energy distribution by n-h scattering cross section
         weighted_distribution = (energy_distribution * 
                             self.conversion_foil.get_nh_cross_section(neutron_energies))
         weighted_distribution /= np.sum(weighted_distribution)
         
-        # Determine number of workers
-        if max_workers is None:
-            max_workers = mp.cpu_count()
+        # Create shared counter for progress tracking
+        manager = mp.Manager()
+        progress_counter = manager.Value('i', 0)
+        progress_lock = manager.Lock()
         
-        # Calculate work distribution
-        hydrons_per_worker = num_hydrons // max_workers
-        remaining_hydrons = num_hydrons % max_workers
+        # Initialize progress bar
+        pbar = tqdm(total=num_hydrons, desc='Generating Monte Carlo hydron trajectories')
         
-        def _worker_task(hydrons_to_generate: int, seed: int) -> Tuple[np.ndarray, int]:
-            """
-            Worker function to generate hydrons in parallel.
-            
-            Args:
-                hydrons_to_generate: Number of hydrons this worker should generate
-                seed: Random seed for this worker
-                
-            Returns:
-                Tuple of (generated_hydrons_array, actual_count_generated)
-            """
-            # Create independent random number generator for this worker
-            rng = np.random.default_rng(seed)
-            
-            worker_hydrons = np.zeros((hydrons_to_generate, 6))
-            generated_count = 0
-            total_attempts = 0
-            max_attempts = hydrons_to_generate * 10  # Prevent infinite loops
-            
-            while generated_count < hydrons_to_generate and total_attempts < max_attempts:
-                # Sample neutron energy using worker's RNG
-                neutron_energy = rng.choice(neutron_energies, p=weighted_distribution)
-                
-                # Generate scattered hydron with worker's RNG
-                try:
-                    x0, y0, theta_s, phi_s, hydron_energy = self.conversion_foil.generate_scattered_hydron(
-                        neutron_energy,
-                        include_kinematics,
-                        include_stopping_power_loss, 
-                        z_sampling=z_sampling,
-                        rng=rng
-                    )
-                    
-                    if self.conversion_foil._check_aperture_acceptance(x0, y0, theta_s, phi_s):
-                        # Convert to spectrometer coordinates
-                        x_aperture = x0 + self.conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
-                        y_aperture = y0 + self.conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
-                        
-                        angle_x = np.arctan((x_aperture - x0) / self.conversion_foil.aperture_distance)
-                        angle_y = np.arctan((y_aperture - y0) / self.conversion_foil.aperture_distance)
-                        
-                        # Store relative energy
-                        energy_relative = (hydron_energy - self.reference_energy) / self.reference_energy
-                        
-                        worker_hydrons[generated_count] = [x0, angle_x, y0, angle_y, energy_relative, neutron_energy]
-                        generated_count += 1
-                    
-                except Exception as e:
-                    # Handle generation failures gracefully
-                    continue
-                
-                total_attempts += 1
-            
-            return worker_hydrons[:generated_count], generated_count
-        
-        # Create independent random seeds for each worker
-        # As recommended by https://numpy.org/doc/2.2/reference/random/parallel.html
-        parent_rng = np.random.default_rng(12345)  # You can make this configurable
-        worker_rngs = parent_rng.spawn(max_workers)
-        worker_seeds = [int(rng.integers(0, 2**32)) for rng in worker_rngs]
-        
-        # Submit work to thread pool
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Execute in parallel
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             
-            for worker_id in range(max_workers):
-                # Distribute work evenly, with remainder going to first workers
-                hydrons_for_worker = hydrons_per_worker + (1 if worker_id < remaining_hydrons else 0)
-                
-                future = executor.submit(
-                    _worker_task,
-                    hydrons_for_worker, 
-                    worker_seeds[worker_id]
-                )
-                futures.append(future)
+            # Submit jobs
+            for i in range(max_workers):
+                batch_size = hydrons_per_process + (1 if i < remaining_hydrons else 0)
+                if batch_size > 0:  # Only submit if there's work to do
+                    # Package all parameters for the worker
+                    worker_args = (
+                        batch_size,
+                        12345 + i * 1000,  # seed_offset
+                        neutron_energies,
+                        weighted_distribution,
+                        include_kinematics,
+                        include_stopping_power_loss,
+                        z_sampling,
+                        self.conversion_foil,
+                        self.reference_energy,
+                        progress_counter,
+                        progress_lock
+                    )
+                    future = executor.submit(self._generate_batch_worker, *worker_args)
+                    futures.append(future)
             
-            # Collect results and update progress
-            total_generated = 0
-            current_index = 0
+            # Monitor progress while processes run
+            last_count = 0
+            while any(not future.done() for future in futures):
+                current_count = progress_counter.value
+                if current_count > last_count:
+                    pbar.update(current_count - last_count)
+                    last_count = current_count
+                time.sleep(0.5)  # Check every 100ms
             
-            for future in futures:
-                worker_hydrons, worker_count = future.result()
-                
-                # Copy worker results into main array
-                end_index = current_index + worker_count
-                self.input_beam[current_index:end_index] = worker_hydrons
-                current_index = end_index
-                total_generated += worker_count
-                
-                # Update progress bar
-                for _ in range(worker_count):
-                    progress_bar.next()
+            # Final update for any remaining progress
+            final_count = progress_counter.value
+            if final_count > last_count:
+                pbar.update(final_count - last_count)
+            
+            # Collect results
+            all_results = []
+            total_attempts = 0
+            
+            for future in as_completed(futures):
+                batch_results, batch_attempts = future.result()
+                all_results.extend(batch_results)
+                total_attempts += batch_attempts
         
-        progress_bar.finish()
-        print(f'Generated {total_generated} hydrons using {max_workers} workers')
+        pbar.close()
         
-        # Trim array to actual generated count
+        # Convert to numpy array and ensure we don't exceed requested count
+        total_generated = min(len(all_results), num_hydrons)
+        self.input_beam = np.array(all_results[:total_generated])
+        
         if total_generated < num_hydrons:
-            self.input_beam = self.input_beam[:total_generated]
             print(f"Warning: Only generated {total_generated}/{num_hydrons} hydrons due to high rejection rate")
+        
+        print(f'Generated {total_generated} hydrons from {total_attempts} total attempts using {max_workers} processes')
         
         # Save input beam to file
         if save_beam:
@@ -957,97 +911,69 @@ class MPRSpectrometer:
             })
             df.to_csv(f'{self.figure_directory}/input_beam.csv', index=False)
             print('Input beam saved!')
-
-    # def generate_monte_carlo_rays(
-    #     self,
-    #     neutron_energies: np.ndarray,
-    #     energy_distribution: np.ndarray,
-    #     num_hydrons: int,
-    #     include_kinematics: bool = True,
-    #     include_stopping_power_loss: bool = True,
-    #     z_sampling: Literal['exp', 'uni'] = 'exp',
-    #     save_beam: bool = True
-    # ) -> None:
-    #     """
-    #     Generate hydron rays from neutron energy distribution using Monte Carlo.
-        
-    #     Args:
-    #         neutron_energies: Array of neutron energies in MeV
-    #         energy_distribution: Relative probability distribution (normalized automatically)
-    #         num_hydrons: Number of hydrons to simulate
-    #         include_kinematics: Include kinematic energy transfer
-    #         include_stopping_power_loss: Include stopping power energy loss via SRIM
-    #         z_sampling: Depth sampling method ('exp' or 'uni')
-    #         save_beam: Whether or not to save input beam to csv
-    #     """
-    #     progress_bar = Bar('Generating Monte Carlo hydron trajectories...', max=num_hydrons)
-        
-    #     self.input_beam = np.zeros((num_hydrons, 6))
-        
-    #     # Weight energy distribution by n-h scattering cross section
-    #     # This is not fully correct, but is sufficient for these calculations.
-    #     # The fully correct solution would be to sample from the energy distribution, and then
-    #     # perform a monte carlo progression where the cross section is turned into a normalized distribution,
-    #     # and if a random number is less than the value of the distribution at E, generate a proton.
-    #     # This is very inefficienct, so we go with this method instead.
-    #     weighted_distribution = (energy_distribution * 
-    #                            self.conversion_foil.get_nh_cross_section(neutron_energies))
-    #     weighted_distribution /= np.sum(weighted_distribution)
-        
-    #     generated_count = 0
-    #     total_attempts = 0
-        
-    #     while generated_count < num_hydrons:
-    #         # Sample neutron energy
-    #         neutron_energy = np.random.choice(neutron_energies, p=weighted_distribution)
             
-    #         # Generate scattered hydron
-    #         try:
-    #             x0, y0, theta_s, phi_s, hydron_energy = self.conversion_foil.generate_scattered_hydron(
-    #                 neutron_energy, include_kinematics, include_stopping_power_loss, z_sampling=z_sampling
-    #             )
+    # Class method worker function (used with multiprocessing)
+    def _generate_batch_worker(
+        self,
+        batch_size: int,
+        seed_offset: int,
+        neutron_energies: np.ndarray,
+        weighted_distribution: np.ndarray,
+        include_kinematics: bool,
+        include_stopping_power_loss: bool,
+        z_sampling: str,
+        conversion_foil,
+        reference_energy: float,
+        progress_counter,
+        progress_lock
+    ) -> Tuple[List[List[float]], int]:
+        """Generate a batch of hydrons in a separate process."""
+        import numpy as np
+        from typing import List
+        
+        # Create independent random number generator
+        rng = np.random.default_rng(seed_offset)
+        
+        batch_results = []
+        attempts = 0
+        max_attempts = batch_size * 20  # Prevent infinite loops
+        
+        while len(batch_results) < batch_size and attempts < max_attempts:
+            try:
+                attempts += 1
                 
-    #             if self.conversion_foil._check_aperture_acceptance(x0, y0, theta_s, phi_s):
-    #                 # Convert to spectrometer coordinates
-    #                 x_aperture = x0 + self.conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
-    #                 y_aperture = y0 + self.conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
-                    
-    #                 angle_x = np.arctan((x_aperture - x0) / self.conversion_foil.aperture_distance)
-    #                 angle_y = np.arctan((y_aperture - y0) / self.conversion_foil.aperture_distance)
-                    
-    #                 # Store relative energy
-    #                 energy_relative = (hydron_energy - self.reference_energy) / self.reference_energy
-                    
-    #                 self.input_beam[generated_count] = [x0, angle_x, y0, angle_y, energy_relative, neutron_energy]
-    #                 generated_count += 1
-    #                 progress_bar.next()
+                # Sample neutron energy
+                neutron_energy = rng.choice(neutron_energies, p=weighted_distribution)
                 
-    #         except Exception as e:
-    #             # Handle generation failures gracefully
-    #             continue
-            
-    #         total_attempts += 1
-            
-    #         # Prevent infinite loops
-    #         if total_attempts > num_hydrons * 10:
-    #             print(f"Warning: High rejection rate. Generated {generated_count}/{num_hydrons} hydrons")
-    #             break
-         
-    #     progress_bar.finish()
-    #     print(f'Generated {generated_count} hydrons from {total_attempts} attempts')
-            
-    #     # Save input beam to file
-    #     if save_beam:
-    #         df = pd.DataFrame({
-    #             'x0': self.input_beam[:, 0],
-    #             'angle_x': self.input_beam[:, 1],
-    #             'y0': self.input_beam[:, 2],
-    #             'angle_y': self.input_beam[:, 3],
-    #             'energy_relative': self.input_beam[:, 4],
-    #             'neutron_energy': self.input_beam[:, 5]
-    #         })
-    #         df.to_csv(f'{self.figure_directory}/input_beam.csv', index=False)
-    #         print('Input beam saved!')
+                # Generate scattered hydron with the worker's RNG
+                x0, y0, theta_s, phi_s, hydron_energy = conversion_foil.generate_scattered_hydron(
+                    neutron_energy, 
+                    include_kinematics, 
+                    include_stopping_power_loss, 
+                    z_sampling=z_sampling,
+                    rng=rng  # Pass the worker's RNG
+                )
+                
+                if conversion_foil._check_aperture_acceptance(x0, y0, theta_s, phi_s):
+                    # Convert to spectrometer coordinates
+                    x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
+                    y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
+                    
+                    angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
+                    angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
+                    
+                    energy_relative = (hydron_energy - reference_energy) / reference_energy
+                    
+                    batch_results.append([x0, angle_x, y0, angle_y, energy_relative, neutron_energy])
+                    
+                    # Update progress counter thread-safely
+                    with progress_lock:
+                        progress_counter.value += 1
+                    
+            except Exception:
+                pass  # Skip failed generations
+        
+        return batch_results, attempts
     
     def apply_transfer_map(self, map_order: int = 5, save_beam: bool = True) -> None:
         """
@@ -1058,11 +984,10 @@ class MPRSpectrometer:
             save_beam: Whether or not to save output beam to csv
         """        
         num_hydrons = len(self.input_beam)
-        progress_bar = Bar(f'Applying order {map_order} transfer map...', max=num_hydrons)
         
         self.output_beam = np.zeros((num_hydrons, 5))
         
-        for i, input_ray in enumerate(self.input_beam):
+        for i, input_ray in enumerate(tqdm(self.input_beam, desc=f'Applying order {map_order} transfer map...')):
             # Initialize output ray with input energy
             output_ray = np.array([0.0, 0.0, 0.0, 0.0, input_ray[4]])
             
@@ -1081,9 +1006,7 @@ class MPRSpectrometer:
                         output_ray[coord] += self.transfer_map[coord, j] * monomial
             
             self.output_beam[i] = output_ray
-            progress_bar.next()
         
-        progress_bar.finish()
         print('Transfer map applied successfully!')
         
         # Save output beam to file
@@ -1303,9 +1226,7 @@ class MPRSpectrometer:
             geometric_efficiencies = np.zeros_like(energies)
             total_efficiencies = np.zeros_like(energies)
             
-            progress_bar = Bar('Calculating performance metrics...', max=num_energies)
-            
-            for i, energy in enumerate(energies):
+            for i, energy in enumerate(tqdm(energies, desc='Calculating performance for a range of energies...')):
                 # Calculate dispersion and resolution from monoenergetic analysis
                 mean_pos, std_dev, fwhm, energy_res = self.analyze_monoenergetic_performance(
                     energy, 
@@ -1327,10 +1248,6 @@ class MPRSpectrometer:
                 scattering_efficiencies[i] = scattering_efficiency
                 geometric_efficiencies[i] = geometric_efficiency
                 total_efficiencies[i] = total_efficiency
-                
-                progress_bar.next()
-            
-            progress_bar.finish()
             
             # Save results to a csv
             df = pd.DataFrame({
