@@ -24,6 +24,7 @@ Useful resources:
 
 from typing import Tuple, Optional, Literal, List
 import numpy as np
+from pathlib import Path
 from scipy.stats import norm
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -78,11 +79,10 @@ class ConversionFoil:
         thickness: float,
         aperture_distance: float,
         aperture_radius: float,
-        srim_data_path: str,
-        nh_cross_section_path: str,
-        nc12_cross_section_path: str,
-        differential_xs_path: str,
-        foil_density: float = 0.98, # g/cm³
+        srim_data_path: Optional[str] = None,
+        nh_cross_section_path: Optional[str] = None,
+        nc12_cross_section_path: Optional[str] = None,
+        differential_xs_path: Optional[str] = None,
         z_grid_points: int = 1000000,
         foil_material: Literal['CH2', 'CD2'] = 'CH2',
         aperture_type: Literal['circ', 'rect'] = 'circ'
@@ -103,7 +103,7 @@ class ConversionFoil:
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
         """
-        print('Initializing acceptance geometry...')
+        print('Initializing convergence foil...')
         
         # Convert units and store geometry
         self.foil_radius = foil_radius * 1e-2  # cm to m
@@ -113,35 +113,64 @@ class ConversionFoil:
         self.aperture_type = aperture_type
         
         # Calculate particle densities in CH2
+        self.foil_material = foil_material
         if foil_material == 'CH2':
             self.particle = 'proton'
+            foil_density = 0.98 # g/cm^3
             molecular_weight = 14.0266 # g/mol for CH2
             self.hydron_mass = 1.00728 # amu
         elif foil_material == 'CD2':
             self.particle = 'deuteron'
+            foil_density = 1.131 # g/cm^3
             molecular_weight = 16.0395 # g/mol for CD2
             self.hydron_mass = 2.0136 # amu
         
         density_factor = foil_density * self.AVOGADRO * 1e6
-        self.carbon_density = density_factor / molecular_weight # carbon/m³
-        self.hydron_density = self.carbon_density * 2 # hydrons/m³
+        self.carbon_density = density_factor / molecular_weight # carbon/m^3
+        self.hydron_density = self.carbon_density * 2 # hydrons/m^3
         
         # Initialize sampling grids
         # Exit of the foil is z=0
         self.z_grid = np.linspace(-self.thickness, 0, z_grid_points)
         
         # Load cross section and stopping power data
-        self.srim_data_path = srim_data_path
-        self.nh_cross_section_path = nh_cross_section_path
-        self.nc12_cross_section_path = nc12_cross_section_path
-        self.differential_xs_path = differential_xs_path
+        module_dir = Path(__file__).parent
+        if srim_data_path is None:
+            if foil_material == 'CH2':
+                self.srim_data_path = module_dir / 'data/CH2srimdata.txt'
+            elif foil_material == 'CD2':
+                self.srim_data_path = module_dir / 'data/CD2srimdata.txt'
+        else:
+            self.srim_data_path = srim_data_path
+            
+        if nh_cross_section_path is None:
+            if foil_material == 'CH2':
+                self.nh_cross_section_path = module_dir / 'data/np_crosssection.txt'
+            elif foil_material == 'CD2':
+                self.nh_cross_section_path = module_dir / 'data/nd_crosssection.txt'
+        else:
+            self.nh_cross_section_path = nh_cross_section_path
+            
+        if nc12_cross_section_path is None:
+            self.nc12_cross_section_path = module_dir / 'data/nC12_crosssection.txt'
+        else:
+            self.nc12_cross_section_path = nc12_cross_section_path
+            
+        if differential_xs_path is None:
+            if foil_material == 'CH2':
+                self.differential_xs_path = module_dir / 'data/np_diffxs.txt'
+            elif foil_material == 'CD2':
+                self.differential_xs_path = module_dir / 'data/nd_diffxs.txt'
+        else:
+            self.differential_xs_path = differential_xs_path
         self._load_data_files()
         
         print('Conversion foil initialization complete.\n')
     
     def _load_data_files(self) -> None:
         """Load all required data files."""
-        self.srim_data = np.genfromtxt(self.srim_data_path, unpack=True)
+        self.srim_data = np.genfromtxt(self.srim_data_path, delimiter=',', unpack=True)
+        # self.srim_data = pd.read_csv(self.srim_data_path, delim_whitespace=True).to_numpy().T
         print(f'Loaded SRIM data from {self.srim_data_path}')
         
         self.nh_cross_section_data = np.genfromtxt(self.nh_cross_section_path, unpack=True, usecols=(0, 1))
@@ -557,6 +586,116 @@ class ConversionFoil:
             proton_energies[i] = proton_energy
             
         return proton_energies
+    
+    def plot_data(
+        self, 
+        energy_MeV: float, 
+        figure_directory: Optional[str] = None,
+        filename_prefix: Optional[str] = None,
+        angle_range: Tuple[float, float] = (0, np.pi/2),
+        num_angles: int = 100
+    ) -> None:
+        """
+        Plot differential cross section, cross sections, and stopping power data as three separate plots.
+        
+        Args:
+            energy_MeV: Specific energy in MeV for differential cross section plot
+            figure_directory: Directory to save figures (optional)
+            filename_prefix: Prefix for output filenames (optional)
+            angle_range: Angular range (min, max) in radians for differential cross section
+            num_angles: Number of angular points for differential cross section
+        """
+        if figure_directory is None:
+            figure_directory = '.'
+        if filename_prefix is None:
+            filename_prefix = f'{figure_directory}/foil_{self.particle}'
+        else:
+            filename_prefix = f'{figure_directory}/{filename_prefix}'
+        
+        # ========== Plot 1: Differential Cross Section vs Lab Angle ==========
+        fig, ax = plt.subplots(figsize=(5, 4))
+        
+        angles_rad = np.linspace(angle_range[0], angle_range[1], num_angles)
+        angles_deg = np.degrees(angles_rad)
+        
+        diff_xs_lab = []
+        for angle in angles_rad:
+            try:
+                diff_xs = self.calculate_differential_xs_lab(angle, energy_MeV)
+                diff_xs_lab.append(diff_xs)
+            except:
+                diff_xs_lab.append(0.0)
+        
+        diff_xs_lab = np.array(diff_xs_lab)
+        
+        ax.plot(angles_deg, diff_xs_lab, 'b-', linewidth=2)
+        ax.set_xlabel('Angle [deg]')
+        ax.set_ylabel('d$\sigma$/d$\Omega$ [barns/sr]')
+        ax.set_title(f'Differential Cross Section - {self.particle.capitalize()} at {energy_MeV:.1f} MeV')
+        ax.grid(True, alpha=0.3)
+        
+        filename = f'{filename_prefix}_E{energy_MeV:.1f}MeV_differential_xs.png'
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Differential cross section plot saved to {filename}')
+        
+        # ========== Plot 2: Cross Sections vs Energy ==========
+        fig, ax = plt.subplots(figsize=(5, 4))
+        
+        # Use raw data from files (no interpolation)
+        # n-hydron cross section data
+        nh_energies_eV = self.nh_cross_section_data[0]
+        nh_energies_MeV = nh_energies_eV * 1e-6  # Convert eV to MeV
+        nh_xs_barns = self.nh_cross_section_data[1]  # Already in barns
+        
+        # n-C12 cross section data
+        nc12_energies_eV = self.nc12_cross_section_data[0]
+        nc12_idx = (nc12_energies_eV >= np.min(nh_energies_eV)) & (nc12_energies_eV <= np.max(nh_energies_eV))
+        nc12_energies_MeV = nc12_energies_eV[nc12_idx] * 1e-6  # Convert eV to MeV
+        nc12_xs_barns = self.nc12_cross_section_data[1, nc12_idx]  # Already in barns
+        
+        ax.plot(nh_energies_MeV, nh_xs_barns, 'r-', linewidth=2, 
+                label=f'n-{self.particle[0]} elastic')
+        ax.plot(nc12_energies_MeV, nc12_xs_barns, 'g-', linewidth=2, 
+                label='n-C12 elastic')
+        ax.axvline(energy_MeV, color='k', linestyle='--', alpha=0.7, 
+                    label=f'Current energy: {energy_MeV:.1f} MeV')
+        
+        ax.set_xlabel('Neutron Energy [MeV]')
+        ax.set_ylabel('Cross Section [barns]')
+        ax.grid(True, alpha=0.3)
+        ax.set_yscale('log')
+        ax.set_xscale('log')
+        ax.legend()
+        
+        filename = f'{filename_prefix}_cross_sections.png'
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Cross sections plot saved to {filename}')
+        
+        # ========== Plot 3: Stopping Power vs Energy ==========
+        fig, ax = plt.subplots(figsize=(5, 4))
+        
+        # Use raw SRIM data (no interpolation)
+        srim_energies_MeV = self.srim_data[0]  # Already in MeV
+        srim_stopping_power = self.srim_data[1] + self.srim_data[2]  # Electronic + nuclear stopping
+        
+        ax.plot(srim_energies_MeV, srim_stopping_power, 'purple', linewidth=2)
+        
+        ax.set_title(f'{self.particle.capitalize()} in {self.foil_material}')
+        ax.set_xlabel(f'{self.particle.capitalize()} Energy [MeV]')
+        ax.set_ylabel('Stopping Power [MeV/mm]')
+        ax.grid(True, alpha=0.3)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        
+        filename = f'{filename_prefix}_stopping_power.png'
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Stopping power plot saved to {filename}')
 
 
 class Hodoscope:
