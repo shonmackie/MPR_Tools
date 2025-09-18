@@ -174,16 +174,17 @@ class ConversionFoil:
     
     def _load_data_files(self) -> None:
         """Load all required data files."""
-        self.srim_data = pd.read_csv(self.srim_data_path, sep='\s+', comment='#')
+        """Load all required data files."""
+        self.srim_data = np.genfromtxt(self.srim_data_path, skip_header=2, unpack=True)
         print(f'Loaded SRIM data from {self.srim_data_path}')
         
-        self.nh_cross_section_data = pd.read_csv(self.nh_cross_section_path, sep='\s+', comment='#')
+        self.nh_cross_section_data = np.genfromtxt(self.nh_cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
         print(f'Loaded n-{self.particle} elastic scattering cross sections from {self.nh_cross_section_path}')
         
-        self.nc12_cross_section_data = pd.read_csv(self.nc12_cross_section_path, sep='\s+', comment='#')
+        self.nc12_cross_section_data = np.genfromtxt(self.nc12_cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
         print(f'Loaded n-C12 elastic scattering cross sections from {self.nc12_cross_section_path}')
         
-        self.differential_xs_data = pd.read_csv(self.differential_xs_path, sep='\s+', comment='#')
+        self.differential_xs_data = np.genfromtxt(self.differential_xs_path, skip_header=2, unpack=True)
         print(f'Loaded differential scattering data from {self.differential_xs_path}')
     
     @property
@@ -246,8 +247,8 @@ class ConversionFoil:
         """
         return np.interp(
             energy_MeV, 
-            self.srim_data['E[MeV]'], 
-            self.srim_data['Electronic[MeV/mm]'] + self.srim_data['Nuclear[MeV/mm]']
+            self.srim_data[0], 
+            self.srim_data[1] + self.srim_data[2]  # electronic + nuclear stopping
         )
     
     def calculate_stopping_power_loss(
@@ -317,8 +318,10 @@ class ConversionFoil:
             Cross section in m^2
         """
         energy_eV = energy_MeV * 1e6
-        cross_section_barns = np.interp(energy_eV, self.nh_cross_section_data['E,eV'], 
-                                       self.nh_cross_section_data['Sig,b'])
+        cross_section_barns = np.interp(
+            energy_eV,
+            self.nh_cross_section_data[0], 
+            self.nh_cross_section_data[1])
         return cross_section_barns * 1e-28  # barns to m^2
     
     def get_nc12_cross_section(self, energy_MeV: float) -> float:
@@ -332,8 +335,8 @@ class ConversionFoil:
             Cross section in m^2
         """
         energy_eV = energy_MeV * 1e6
-        cross_section_barns = np.interp(energy_eV, self.nc12_cross_section_data['E,eV'], 
-                                       self.nc12_cross_section_data['Sig,b'])
+        cross_section_barns = np.interp(energy_eV, self.nc12_cross_section_data[0], 
+                                       self.nc12_cross_section_data[1])
         return cross_section_barns * 1e-28  # barns to m^2
     
     def _build_differential_xs_interpolator(self):
@@ -342,7 +345,7 @@ class ConversionFoil:
             Formulae are from section 4.1 of ENDF Manual: https://www.oecd-nea.org/dbdata/data/endf102.htm#LinkTarget_12655
         """
         # Extract energy grid
-        energy_grid = self.differential_xs_data['Energy[eV]']
+        energy_grid = self.differential_xs_data[0]
         # Cosine grid
         cos_theta_grid = np.linspace(-1, 1, 100)
         
@@ -366,7 +369,8 @@ class ConversionFoil:
         for i, energy in enumerate(energy_grid):
             # Extract coefficients for this energy
             # a0 term is always 1
-            coefficients = np.append(np.array([1.0]), self.differential_xs_data.iloc[i, 1:])
+            coefficients = np.append(np.array([1.0]), self.differential_xs_data[1:, i])
+            
             # Remove nan values
             coefficients = coefficients[~np.isnan(coefficients)]
             
@@ -475,7 +479,7 @@ class ConversionFoil:
             
             # Sample scattering angles
             phi_scatter = 2 * np.pi * rng.random()
-            cos_scatter_angle = np.random.choice(cos_scatter_angles, p=diff_xs/np.sum(diff_xs))
+            cos_scatter_angle = rng.choice(cos_scatter_angles, p=diff_xs)
             theta_scatter = np.arccos(cos_scatter_angle)
             
             # Adjust initial coordinates for transport through foil
@@ -683,15 +687,15 @@ class ConversionFoil:
         
         # Use raw data from files (no interpolation)
         # n-hydron cross section data
-        nh_energies_eV = self.nh_cross_section_data['E,eV']
+        nh_energies_eV = self.nh_cross_section_data[0]
         nh_energies_MeV = nh_energies_eV * 1e-6  # Convert eV to MeV
-        nh_xs_barns = self.nh_cross_section_data['Sig,b']  # Already in barns
+        nh_xs_barns = self.nh_cross_section_data[1]  # Already in barns
         
         # n-C12 cross section data
-        nc12_energies_eV = self.nc12_cross_section_data['E,eV']
+        nc12_energies_eV = self.nc12_cross_section_data[0]
         nc12_idx = (nc12_energies_eV >= np.min(nh_energies_eV)) & (nc12_energies_eV <= np.max(nh_energies_eV))
         nc12_energies_MeV = nc12_energies_eV[nc12_idx] * 1e-6  # Convert eV to MeV
-        nc12_xs_barns = self.nc12_cross_section_data['Sig,b'][nc12_idx]  # Already in barns
+        nc12_xs_barns = self.nc12_cross_section_data[1, nc12_idx]  # Already in barns
         
         ax.plot(nh_energies_MeV, nh_xs_barns, 'r-', linewidth=2, 
                 label=f'n-{self.particle[0]} elastic')
@@ -717,8 +721,8 @@ class ConversionFoil:
         fig, ax = plt.subplots(figsize=(5, 4))
         
         # Use raw SRIM data (no interpolation)
-        srim_energies_MeV = self.srim_data['E[MeV]']  # Already in MeV
-        srim_stopping_power = self.srim_data['Electronic[MeV/mm]'] + self.srim_data['Nuclear[MeV/mm]']  # Electronic + nuclear stopping
+        srim_energies_MeV = self.srim_data[0]  # Already in MeV
+        srim_stopping_power = self.srim_data[1] + self.srim_data[2]  # Electronic + nuclear stopping
         
         ax.plot(srim_energies_MeV, srim_stopping_power, 'purple', linewidth=2)
         
