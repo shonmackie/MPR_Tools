@@ -184,7 +184,10 @@ class ConversionFoil:
         self.nc12_cross_section_data = np.genfromtxt(self.nc12_cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
         print(f'Loaded n-C12 elastic scattering cross sections from {self.nc12_cross_section_path}')
         
-        self.differential_xs_data = np.genfromtxt(self.differential_xs_path, skip_header=2, unpack=True)
+        # Need to read as a pandas df and convert to numpy because some 
+        # differential cross sections have different number of Legendre 
+        # coefficients for each energy
+        self.differential_xs_data = pd.read_csv(self.differential_xs_path, sep='\s+', comment='#').to_numpy(dtype=np.float64).T
         print(f'Loaded differential scattering data from {self.differential_xs_path}')
     
     @property
@@ -372,7 +375,7 @@ class ConversionFoil:
             coefficients = np.append(np.array([1.0]), self.differential_xs_data[1:, i])
             
             # Remove nan values
-            coefficients = coefficients[~np.isnan(coefficients)]
+            coefficients = coefficients[(~np.isnan(coefficients)) & (coefficients != 0)]
             
             # Get energy cross section
             sigma_E = self.get_nh_cross_section(energy/1e6)
