@@ -1,4 +1,4 @@
-#Stopping Power for protons in CH2, 0.98 g/cm^3, -dE/dx[MeV/mm]
+#Stopping Power for protons in CD2, 1.131 g/cm^3, -dE/dx[MeV/mm]
 E[MeV] Electronic[MeV/mm] Nuclear[MeV/mm]
 1.00 4.527E+01 3.553E-02
 1.10 4.250E+01 3.269E-02
