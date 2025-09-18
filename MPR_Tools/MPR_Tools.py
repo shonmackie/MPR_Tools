@@ -24,8 +24,10 @@ Useful resources:
 
 from typing import Tuple, Optional, Literal, List
 import numpy as np
+from numpy.polynomial.legendre import legval
 from pathlib import Path
 from scipy.stats import norm
+from scipy.interpolate import RectBivariateSpline
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pandas as pd
@@ -165,21 +167,23 @@ class ConversionFoil:
             self.differential_xs_path = differential_xs_path
         self._load_data_files()
         
+        # Build interpolator for differential cross section data
+        self._build_differential_xs_interpolator()
+        
         print('Conversion foil initialization complete.\n')
     
     def _load_data_files(self) -> None:
         """Load all required data files."""
-        self.srim_data = np.genfromtxt(self.srim_data_path, delimiter=',', unpack=True)
-        # self.srim_data = pd.read_csv(self.srim_data_path, delim_whitespace=True).to_numpy().T
+        self.srim_data = pd.read_csv(self.srim_data_path, sep='\s+', comment='#')
         print(f'Loaded SRIM data from {self.srim_data_path}')
         
-        self.nh_cross_section_data = np.genfromtxt(self.nh_cross_section_path, unpack=True, usecols=(0, 1))
+        self.nh_cross_section_data = pd.read_csv(self.nh_cross_section_path, sep='\s+', comment='#')
         print(f'Loaded n-{self.particle} elastic scattering cross sections from {self.nh_cross_section_path}')
         
-        self.nc12_cross_section_data = np.genfromtxt(self.nc12_cross_section_path, unpack=True, usecols=(0, 1))
+        self.nc12_cross_section_data = pd.read_csv(self.nc12_cross_section_path, sep='\s+', comment='#')
         print(f'Loaded n-C12 elastic scattering cross sections from {self.nc12_cross_section_path}')
         
-        self.differential_xs_data = np.genfromtxt(self.differential_xs_path, unpack=True)
+        self.differential_xs_data = pd.read_csv(self.differential_xs_path, sep='\s+', comment='#')
         print(f'Loaded differential scattering data from {self.differential_xs_path}')
     
     @property
@@ -242,8 +246,8 @@ class ConversionFoil:
         """
         return np.interp(
             energy_MeV, 
-            self.srim_data[0], 
-            self.srim_data[1] + self.srim_data[2]
+            self.srim_data['E[MeV]'], 
+            self.srim_data['Electronic[MeV/mm]'] + self.srim_data['Nuclear[MeV/mm]']
         )
     
     def calculate_stopping_power_loss(
@@ -313,8 +317,8 @@ class ConversionFoil:
             Cross section in m^2
         """
         energy_eV = energy_MeV * 1e6
-        cross_section_barns = np.interp(energy_eV, self.nh_cross_section_data[0], 
-                                       self.nh_cross_section_data[1])
+        cross_section_barns = np.interp(energy_eV, self.nh_cross_section_data['E,eV'], 
+                                       self.nh_cross_section_data['Sig,b'])
         return cross_section_barns * 1e-28  # barns to m^2
     
     def get_nc12_cross_section(self, energy_MeV: float) -> float:
@@ -328,47 +332,80 @@ class ConversionFoil:
             Cross section in m^2
         """
         energy_eV = energy_MeV * 1e6
-        cross_section_barns = np.interp(energy_eV, self.nc12_cross_section_data[0], 
-                                       self.nc12_cross_section_data[1])
+        cross_section_barns = np.interp(energy_eV, self.nc12_cross_section_data['E,eV'], 
+                                       self.nc12_cross_section_data['Sig,b'])
         return cross_section_barns * 1e-28  # barns to m^2
     
-    def calculate_differential_xs_CM(self, energy_MeV: float, cos_theta_cm: float) -> float:
+    def _build_differential_xs_interpolator(self):
         """
-        Calculate center-of-mass differential scattering cross section using Legendre expansion.
+            Build interpolator for differential cross section data.
+            Formulae are from section 4.1 of ENDF Manual: https://www.oecd-nea.org/dbdata/data/endf102.htm#LinkTarget_12655
+        """
+        # Extract energy grid
+        energy_grid = self.differential_xs_data['Energy[eV]']
+        # Cosine grid
+        cos_theta_grid = np.linspace(-1, 1, 100)
+        
+        # Initialize lookup table
+        xs_lookup = np.zeros((len(energy_grid), len(cos_theta_grid)))
+        
+        # Helper function to evaluate Legendre expansion
+        def _evaluate_legendre(coefficients, cos_theta):
+            # Build coefficient array for legval
+            legendre_coeffs = np.zeros(len(coefficients))
+            
+            for l in range(len(legendre_coeffs)):
+                # Weight factor is (2l+1)/2 for the expansion
+                weight = (2*l + 1) / 2
+                legendre_coeffs[l] = weight * coefficients[l]
+            
+            # Evaluate at cos_theta
+            return legval(cos_theta, legendre_coeffs)
+        
+        # Fill lookup table
+        for i, energy in enumerate(energy_grid):
+            # Extract coefficients for this energy
+            # a0 term is always 1
+            coefficients = np.append(np.array([1.0]), self.differential_xs_data.iloc[i, 1:])
+            # Remove nan values
+            coefficients = coefficients[~np.isnan(coefficients)]
+            
+            # Get energy cross section
+            sigma_E = self.get_nh_cross_section(energy/1e6)
+            
+            # Evaluate for all cosine theta values
+            for j, cos_theta in enumerate(cos_theta_grid):
+                legendre_coefficient = _evaluate_legendre(coefficients, cos_theta)
+                xs_lookup[i, j] = sigma_E / (2 * np.pi) * legendre_coefficient
+        
+        # Create interpolation object for fast lookups
+        self.diff_xs_interpolator = RectBivariateSpline(
+            energy_grid, cos_theta_grid, xs_lookup, 
+            kx=1, ky=1, s=0  # Linear interpolation, no smoothing
+        )
+    
+    def get_differential_xs_CM(self, energy_MeV: float, cos_theta_cm: float | np.ndarray) -> np.ndarray:
+        """
+        Get center-of-mass differential scattering cross section using interpolator.
         
         Args:
             energy_MeV: Incident neutron energy in MeV
             cos_theta_cm: Cosine of CM scattering angle
-            
         Returns:
             Differential cross section
         """
         energy_eV = energy_MeV * 1e6
-        
-        # Extract Legendre coefficients
-        coefficients = []
-        for i in range(1, 7):  # l1 through l6
-            coeff = np.interp(energy_eV, self.differential_xs_data[0], 
-                             self.differential_xs_data[i])
-            coefficients.append(coeff)
-        
-        l1, l2, l3, l4, l5, l6 = coefficients
-        mu = cos_theta_cm
-        
-        # Legendre polynomial expansion
-        result = (0.5 + 
-                 1.5 * l1 * mu +
-                 2.5 * l2 * 0.5 * (3*mu**2 - 1) +
-                 3.5 * l3 * 0.5 * (5*mu**3 - 3*mu) +
-                 4.5 * l4 * 0.125 * (35*mu**4 - 30*mu**2 + 3) +
-                 5.5 * l5 * 0.125 * (63*mu**5 - 70*mu**3 + 15*mu) +
-                 6.5 * l6 * 0.0625 * (231*mu**6 - 315*mu**4 + 105*mu**2 - 5))
-        
-        return result
+        diff_xs = self.diff_xs_interpolator(energy_eV, cos_theta_cm)
+        if diff_xs.shape[0] == 1:
+            return diff_xs.flatten()
+        else:
+            return diff_xs
     
-    def calculate_differential_xs_lab(self, theta_lab: float, energy_MeV: float) -> float:
+    def calculate_differential_xs_lab(self, theta_lab: float | np.ndarray, energy_MeV: float) -> np.ndarray:
         """
         Calculate lab-frame differential scattering cross section.
+        From https://doi.org/10.1063/1.1721536
+        P. F. Zweifel; H. Hurwitz, Jr. Tranformation of Scattering Cross Sections. J. Appl. Phys. 25, 1241–1245 (1954)
         
         Args:
             theta_lab: Lab-frame scattering angle in radians
@@ -378,7 +415,7 @@ class ConversionFoil:
             Lab-frame differential cross section
         """
         cos_theta_cm = 1 - 2 * np.cos(theta_lab)**2
-        return 4 * np.cos(theta_lab) * self.calculate_differential_xs_CM(energy_MeV, cos_theta_cm)
+        return 4 * np.cos(theta_lab) * self.get_differential_xs_CM(energy_MeV, cos_theta_cm)
     
     def generate_scattered_hydron(
         self, 
@@ -406,14 +443,15 @@ class ConversionFoil:
         # Use provided RNG or default
         if rng is None:
             rng = np.random.default_rng()
-        
+            
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        scatter_angles = np.linspace(0, max_angle, num_angle_samples)
+        cos_scatter_angles = np.linspace(1, np.cos(max_angle), num_angle_samples)
+        scatter_angles = np.arccos(cos_scatter_angles)
         
         # Calculate differential cross section weights
         diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
-        diff_xs_cdf = np.cumsum(diff_xs) / np.sum(diff_xs)
+        diff_xs /= np.sum(diff_xs)  # Normalize
         
         # Set up z-sampling probability
         if z_sampling == 'exp':
@@ -426,7 +464,8 @@ class ConversionFoil:
         prob_z_cdf = np.cumsum(prob_z) / np.sum(prob_z)
         
         # Generate rays until one passes through aperture
-        while True:
+        accepted = False
+        while not accepted:
             # Sample initial position in foil
             radius_sample = self.foil_radius * np.sqrt(rng.random())
             angle_sample = 2 * np.pi * rng.random()
@@ -436,7 +475,8 @@ class ConversionFoil:
             
             # Sample scattering angles
             phi_scatter = 2 * np.pi * rng.random()
-            theta_scatter = scatter_angles[np.searchsorted(diff_xs_cdf, rng.random())]
+            cos_scatter_angle = np.random.choice(cos_scatter_angles, p=diff_xs/np.sum(diff_xs))
+            theta_scatter = np.arccos(cos_scatter_angle)
             
             # Adjust initial coordinates for transport through foil
             x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
@@ -458,7 +498,9 @@ class ConversionFoil:
                     path_length = (-z0) / np.cos(theta_scatter)
                     final_energy = self.calculate_stopping_power_loss(final_energy, path_length)
                 
-                return x0, y0, theta_scatter, phi_scatter, final_energy
+                accepted = True
+                
+        return x0, y0, theta_scatter, phi_scatter, final_energy
     
     def _check_aperture_acceptance(
         self, 
@@ -520,7 +562,9 @@ class ConversionFoil:
                                (1 - np.exp(-total_xs * self.thickness)) / total_xs)
         
         # Calculate geometric acceptance
-        scatter_angles = np.linspace(0, np.pi/2, num_angle_samples)
+        # From 0 to pi/2
+        cos_theta_scatter = np.linspace(1, 0, num_angle_samples)
+        scatter_angles = np.arccos(cos_theta_scatter)
         diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
         diff_xs /= np.sum(diff_xs)  # Normalize
         
@@ -535,7 +579,8 @@ class ConversionFoil:
             
             # Sample scattering angles
             phi_scatter = 2 * np.pi * np.random.rand()
-            theta_scatter = np.random.choice(scatter_angles, p=diff_xs)
+            cos_theta_scatter = np.random.choice(cos_theta_scatter, p=diff_xs)
+            theta_scatter = np.arccos(cos_theta_scatter)
             
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
                 accepted_count += 1
@@ -615,29 +660,22 @@ class ConversionFoil:
         # ========== Plot 1: Differential Cross Section vs Lab Angle ==========
         fig, ax = plt.subplots(figsize=(5, 4))
         
-        angles_rad = np.linspace(angle_range[0], angle_range[1], num_angles)
+        cos_angles = np.linspace(np.cos(angle_range[0]), np.cos(angle_range[1]), num_angles)
+        angles_rad = np.arccos(cos_angles)
         angles_deg = np.degrees(angles_rad)
         
-        diff_xs_lab = []
-        for angle in angles_rad:
-            try:
-                diff_xs = self.calculate_differential_xs_lab(angle, energy_MeV)
-                diff_xs_lab.append(diff_xs)
-            except:
-                diff_xs_lab.append(0.0)
+        diff_xs_lab = self.calculate_differential_xs_lab(angles_rad, energy_MeV)
         
-        diff_xs_lab = np.array(diff_xs_lab)
-        
-        ax.plot(angles_deg, diff_xs_lab, 'b-', linewidth=2)
+        ax.plot(angles_deg, diff_xs_lab * 1e28, 'b-', linewidth=2)
         ax.set_xlabel('Angle [deg]')
         ax.set_ylabel('d$\sigma$/d$\Omega$ [barns/sr]')
         ax.set_title(f'Differential Cross Section - {self.particle.capitalize()} at {energy_MeV:.1f} MeV')
         ax.grid(True, alpha=0.3)
         
         filename = f'{filename_prefix}_E{energy_MeV:.1f}MeV_differential_xs.png'
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Differential cross section plot saved to {filename}')
         
         # ========== Plot 2: Cross Sections vs Energy ==========
@@ -645,15 +683,15 @@ class ConversionFoil:
         
         # Use raw data from files (no interpolation)
         # n-hydron cross section data
-        nh_energies_eV = self.nh_cross_section_data[0]
+        nh_energies_eV = self.nh_cross_section_data['E,eV']
         nh_energies_MeV = nh_energies_eV * 1e-6  # Convert eV to MeV
-        nh_xs_barns = self.nh_cross_section_data[1]  # Already in barns
+        nh_xs_barns = self.nh_cross_section_data['Sig,b']  # Already in barns
         
         # n-C12 cross section data
-        nc12_energies_eV = self.nc12_cross_section_data[0]
+        nc12_energies_eV = self.nc12_cross_section_data['E,eV']
         nc12_idx = (nc12_energies_eV >= np.min(nh_energies_eV)) & (nc12_energies_eV <= np.max(nh_energies_eV))
         nc12_energies_MeV = nc12_energies_eV[nc12_idx] * 1e-6  # Convert eV to MeV
-        nc12_xs_barns = self.nc12_cross_section_data[1, nc12_idx]  # Already in barns
+        nc12_xs_barns = self.nc12_cross_section_data['Sig,b'][nc12_idx]  # Already in barns
         
         ax.plot(nh_energies_MeV, nh_xs_barns, 'r-', linewidth=2, 
                 label=f'n-{self.particle[0]} elastic')
@@ -670,17 +708,17 @@ class ConversionFoil:
         ax.legend()
         
         filename = f'{filename_prefix}_cross_sections.png'
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Cross sections plot saved to {filename}')
         
         # ========== Plot 3: Stopping Power vs Energy ==========
         fig, ax = plt.subplots(figsize=(5, 4))
         
         # Use raw SRIM data (no interpolation)
-        srim_energies_MeV = self.srim_data[0]  # Already in MeV
-        srim_stopping_power = self.srim_data[1] + self.srim_data[2]  # Electronic + nuclear stopping
+        srim_energies_MeV = self.srim_data['E[MeV]']  # Already in MeV
+        srim_stopping_power = self.srim_data['Electronic[MeV/mm]'] + self.srim_data['Nuclear[MeV/mm]']  # Electronic + nuclear stopping
         
         ax.plot(srim_energies_MeV, srim_stopping_power, 'purple', linewidth=2)
         
@@ -692,9 +730,9 @@ class ConversionFoil:
         ax.set_yscale('log')
         
         filename = f'{filename_prefix}_stopping_power.png'
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Stopping power plot saved to {filename}')
 
 
@@ -1061,15 +1099,12 @@ class MPRSpectrometer:
         include_kinematics: bool,
         include_stopping_power_loss: bool,
         z_sampling: str,
-        conversion_foil,
+        conversion_foil: ConversionFoil,
         reference_energy: float,
         progress_counter,
         progress_lock
     ) -> Tuple[List[List[float]], int]:
         """Generate a batch of hydrons in a separate process."""
-        import numpy as np
-        from typing import List
-        
         # Create independent random number generator
         rng = np.random.default_rng(seed_offset)
         
@@ -1413,16 +1448,16 @@ class MPRSpectrometer:
             alpha=0.6
         )
         
-        plt.colorbar(scatter, ax=axes[1], label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]')
+        fig.colorbar(scatter, ax=axes[1], label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]')
         axes[1].set_xlabel('X Position [cm]')
         axes[1].set_ylabel('Y Position [cm]')
         axes[1].set_title(f'Focal Plane Distribution\n{neutron_energy:.1f} MeV Neutrons')
         axes[1].grid(True, alpha=0.3)
         
-        plt.tight_layout()
+        fig.tight_layout()
         print(filename)
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
     
     def generate_performance_curve(
         self,
@@ -1586,9 +1621,9 @@ class MPRSpectrometer:
         x_margin = (x_max - x_min) * 0.02
         ax1.set_xlim(x_min - x_margin, x_max + x_margin)
         
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         
         # Print summary statistics
         print(f'\nPerformance Summary:')
@@ -1597,7 +1632,7 @@ class MPRSpectrometer:
         print(f'  Average resolution: {np.mean(energy_resolutions)*1000:.1f} keV')
         print(f'  Average efficiency: {np.mean(total_efficiencies):.3e}')
         print(f'  Best resolution: {np.min(energy_resolutions)*1000:.1f} keV at {energies[np.argmin(energy_resolutions)]:.2f} MeV')
-        print(f'  Best efficiency: {np.max(total_efficiencies):.3f} at {energies[np.argmax(total_efficiencies)]:.2f} MeV')
+        print(f'  Best efficiency: {np.max(total_efficiencies):.1e} at {energies[np.argmax(total_efficiencies)]:.2f} MeV')
         print(f'Comprehensive performance plot saved to {filename}')
     
     def plot_focal_plane_distribution(
@@ -1654,15 +1689,15 @@ class MPRSpectrometer:
             alpha=0.7
         )
         
-        plt.colorbar(scatter, label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]')
+        fig.colorbar(scatter, label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]')
         ax.set_xlabel('Horizontal Position [cm]')
         ax.set_ylabel('Vertical Position [cm]')
         ax.set_title(f'{self.conversion_foil.particle.capitalize()} Distribution in Focal Plane')
         ax.grid(True, alpha=0.3)
         
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Focal plane plot saved to {filename}')
     
     def plot_phase_space(self, filename: Optional[str] = None) -> None:
@@ -1724,8 +1759,8 @@ class MPRSpectrometer:
         # Add colorbar
         fig.colorbar(scatter1, ax=axes, label=f'{self.conversion_foil.particle.capitalize()} Energy [MeV]', shrink=0.8)
         
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Phase space portraits saved to {filename}')
     
     def bin_hodoscope_response(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -1839,9 +1874,9 @@ class MPRSpectrometer:
         ax.axvline(mean_pos, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_pos:.4f} m')
         ax.legend()
         
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Position histogram saved to {filename}')
         
     def plot_input_ray_geometry(self, filename: Optional[str] = None) -> None:
@@ -1857,7 +1892,7 @@ class MPRSpectrometer:
         if len(self.input_beam) == 0:
             raise ValueError("No input beam data available. Generate rays first.")
         
-        fig, ax = plt.subplots(figsize=(12, 8))
+        fig, ax = plt.subplots(figsize=(6, 4))
         
         # Draw foil and aperture boundaries
         # Convert all lengths to cm
@@ -1901,9 +1936,9 @@ class MPRSpectrometer:
         max_extent = 1.5 * max(foil_radius, aperture_radius)
         ax.set_ylim(-max_extent, max_extent)
         
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Input ray geometry plot saved to {filename}')
 
     def plot_proton_density_heatmap(
@@ -1931,7 +1966,7 @@ class MPRSpectrometer:
         im = ax.pcolormesh(X_mesh*100, Y_mesh*100, np.log10(density), cmap='plasma', shading='auto')
         
         # Add colorbar
-        cbar = plt.colorbar(im, ax=ax, shrink=0.6)
+        cbar = fig.colorbar(im, ax=ax, shrink=0.6)
         cbar.set_label('log$_10$(Proton Density [normalized])')
         
         ax.set_xlabel('X Position [cm]')
@@ -1939,9 +1974,9 @@ class MPRSpectrometer:
         ax.set_title('Proton Density in Focal Plane')
         ax.set_aspect('equal')
         
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
         print(f'Proton density heatmap saved to {filename}')
         
     def plot_characteristic_rays(
@@ -2016,7 +2051,7 @@ class MPRSpectrometer:
         )
         
         # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax)
+        cbar = fig.colorbar(scatter, ax=ax)
         cbar.set_label('Proton Energy [MeV]')
         
         ax.set_xlabel('X Position [cm]')
