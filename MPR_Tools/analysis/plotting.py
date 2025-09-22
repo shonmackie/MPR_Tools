@@ -370,7 +370,7 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        cbar.set_label('log$_10$(Proton Density [normalized])')
+        cbar.set_label('log$_10$(Proton Density [protons/cm$^2$-source])')
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')

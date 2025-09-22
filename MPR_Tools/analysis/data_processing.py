@@ -31,8 +31,8 @@ class DataProcessor:
     
     def get_proton_density_map(
         self, 
-        dx: float = 0.01, 
-        dy: float = 0.01
+        dx: float = 0.005, 
+        dy: float = 0.005
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Calculate the density of proton impact sites in the focal plane.
@@ -64,8 +64,10 @@ class DataProcessor:
         X_mesh, Y_mesh = np.meshgrid(x_coords, y_coords)
         density = np.zeros_like(X_mesh)
         
+        # Calculate cell area in cm^2
+        cell_area_cm2 = (dx * 100) * (dy * 100)  # Convert m^2 to cm^2
+        
         # Bin protons into grid cells
-        total_protons = len(self.spectrometer.output_beam)
         for x_pos, y_pos in zip(x_positions, y_positions):
             # Convert coordinates to grid indices
             x_idx = int((x_pos - x_min) / dx)
@@ -75,6 +77,10 @@ class DataProcessor:
             x_idx = max(0, min(x_idx, density.shape[1] - 1))
             y_idx = max(0, min(y_idx, density.shape[0] - 1))
             
-            density[y_idx, x_idx] += 1 / total_protons
+            density[y_idx, x_idx] += 1
+            
+        # Convert to protons/cm^2/source_proton
+        total_protons = len(self.spectrometer.output_beam)
+        density = density / (cell_area_cm2 * total_protons)
         
         return density, X_mesh, Y_mesh
