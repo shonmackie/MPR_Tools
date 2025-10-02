@@ -94,11 +94,11 @@ class PerformanceAnalyzer:
         reset: bool = True
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Generate comprehensive performance analysis including dispersion, resolution, and efficiency.
+        Generate comprehensive performance analysis including location, resolution, and efficiency.
         
         Args:
             num_energies: Number of energy points to simulate
-            num_hydrons_per_energy: Number of hydrons per energy point for dispersion/resolution
+            num_hydrons_per_energy: Number of hydrons per energy point for location/resolution
             num_efficiency_samples: Number of samples for efficiency calculation
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
@@ -127,7 +127,7 @@ class PerformanceAnalyzer:
             total_efficiencies = np.zeros_like(energies)
             
             for i, energy in enumerate(tqdm(energies, desc='Calculating performance for a range of energies...')):
-                # Calculate dispersion and resolution from monoenergetic analysis
+                # Calculate location and resolution from monoenergetic analysis
                 mean_pos, std_dev, fwhm, energy_res = self.analyze_monoenergetic_performance(
                     energy, 
                     num_hydrons_per_energy, 

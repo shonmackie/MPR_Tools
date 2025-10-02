@@ -9,6 +9,7 @@ from labellines import labelLines
 
 if TYPE_CHECKING:
     from ..core.spectrometer import MPRSpectrometer
+    from ..analysis.parameter_sweep import FoilSweeper
 
 class SpectrometerPlotter:
     """Handles all plotting functionality for MPR spectrometer."""
@@ -366,11 +367,15 @@ class SpectrometerPlotter:
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, np.log10(density), cmap='plasma', shading='auto')
+        # TODO: make this more generic to be per neutron by incorporating the efficiency at each energy
+        Yn = 1e16
+        geometry_efficiency = (np.pi * 0.8**2) / (np.pi * 600**2)
+        foil_efficiency = 0.25e-4
+        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, np.log10(density * Yn * geometry_efficiency * foil_efficiency), cmap='plasma', shading='auto')
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        cbar.set_label('log$_10$(Proton Density [protons/cm$^2$-source])')
+        cbar.set_label('log$_{10}$(Proton Density [protons/cm$^2$])')
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
@@ -381,6 +386,85 @@ class SpectrometerPlotter:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Proton density heatmap saved to {filename}')
+        
+    def plot_synthetic_neutron_histogram(
+        self,
+        n_bins = 200,
+        filename: Optional[str] = None,
+    ):
+        if filename == None:
+            filename = f'{self.spectrometer.figure_directory}/synthetic_neutron_histogram.png'
+        dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies = self.spectrometer.get_plasma_parameters(n_bins=n_bins)
+        
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        # Plot histogram
+        hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', linewidth=3, density=True)
+        
+        # Highlight dsr and primary range
+        ax.axvspan(dsr_energy_range[0], dsr_energy_range[1], color='tab:red', alpha=0.2)
+        ax.axvspan(primary_energy_range[0], primary_energy_range[1], color='tab:green', alpha=0.2)
+        
+        # Add text to indicate dsr and primary range
+        ax.text(
+            dsr_energy_range[0] + (dsr_energy_range[1] - dsr_energy_range[0]) / 2,
+            max(hist) / 1000,
+            'DSR',
+            ha='center',
+            va='top',
+            color='tab:red',
+            fontsize=12
+        )
+        
+        ax.text(
+            primary_energy_range[0] + (primary_energy_range[1] - primary_energy_range[0]) / 2,
+            max(hist) / 1000,
+            'Primary',
+            ha='center',
+            va='top',
+            color='tab:green',
+            fontsize=12
+        )
+        
+        # Add double sided arrow to indicate fwhm
+        height = max(hist)
+        # TODO: fix this weird offset from the fwhm
+        peak_center = bins[np.argmax(hist) + 2]
+        ax.annotate(
+            f'FWHM = {int(fwhm*1000):3d} keV  \n$T_i$ = {plasma_temperature:.2f} keV   ',
+            xy=(peak_center + fwhm/2, height/2),
+            xytext=(peak_center - fwhm/2, height/2),
+            arrowprops=dict(
+                arrowstyle='<->',
+                color='black',
+                linewidth=2,
+                shrinkA=0,
+                shrinkB=0,
+            ),
+            ha='right',
+            va='center',
+            fontsize=12
+        )
+        
+        # Add dsr text
+        ax.text(
+            dsr_energy_range[0] + (dsr_energy_range[1] - dsr_energy_range[0]) / 2,
+            height/50,
+            f'$dsr$={dsr*100:.1f}%',
+            ha='center',
+            va='bottom',
+            color='black',
+            fontsize=12
+        )
+        
+        ax.set_xlabel('Neutron Energy [MeV]')
+        ax.set_ylabel('PDF')
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f'Synthetic neutron histogram saved to {filename}')
     
     def _plot_monoenergetic_analysis(
         self, 
@@ -443,19 +527,19 @@ class SpectrometerPlotter:
         fig, ax1 = plt.subplots(1, 1, figsize=(6, 4))
         fig.suptitle('Comprehensive Performance', fontsize=16)
         
-        # Left y-axis: Dispersion
-        color_dispersion = 'tab:blue'
+        # Left y-axis: location
+        color_location = 'tab:blue'
         ax1.set_xlabel('Neutron Energy [MeV]')
-        ax1.set_ylabel('Proton Position [cm]', color=color_dispersion)
+        ax1.set_ylabel('Proton Position [cm]', color=color_location)
         
-        # Plot dispersion curve
-        ax1.plot(energies, positions * 100, color=color_dispersion, linewidth=2,
-                 label=f'Dispersion')
+        # Plot location curve
+        ax1.plot(energies, positions * 100, color=color_location, linewidth=2,
+                 label=f'Location')
         ax1.fill_between(energies, (positions - position_uncertainties) * 100, 
                         (positions + position_uncertainties) * 100,
-                        alpha=0.3, color=color_dispersion)
+                        alpha=0.3, color=color_location)
         ax1.grid(True, alpha=0.3)
-        ax1.tick_params(axis='y', labelcolor=color_dispersion)
+        ax1.tick_params(axis='y', labelcolor=color_location)
         
         # Right y-axis: Resolution and Efficiency
         ax2 = ax1.twinx()
@@ -606,3 +690,7 @@ class SpectrometerPlotter:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Stopping power plot saved to {filename}')
+        
+class SweepPlotter:
+    def __init__(self, sweeper: FoilSweeper):
+        self.sweeper = sweeper

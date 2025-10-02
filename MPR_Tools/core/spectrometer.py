@@ -523,12 +523,18 @@ class MPRSpectrometer:
     def plot_characteristic_rays(self, *args, **kwargs):
         return self.plotter.plot_characteristic_rays(*args, **kwargs)
     
+    def plot_synthetic_neutron_histogram(self, *args, **kwargs):
+        return self.plotter.plot_synthetic_neutron_histogram(*args, **kwargs)
+    
     # Delegate data processing methods to helper classes
     def bin_hodoscope_response(self, *args, **kwargs):
         return self.data_processor.bin_hodoscope_response(*args, **kwargs)
     
     def get_proton_density_map(self, *args, **kwargs):
         return self.data_processor.get_proton_density_map(*args, **kwargs)
+    
+    def get_plasma_parameters(self, *args, **kwargs):
+        return self.data_processor.get_plasma_parameters(*args, **kwargs)
     
     def get_system_summary(self) -> dict:
         """
