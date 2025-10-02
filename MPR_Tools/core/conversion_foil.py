@@ -139,18 +139,14 @@ class ConversionFoil:
         """Get aperture radius in cm."""
         return self.aperture_radius * 1e2
     
-    def set_foil_radius(self, radius_cm: float, verbose: bool = False) -> None:
+    def set_foil_radius(self, radius_cm: float) -> None:
         """Set foil radius in cm."""
         self.foil_radius = radius_cm * 1e-2
-        if verbose:
-            print(f'Set conversion foil radius to {radius_cm:.2f} cm')
     
-    def set_thickness(self, thickness_um: float, verbose: bool = False) -> None:
+    def set_thickness(self, thickness_um: float) -> None:
         """Set foil thickness in μm."""
         self.thickness = thickness_um * 1e-6
         self.z_grid = np.linspace(-self.thickness, 0, len(self.z_grid))
-        if verbose:
-            print(f'Set conversion foil thickness to {thickness_um:.1f} μm')
     
     def set_aperture_distance(self, distance_cm: float) -> None:
         """
@@ -161,11 +157,9 @@ class ConversionFoil:
         """
         self.aperture_distance = distance_cm * 1e-2
     
-    def set_aperture_radius(self, radius_cm: float, verbose: bool = False) -> None:
+    def set_aperture_radius(self, radius_cm: float) -> None:
         """Set aperture radius in cm."""
         self.aperture_radius = radius_cm * 1e-2
-        if verbose:
-            print(f'Set aperture radius to {radius_cm:.2f} cm')
     
     def calculate_stopping_power(self, energy_MeV: float) -> float:
         """
