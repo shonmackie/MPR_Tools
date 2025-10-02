@@ -1,15 +1,20 @@
 """Plotting methods for MPR spectrometer visualization."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple, Union
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 from scipy.stats import norm
+from scipy.interpolate import griddata
 from labellines import labelLines
 
 if TYPE_CHECKING:
     from ..core.spectrometer import MPRSpectrometer
     from ..analysis.parameter_sweep import FoilSweeper
+    import pandas as pd
 
 class SpectrometerPlotter:
     """Handles all plotting functionality for MPR spectrometer."""
@@ -690,7 +695,230 @@ class SpectrometerPlotter:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Stopping power plot saved to {filename}')
-        
+
+# =========== Contour Plotting ===============       
+class PlotParameter:
+    """Parameter configuration for contour plotting."""
+    
+    def __init__(
+        self,
+        name: str,
+        label: Optional[str] = None,
+        log_scale: bool = False
+    ):
+        self.name = name
+        self.label = label if label is not None else name
+        self.log_scale = log_scale
+    
+    def get_values(self, df):
+        """Get values from dataframe, applying log if needed"""
+        values = df[self.name].values
+        if self.log_scale and np.all(values > 0):
+            return np.log10(values)
+        return values
+
+
+class ContourParameter(PlotParameter):
+    """Extended parameter class for contour lines."""
+    
+    def __init__(
+        self,
+        name: str,
+        label: Optional[str] = None,
+        log_scale: bool = False,
+        num_levels: int = 10, 
+        color: Union[str, Tuple[float, float, float]] = 'black',
+        linestyle: str = 'solid',
+        linewidth: float = 1.0
+    ):
+        """
+        Args:
+            name: Name of the parameter
+            label: Label to display on the plot (defaults to name if None)
+            log_scale: Whether to use logarithmic scale for this parameter
+            num_levels: Number of contour levels to plot
+            color: Color for the contour lines
+            linestyle: Line style for contour lines
+            linewidth: Width of contour lines
+        """
+        super().__init__(name, label, log_scale)
+        self.num_levels = num_levels
+        self.color = color
+        self.linestyle = linestyle
+        self.linewidth = linewidth
+
 class SweepPlotter:
     def __init__(self, sweeper: FoilSweeper):
         self.sweeper = sweeper
+        
+    def plot_heatmap_grid(
+        self,
+        x_variable: str,
+        y_variable: str,
+        z_variable: str,
+        heat_variable: str,
+        filename: Optional[str] = None,
+        x_label: Optional[str] = None,
+        y_label: Optional[str] = None,
+        z_label: Optional[str] = None,
+        heat_label: Optional[str] = None,
+        contour_params: Optional[list[ContourParameter]] = None,
+        use_grid_interpolation: bool = False,
+        grid_resolution: int = 50,
+        cmap: str = 'plasma'
+    ) -> None:
+        """
+        Plot heatmap grid.
+        
+        Args:
+            x_variable: Variable for x-axis
+            y_variable: Variable for y-axis
+            z_variable: Variable for z-axis
+            heat_variable: Variable for heatmap
+            filename: Filename for saving plot (optional)
+            x_label: Label for x-axis (defaults to variable name)
+            y_label: Label for y-axis (defaults to variable name)
+            z_label: Label for z-axis (defaults to variable name)
+            heat_label: Label for heatmap (defaults to variable name)
+            contour_params: List of ContourParameter objects for additional contour lines
+            use_grid_interpolation: Whether to use grid interpolation (vs triangulation)
+            grid_resolution: Resolution for grid interpolation
+            cmap: Colormap name
+        """
+        if filename is None:
+            filename = f'{self.sweeper.spectrometer.figure_directory}/heatmap_grid.png'
+        
+        if self.sweeper.results_df is None:
+            raise ValueError("No sweep results found. Please run run_sweep() first.")
+        
+        # Create parameter objects
+        x_param = PlotParameter(x_variable, x_label)
+        y_param = PlotParameter(y_variable, y_label)
+        z_label = z_label or z_variable
+        heat_param = PlotParameter(heat_variable, heat_label)
+        
+        # Calculate global min/max for consistent colorbar across all subplots
+        heat_values = heat_param.get_values(self.sweeper.results_df.dropna(subset=[heat_variable]))
+        vmin, vmax = np.nanmin(heat_values), np.nanmax(heat_values)
+        
+        # Extract z data to find grid size
+        z_values = self.sweeper.results_df[z_variable].unique()
+        
+        # Create gridsize based on z_variable
+        n_cols = int(np.ceil(np.sqrt(len(z_values))))
+        n_rows = int(np.ceil(len(z_values) / n_cols))
+        fig, axs = plt.subplots(n_rows, n_cols, figsize=(n_cols*3, n_rows*3),
+                                sharex=True, sharey=True, squeeze=False, layout='constrained')
+        
+        # Initialize mappable contour
+        contour_obj = None
+        
+        # Plot heatmaps
+        for i, ax in enumerate(axs.flatten()):
+            if i >= len(z_values):
+                ax.axis('off')
+                continue
+            
+            z_value = z_values[i]
+            data = self.sweeper.results_df[self.sweeper.results_df[z_variable] == z_value]
+            
+            self._plot_heatmap(ax, data, x_param, y_param, heat_param, 
+                contour_params=contour_params,
+                use_grid_interpolation=use_grid_interpolation,
+                grid_resolution=grid_resolution,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax)
+            ax.set_title(f'{z_variable} = {z_value}')
+        
+        fig.supxlabel(x_param.label)
+        fig.supylabel(y_param.label)
+        
+        # Add colorbar label with log scale notation if needed
+        cbar_label = heat_param.label
+        if heat_param.log_scale:
+            cbar_label = f"log$_{10}$({cbar_label})"
+        
+        # Create a ScalarMappable for the colorbar
+        norm = Normalize(vmin=vmin, vmax=vmax)
+        sm = ScalarMappable(cmap=cmap, norm=norm)
+        # sm.set_array([])  # Required for ScalarMappable
+        fig.colorbar(sm, ax=axs, label=cbar_label, pad=0.02, shrink=0.8)
+        
+        # Create legend from contour_params
+        if contour_params:
+            legend_handles = []
+            legend_labels = []
+            for cp in contour_params:
+                legend_line = plt.Line2D([0], [0], color=cp.color, 
+                                        linestyle=cp.linestyle,
+                                        linewidth=cp.linewidth)
+                legend_handles.append(legend_line)
+                # Use logscale notation if needed
+                contour_label = cp.label
+                if cp.log_scale:
+                    contour_label = f"log$_{{10}}$({contour_label})"
+                legend_labels.append(contour_label)
+            fig.legend(legend_handles, legend_labels, framealpha=0.7, fontsize=8, loc='lower right')
+        
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        
+    def _plot_heatmap(
+        self,
+        ax: Axes,
+        data: pd.DataFrame,
+        x_param: PlotParameter,
+        y_param: PlotParameter,
+        heat_param: PlotParameter,
+        contour_params: Optional[list[ContourParameter]] = None,
+        use_grid_interpolation: bool = True,
+        grid_resolution: int = 50,
+        cmap: str = 'plasma',
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None
+    ) -> None:
+        """Plot heatmap with line-style contours on top."""
+        
+        # Clean data
+        required_columns = [x_param.name, y_param.name, heat_param.name]
+        if contour_params:
+            required_columns.extend([cp.name for cp in contour_params])
+        
+        data_clean = data.dropna(subset=required_columns)
+        
+        if len(data_clean) == 0:
+            return
+        
+        # Extract values
+        x = x_param.get_values(data_clean)
+        y = y_param.get_values(data_clean)
+        z = heat_param.get_values(data_clean)
+        
+        # Create contour plot
+        if use_grid_interpolation:
+            xi = np.linspace(np.min(x), np.max(x), grid_resolution)
+            yi = np.linspace(np.min(y), np.max(y), grid_resolution)
+            X, Y = np.meshgrid(xi, yi)
+            Z = griddata((x, y), z, (X, Y), method='cubic', fill_value=np.nan)
+            contour = ax.contourf(X, Y, Z, levels=20, cmap=cmap, vmin=vmin, vmax=vmax)
+            
+            # Add contour lines if requested
+            if contour_params:
+                for cp in contour_params:
+                    param_values = cp.get_values(data_clean)
+                    P = griddata((x, y), param_values, (X, Y), method='cubic', fill_value=np.nan)
+                    cs = ax.contour(X, Y, P, levels=cp.num_levels,
+                                   colors=cp.color, linestyles=cp.linestyle,
+                                   linewidths=cp.linewidth)
+                    ax.clabel(cs, inline=True, fontsize=8)
+        else:
+            contour = ax.tricontourf(x, y, z, levels=20, cmap=cmap, vmin=vmin, vmax=vmax)
+            
+            # Add contour lines if requested
+            if contour_params:
+                for cp in contour_params:
+                    param_values = cp.get_values(data_clean)
+                    cs = ax.tricontour(x, y, param_values, levels=cp.num_levels,
+                                      colors=cp.color, linestyles=cp.linestyle,
+                                      linewidths=cp.linewidth)
+                    ax.clabel(cs, inline=True, fontsize=8)

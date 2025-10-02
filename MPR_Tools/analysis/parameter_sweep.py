@@ -81,8 +81,7 @@ class FoilSweeper:
             DataFrame with sweep results
         """
         if output_filename is None:
-            output_filename = (f'{self.spectrometer.figure_directory}/'
-                             f'foil_sweep_En{neutron_energy:.1f}MeV.csv')
+            output_filename = (f'{self.spectrometer.figure_directory}/foil_sweep_En{neutron_energy:.1f}MeV.csv')
         
         # Check if results exist and reset=False
         if not reset and Path(output_filename).exists():
@@ -173,8 +172,8 @@ class FoilSweeper:
                 'total_efficiency': total_eff,
                 'mean_position': mean_pos,
                 'std_position': std_pos,
-                'fwhm': fwhm,
-                'energy_resolution': energy_res
+                'fwhm': fwhm * 1000, # convert to keV
+                'energy_resolution': energy_res * 1000 # convert to keV
             })
             
             return result
