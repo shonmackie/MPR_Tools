@@ -532,19 +532,19 @@ class SpectrometerPlotter:
         fig, ax1 = plt.subplots(1, 1, figsize=(6, 4))
         fig.suptitle('Comprehensive Performance', fontsize=16)
         
-        # Left y-axis: location
-        color_location = 'tab:blue'
+        # Left y-axis: position
+        color_position = 'tab:blue'
         ax1.set_xlabel('Neutron Energy [MeV]')
-        ax1.set_ylabel('Proton Position [cm]', color=color_location)
+        ax1.set_ylabel('Proton Position [cm]', color=color_position)
         
-        # Plot location curve
-        ax1.plot(energies, positions * 100, color=color_location, linewidth=2,
-                 label=f'Location')
+        # Plot position curve
+        ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
+                 label=f'Position')
         ax1.fill_between(energies, (positions - position_uncertainties) * 100, 
                         (positions + position_uncertainties) * 100,
-                        alpha=0.3, color=color_location)
+                        alpha=0.3, color=color_position)
         ax1.grid(True, alpha=0.3)
-        ax1.tick_params(axis='y', labelcolor=color_location)
+        ax1.tick_params(axis='y', labelcolor=color_position)
         
         # Right y-axis: Resolution and Efficiency
         ax2 = ax1.twinx()
