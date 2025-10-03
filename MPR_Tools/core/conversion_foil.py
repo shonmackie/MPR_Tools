@@ -261,8 +261,10 @@ class ConversionFoil:
             Cross section in m^2
         """
         energy_eV = energy_MeV * 1e6
-        cross_section_barns = np.interp(energy_eV, self.nc12_cross_section_data[0], 
-                                       self.nc12_cross_section_data[1])
+        cross_section_barns = np.interp(
+            energy_eV,
+            self.nc12_cross_section_data[0],
+            self.nc12_cross_section_data[1])
         return cross_section_barns * 1e-28  # barns to m^2
     
     def _build_differential_xs_interpolator(self):
@@ -497,6 +499,7 @@ class ConversionFoil:
         # Prepare angular distributions
         cos_scatter_angles = np.linspace(1, 0, num_angle_samples)
         scatter_angles = np.arccos(cos_scatter_angles)
+        scatter_angles = np.linspace(0, np.pi / 2, num_angle_samples)
         diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
         diff_xs /= np.sum(diff_xs)  # Normalize
         
@@ -524,7 +527,7 @@ class ConversionFoil:
                     worker_args = (
                         batch_size,
                         12345 + i * 1000,  # seed_offset
-                        cos_scatter_angles,
+                        scatter_angles,#cos_scatter_angles,
                         diff_xs,
                         self.foil_radius,
                         progress_counter,
@@ -615,6 +618,7 @@ class ConversionFoil:
                 phi_scatter = 2 * np.pi * rng.random()
                 cos_scatter_angle = rng.choice(cos_scatter_angles, p=diff_xs)
                 theta_scatter = np.arccos(cos_scatter_angle)
+                theta_scatter = rng.choice(cos_scatter_angles, p=diff_xs)
                 
                 # Check aperture acceptance using the same logic as the original
                 if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
