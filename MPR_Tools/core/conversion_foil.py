@@ -334,21 +334,21 @@ class ConversionFoil:
         else:
             return diff_xs
     
-    def calculate_differential_xs_lab(self, cos_theta_lab: float | np.ndarray, energy_MeV: float) -> np.ndarray:
+    def calculate_differential_xs_lab(self, theta_lab: float | np.ndarray, energy_MeV: float) -> np.ndarray:
         """
         Calculate lab-frame differential scattering cross section.
         From https://doi.org/10.1063/1.1721536
         P. F. Zweifel; H. Hurwitz, Jr. Tranformation of Scattering Cross Sections. J. Appl. Phys. 25, 1241–1245 (1954)
         
         Args:
-            cos_theta_lab: Cosine of lab-frame scattering angle in radians
+            theta_lab: Lab-frame scattering angle in radians
             energy_MeV: Incident neutron energy in MeV
             
         Returns:
             Lab-frame differential cross section
         """
-        cos_theta_cm = 1 - 2 * cos_theta_lab**2
-        return 4 * cos_theta_lab * self.get_differential_xs_CM(energy_MeV, cos_theta_cm)
+        cos_theta_cm = 1 - 2 * np.cos(theta_lab)**2
+        return 4 * np.cos(theta_lab) * self.get_differential_xs_CM(energy_MeV, cos_theta_cm)
     
     def generate_scattered_hydron(
         self, 
@@ -379,11 +379,12 @@ class ConversionFoil:
             
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        cos_scatter_angles = np.linspace(1, np.cos(max_angle), num_angle_samples)
+        scatter_angles = np.linspace(0, max_angle, num_angle_samples)
         
         # Calculate differential cross section weights
-        diff_xs = self.calculate_differential_xs_lab(cos_scatter_angles, neutron_energy)
-        diff_xs /= np.sum(diff_xs)  # Normalize
+        diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
+        pdf_scatter_angle = diff_xs * np.sin(scatter_angles)
+        pdf_scatter_angle /= np.sum(pdf_scatter_angle)  # Normalize
         
         # Set up z-sampling probability
         if z_sampling == 'exp':
@@ -407,8 +408,7 @@ class ConversionFoil:
             
             # Sample scattering angles
             phi_scatter = 2 * np.pi * rng.random()
-            cos_scatter_angle = rng.choice(cos_scatter_angles, p=diff_xs)
-            theta_scatter = np.arccos(cos_scatter_angle)
+            theta_scatter = rng.choice(scatter_angles, p=pdf_scatter_angle)
             
             # Adjust initial coordinates for transport through foil
             x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
@@ -497,9 +497,10 @@ class ConversionFoil:
                             (1 - np.exp(-total_xs * self.thickness)) / total_xs)
         
         # Prepare angular distributions
-        cos_scatter_angles = np.linspace(1, 0, num_angle_samples)
-        diff_xs = self.calculate_differential_xs_lab(cos_scatter_angles, neutron_energy)
-        diff_xs /= np.sum(diff_xs)  # Normalize
+        scatter_angles = np.linspace(0, np.pi/2, num_angle_samples)
+        diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
+        pdf_scatter_angle = diff_xs * np.sin(scatter_angles)
+        pdf_scatter_angle /= np.sum(pdf_scatter_angle)  # Normalize
         
         # Calculate samples per process
         samples_per_process = num_samples // max_workers
@@ -525,8 +526,8 @@ class ConversionFoil:
                     worker_args = (
                         batch_size,
                         12345 + i * 1000,  # seed_offset
-                        cos_scatter_angles,
-                        diff_xs,
+                        scatter_angles,
+                        pdf_scatter_angle,
                         self.foil_radius,
                         progress_counter,
                         progress_lock
@@ -574,7 +575,7 @@ class ConversionFoil:
         self,
         batch_size: int,
         seed_offset: int,
-        cos_scatter_angles: np.ndarray,
+        scatter_angles: np.ndarray,
         diff_xs: np.ndarray,
         foil_radius: float,
         progress_counter,
@@ -586,7 +587,7 @@ class ConversionFoil:
         Args:
             batch_size: Number of samples to process in this batch
             seed_offset: Random seed offset for this worker
-            cos_scatter_angles: Array of cosine scatter angles
+            scatter_angles: Array of scatter angles
             diff_xs: Differential cross section weights (normalized)
             foil_radius: Foil radius in meters
             progress_counter: Shared counter for progress tracking
@@ -614,8 +615,7 @@ class ConversionFoil:
                 
                 # Sample scattering angles
                 phi_scatter = 2 * np.pi * rng.random()
-                cos_scatter_angle = rng.choice(cos_scatter_angles, p=diff_xs)
-                theta_scatter = np.arccos(cos_scatter_angle)
+                theta_scatter = rng.choice(scatter_angles, p=diff_xs)
                 
                 # Check aperture acceptance using the same logic as the original
                 if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
@@ -704,8 +704,7 @@ class ConversionFoil:
         # ========== Plot 1: Differential Cross Section vs Lab Angle ==========
         fig, ax = plt.subplots(figsize=(5, 4))
         
-        cos_angles = np.linspace(np.cos(angle_range[0]), np.cos(angle_range[1]), num_angles)
-        angles_rad = np.arccos(cos_angles)
+        angles_rad = np.linspace(angle_range[0], angle_range[1], num_angles)
         angles_deg = np.degrees(angles_rad)
         
         diff_xs_lab = self.calculate_differential_xs_lab(angles_rad, energy_MeV)
