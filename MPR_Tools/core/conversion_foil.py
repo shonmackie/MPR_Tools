@@ -383,8 +383,7 @@ class ConversionFoil:
         
         # Calculate differential cross section weights
         diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
-        pdf_scatter_angle = diff_xs * np.sin(scatter_angles)
-        pdf_scatter_angle /= np.sum(pdf_scatter_angle)  # Normalize
+        diff_xs /= np.sum(diff_xs)  # Normalize
         
         # Set up z-sampling probability
         if z_sampling == 'exp':
@@ -408,7 +407,7 @@ class ConversionFoil:
             
             # Sample scattering angles
             phi_scatter = 2 * np.pi * rng.random()
-            theta_scatter = rng.choice(scatter_angles, p=pdf_scatter_angle)
+            theta_scatter = rng.choice(scatter_angles, p=diff_xs)
             
             # Adjust initial coordinates for transport through foil
             x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
@@ -499,8 +498,7 @@ class ConversionFoil:
         # Prepare angular distributions
         scatter_angles = np.linspace(0, np.pi/2, num_angle_samples)
         diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
-        pdf_scatter_angle = diff_xs * np.sin(scatter_angles)
-        pdf_scatter_angle /= np.sum(pdf_scatter_angle)  # Normalize
+        diff_xs /= np.sum(diff_xs)  # Normalize
         
         # Calculate samples per process
         samples_per_process = num_samples // max_workers
@@ -527,7 +525,7 @@ class ConversionFoil:
                         batch_size,
                         12345 + i * 1000,  # seed_offset
                         scatter_angles,
-                        pdf_scatter_angle,
+                        diff_xs,
                         self.foil_radius,
                         progress_counter,
                         progress_lock
