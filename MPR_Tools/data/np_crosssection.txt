@@ -3,7 +3,7 @@
 #NUCLEUS    H-1
 #MF         3
 #MT         2
-#E,eV        Sig,b        Interpolation
+E,eV        Sig,b        Interpolation
  1E+06       4.24949      Lin-Lin
  1.1E+06     4.03846      Lin-Lin
  1.2E+06     3.85418      Lin-Lin
