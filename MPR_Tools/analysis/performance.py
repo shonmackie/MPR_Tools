@@ -19,6 +19,7 @@ class PerformanceAnalyzer:
     def analyze_monoenergetic_performance(
         self,
         neutron_energy: float,
+        delta_energy: float = 0.05,
         num_hydrons: int = 10000,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -31,6 +32,7 @@ class PerformanceAnalyzer:
         
         Args:
             neutron_energy: Neutron energy in MeV
+            delta_energy: Percentage deviation from target energy for resolution calculation
             num_hydrons: Number of hydrons to simulate
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
@@ -43,53 +45,31 @@ class PerformanceAnalyzer:
         """
         print(f'\nAnalyzing performance for {neutron_energy:.3f} MeV monoenergetic neutrons...')
         
-        # Generate and transport hydrons at target energy
-        self.spectrometer.generate_monte_carlo_rays(
-            np.array([neutron_energy]), 
-            np.array([1.0]), 
-            num_hydrons, 
-            include_kinematics, 
-            include_stopping_power_loss,
-            save_beam=False
-        )
-        self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
+        # Helper function for generating hydron positions mean and std
+        def _get_positions(energy: float, num_hydrons: int) -> Tuple[float, float]:
+            self.spectrometer.generate_monte_carlo_rays(
+                np.array([energy]), 
+                np.array([1.0]), 
+                num_hydrons, 
+                include_kinematics, 
+                include_stopping_power_loss,
+                save_beam=False
+            )
+            self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
+            x_positions = self.spectrometer.output_beam[:, 0]
+            mean_position, std_deviation = norm.fit(x_positions)
+            return mean_position, std_deviation
         
         # Analyze focal plane distribution of target energy beamlet
-        x_positions = self.spectrometer.output_beam[:, 0]
-        mean_position_0, std_deviation_0 = norm.fit(x_positions)
-        fwhm_0 = 2.355 * std_deviation_0
+        mean_position_0, std_deviation_0 = _get_positions(neutron_energy, num_hydrons)
+        fwhm_0 = 2 * np.sqrt(2 * np.log(2)) * std_deviation_0
         
-        # Calculate energy resolution via finite difference
-        delta = 0.05
-        print(f'Evaluating dispersion gradient via second order finite difference approximation (delta = {delta*100:.1f}%)')
-        deltaE = 0.05*neutron_energy  #arbitrarily pick 5% deviation from taregt energy to evaluate local derivative dx/dE
-        E_low = neutron_energy-deltaE
-        E_high = neutron_energy+deltaE
-        # IDEA to save compute time: evaluating mean position of delta energies requires less samples than determining the width (which is unnecessary). Consider 1/10th as many hydrons?
-        #get lower energy image position
-        self.spectrometer.generate_monte_carlo_rays(
-            np.array([E_low]), 
-            np.array([1.0]), 
-            num_hydrons/10, 
-            include_kinematics, 
-            include_stopping_power_loss,
-            save_beam=False
-        )
-        self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
-        x_positions = self.spectrometer.output_beam[:, 0]
-        mean_position_low, std_deviation_low = norm.fit(x_positions)
-        #get high energy image position
-        self.spectrometer.generate_monte_carlo_rays(
-            np.array([E_high]), 
-            np.array([1.0]), 
-            num_hydrons/10, 
-            include_kinematics, 
-            include_stopping_power_loss,
-            save_beam=False
-        )
-        self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
-        x_positions = self.spectrometer.output_beam[:, 0]
-        mean_position_high, std_deviation_high = norm.fit(x_positions)
+        # Analyze focal plane distribution of target energy +/- delta
+        E_low = neutron_energy * (1 - delta_energy)
+        E_high = neutron_energy * (1 + delta_energy)
+        # To save compute time, since we're only interested in the mean, use less hydrons
+        mean_position_low, std_deviation_low = _get_positions(E_low, num_hydrons // 10)
+        mean_position_high, std_deviation_high = _get_positions(E_high, num_hydrons // 10)
 
         mean_positions = np.r_[mean_position_low, mean_position_0, mean_position_high]
         energies = np.r_[E_low, neutron_energy, E_high]
@@ -115,7 +95,6 @@ class PerformanceAnalyzer:
             print(f'  Energy resolution [keV]: {energy_resolution * 1000:.2f}')
         
         return mean_position_0, std_deviation_0, fwhm_0, energy_resolution
-    
     def generate_performance_curve(
         self,
         num_energies: int = 40,
@@ -163,10 +142,10 @@ class PerformanceAnalyzer:
             for i, energy in enumerate(tqdm(energies, desc='Calculating performance for a range of energies...')):
                 # Calculate location and resolution from monoenergetic analysis
                 mean_pos, std_dev, fwhm, energy_res = self.analyze_monoenergetic_performance(
-                    energy, 
-                    num_hydrons_per_energy, 
-                    include_kinematics, 
-                    include_stopping_power_loss,
+                    energy,
+                    num_hydrons=num_hydrons_per_energy, 
+                    include_kinematics=include_kinematics, 
+                    include_stopping_power_loss=include_stopping_power_loss,
                     generate_figure=False,
                     verbose=False
                 )
