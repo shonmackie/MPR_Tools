@@ -485,7 +485,7 @@ class ConversionFoil:
         if max_workers is None:
             max_workers = mp.cpu_count()
         
-        print(f'Estimating intrinsic efficiency for {neutron_energy:.3f} MeV neutrons using {max_workers} processes...')
+        print(f'\nEstimating intrinsic efficiency for {neutron_energy:.3f} MeV neutrons using {max_workers} processes...')
         
         # Calculate scattering probability in foil (non-parallelizable part)
         nh_xs = self.get_nh_cross_section(neutron_energy)

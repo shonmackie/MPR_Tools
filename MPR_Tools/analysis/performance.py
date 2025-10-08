@@ -41,9 +41,9 @@ class PerformanceAnalyzer:
         Returns:
             Tuple of (mean_position, std_deviation, fwhm, energy_resolution)
         """
-        print(f'Analyzing performance for {neutron_energy:.3f} MeV monoenergetic neutrons...')
+        print(f'\nAnalyzing performance for {neutron_energy:.3f} MeV monoenergetic neutrons...')
         
-        # Generate and transport hydrons
+        # Generate and transport hydrons at target energy
         self.spectrometer.generate_monte_carlo_rays(
             np.array([neutron_energy]), 
             np.array([1.0]), 
@@ -54,15 +54,49 @@ class PerformanceAnalyzer:
         )
         self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
         
-        # Analyze focal plane distribution
+        # Analyze focal plane distribution of target energy beamlet
         x_positions = self.spectrometer.output_beam[:, 0]
-        #TODO - consider more sophisticated method for evaluating resolution
-        mean_position, std_deviation = norm.fit(x_positions)
-        fwhm = 2.355 * std_deviation
+        mean_position_0, std_deviation_0 = norm.fit(x_positions)
+        fwhm_0 = 2.355 * std_deviation_0
         
-        # Calculate energy resolution
-        dispersion = self.spectrometer.transfer_map[0, 5]  # Assuming this is the dispersion term
-        energy_resolution = self.spectrometer.reference_energy / (dispersion / fwhm) if fwhm > 0 else 0
+        # Calculate energy resolution via finite difference
+        delta = 0.05
+        print(f'Evaluating dispersion gradient via second order finite difference approximation (delta = {delta*100:.1f}%)')
+        deltaE = 0.05*neutron_energy  #arbitrarily pick 5% deviation from taregt energy to evaluate local derivative dx/dE
+        E_low = neutron_energy-deltaE
+        E_high = neutron_energy+deltaE
+        # IDEA to save compute time: evaluating mean position of delta energies requires less samples than determining the width (which is unnecessary). Consider 1/10th as many hydrons?
+        #get lower energy image position
+        self.spectrometer.generate_monte_carlo_rays(
+            np.array([E_low]), 
+            np.array([1.0]), 
+            num_hydrons/10, 
+            include_kinematics, 
+            include_stopping_power_loss,
+            save_beam=False
+        )
+        self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
+        x_positions = self.spectrometer.output_beam[:, 0]
+        mean_position_low, std_deviation_low = norm.fit(x_positions)
+        #get high energy image position
+        self.spectrometer.generate_monte_carlo_rays(
+            np.array([E_high]), 
+            np.array([1.0]), 
+            num_hydrons/10, 
+            include_kinematics, 
+            include_stopping_power_loss,
+            save_beam=False
+        )
+        self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
+        x_positions = self.spectrometer.output_beam[:, 0]
+        mean_position_high, std_deviation_high = norm.fit(x_positions)
+
+        mean_positions = np.r_[mean_position_low, mean_position_0, mean_position_high]
+        energies = np.r_[E_low, neutron_energy, E_high]
+
+        dispersion = np.gradient(mean_positions, energies)[1]
+
+        energy_resolution = 1000 / (dispersion / fwhm_0) if fwhm_0 > 0 else 0 # keV
         
         # Generate figure if requested
         if generate_figure:
@@ -71,21 +105,21 @@ class PerformanceAnalyzer:
                     f'{self.spectrometer.figure_directory}/Monoenergetic_En{neutron_energy:.1f}MeV_T{self.spectrometer.conversion_foil.thickness_um:.0f}um_E0{self.spectrometer.reference_energy:.1f}MeV.png'
                 )
             
-            self.spectrometer._plot_monoenergetic_analysis(figure_name, neutron_energy, mean_position, std_deviation)
+            self.spectrometer._plot_monoenergetic_analysis(figure_name, neutron_energy, mean_position_0, std_deviation_0)
         
         if verbose:
             print('Ion Optical Image Parameters:')
-            print(f'  Mean position [cm]: {mean_position * 100:.3f}')
-            print(f'  Standard deviation [cm]: {std_deviation * 100:.3f}')
-            print(f'  FWHM [cm]: {fwhm * 100:.3f}')
+            print(f'  Mean position [cm]: {mean_position_0 * 100:.3f}')
+            print(f'  Standard deviation [cm]: {std_deviation_0 * 100:.3f}')
+            print(f'  FWHM [cm]: {fwhm_0 * 100:.3f}')
             print(f'  Energy resolution [keV]: {energy_resolution * 1000:.2f}')
         
-        return mean_position, std_deviation, fwhm, energy_resolution
+        return mean_position_0, std_deviation_0, fwhm_0, energy_resolution
     
     def generate_performance_curve(
         self,
         num_energies: int = 40,
-        num_hydrons_per_energy: int = 1000,
+        num_hydrons_per_energy: int = 10000,
         num_efficiency_samples: int = int(1e6),
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -109,7 +143,7 @@ class PerformanceAnalyzer:
         Returns:
             Tuple of (energies, positions_mean, positions_std, energy_resolutions, total_efficiencies)
         """
-        print('Generating comprehensive performance analysis...')
+        print('\nGenerating comprehensive performance analysis...')
         
         # Save comprehensive data
         if output_filename == None:

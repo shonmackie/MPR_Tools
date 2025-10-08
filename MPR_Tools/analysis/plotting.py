@@ -551,7 +551,7 @@ class SpectrometerPlotter:
         
         # Plot energy resolution
         color_resolution = 'tab:red'
-        ax2.plot(energies, energy_resolutions * 1000, color=color_resolution, 
+        ax2.plot(energies, energy_resolutions, color=color_resolution, 
                         linewidth=2, marker='o', markersize=4,
                         label=f'Resolution')
         ax2.set_ylabel('Energy Resolution [keV]', color=color_resolution)
@@ -587,9 +587,9 @@ class SpectrometerPlotter:
         print(f'\nPerformance Summary:')
         print(f'  Energy range: {energies.min():.2f} - {energies.max():.2f} MeV')
         print(f'  Position range: {positions.min()*100:.2f} - {positions.max()*100:.2f} cm')
-        print(f'  Average resolution: {np.mean(energy_resolutions)*1000:.1f} keV')
+        print(f'  Average resolution: {np.mean(energy_resolutions):.1f} keV')
         print(f'  Average efficiency: {np.mean(total_efficiencies):.3e}')
-        print(f'  Best resolution: {np.min(energy_resolutions)*1000:.1f} keV at {energies[np.argmin(energy_resolutions)]:.2f} MeV')
+        print(f'  Best resolution: {np.min(energy_resolutions):.1f} keV at {energies[np.argmin(energy_resolutions)]:.2f} MeV')
         print(f'  Best efficiency: {np.max(total_efficiencies):.1e} at {energies[np.argmax(total_efficiencies)]:.2f} MeV')
         print(f'Comprehensive performance plot saved to {filename}')
         
