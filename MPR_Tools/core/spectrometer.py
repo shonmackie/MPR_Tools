@@ -2,6 +2,7 @@
 
 from typing import Tuple, Optional, Literal, List
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
@@ -57,7 +58,6 @@ class MPRSpectrometer:
         self.performance_analyzer = PerformanceAnalyzer(self)
         self.plotter = SpectrometerPlotter(self)
         self.data_processor = DataProcessor(self)
-        self.beam_io = BeamIO(self)
         
         # Load transfer map
         # TODO: add functionality to check if a calibration curve exists for this map. If not, generate one!
@@ -264,7 +264,7 @@ class MPRSpectrometer:
         
         # Save input beam to file
         if save_beam:
-            self.beam_io.save_input_beam()
+            self.save_input_beam()
             
     # Class method worker function (used with multiprocessing)
     def _generate_batch_worker(
@@ -414,7 +414,7 @@ class MPRSpectrometer:
         
         # Save output beam to file
         if save_beam:
-            self.beam_io.save_output_beam()
+            self.save_output_beam()
 
     def _apply_transfer_map_worker(
         self,
@@ -487,9 +487,65 @@ class MPRSpectrometer:
                 digit_idx += 1
                 
         return digits
-
-    def read_beams(self, *args, **kwargs):
-        self.input_beam, self.output_beam = self.beam_io.read_beams(*args, **kwargs)
+    
+    def save_input_beam(self, filepath: Optional[str] = None) -> None:
+        """Save input beam to CSV file."""
+        if filepath is None:
+            filepath = f'{self.figure_directory}/input_beam.csv'
+        
+        df = pd.DataFrame({
+            'x0': self.input_beam[:, 0],
+            'angle_x': self.input_beam[:, 1],
+            'y0': self.input_beam[:, 2],
+            'angle_y': self.input_beam[:, 3],
+            'energy_relative': self.input_beam[:, 4],
+            'neutron_energy': self.input_beam[:, 5]
+        })
+        df.to_csv(filepath, index=False)
+        print(f'Input beam saved to {filepath}')
+    
+    def save_output_beam(self, filepath: Optional[str] = None) -> None:
+        """Save output beam to CSV file."""
+        if filepath is None:
+            filepath = f'{self.figure_directory}/output_beam.csv'
+        
+        df = pd.DataFrame({
+            'x0': self.output_beam[:, 0],
+            'angle_x': self.output_beam[:, 1],
+            'y0': self.output_beam[:, 2],
+            'angle_y': self.output_beam[:, 3],
+            'energy_relative': self.output_beam[:, 4]
+        })
+        df.to_csv(filepath, index=False)
+        print(f'Output beam saved to {filepath}')
+        
+    def read_beams(
+        self,
+        input_beam_path: Optional[str] = None,
+        output_beam_path: Optional[str] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Read input and output beams from file
+        
+        Args:
+            input_beam_path: Input beam path location 
+            output_beam_path: Output beam path location 
+        """
+        # Read input beam
+        if input_beam_path == None:
+            input_beam_path = f'{self.figure_directory}/input_beam.csv'
+            
+        input_beam_df = pd.read_csv(input_beam_path)
+        self.input_beam = input_beam_df.to_numpy()
+        
+        # Read output beam
+        if output_beam_path == None:
+            output_beam_path = f'{self.figure_directory}/output_beam.csv'
+            
+        output_beam_df = pd.read_csv(output_beam_path)
+        self.output_beam = output_beam_df.to_numpy()
+        
+        return self.input_beam, self.output_beam
     
     # Delegate analysis methods to helper classes
     def analyze_monoenergetic_performance(self, *args, **kwargs):
