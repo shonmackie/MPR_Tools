@@ -173,8 +173,8 @@ class FoilSweeper:
                 'total_efficiency': total_eff,
                 'mean_position': mean_pos,
                 'std_position': std_pos,
-                'fwhm': fwhm * 1000, # convert to keV
-                'energy_resolution': energy_res * 1000 # convert to keV
+                'fwhm': fwhm, # MeV
+                'energy_resolution': energy_res # keV
             })
             
             return result

@@ -571,7 +571,7 @@ class SpectrometerPlotter:
         # Label lines on their respective axes
         range = energies.max() - energies.min()
         labelLines(ax1.get_lines(), xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
-        labelLines(ax2.get_lines(), xvals=[energies.min() + 0.5 * range], align=True, fontsize=12)
+        labelLines(ax2.get_lines(), xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
         labelLines(ax3.get_lines(), xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
         
         # Make sure x-axis limits are consistent
