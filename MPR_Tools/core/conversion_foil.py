@@ -67,6 +67,9 @@ class ConversionFoil:
         molecular_weight = FOIL_MATERIALS[foil_material]['molecular_weight'] # g/mol
         self.hydron_mass = FOIL_MATERIALS[foil_material]['hydron_mass'] # amu
         
+        # Calculate relative mass, either 0 for protons or ~1 for deuterons
+        self.relative_mass = (self.hydron_mass - FOIL_MATERIALS['CH2']['hydron_mass']) / FOIL_MATERIALS['CH2']['hydron_mass']
+        
         density_factor = foil_density * AVOGADRO * 1e6
         self.carbon_density = density_factor / molecular_weight # carbon/m^3
         self.hydron_density = self.carbon_density * 2 # hydrons/m^3

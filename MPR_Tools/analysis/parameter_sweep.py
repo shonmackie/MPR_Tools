@@ -11,7 +11,7 @@ from copy import deepcopy
 import optuna
 
 if TYPE_CHECKING:
-    from ..core.spectrometer import MPRSpectrometer, ConversionFoil
+    from ..core.spectrometer import MPRSpectrometer
 
 class FoilSweeper:
     """

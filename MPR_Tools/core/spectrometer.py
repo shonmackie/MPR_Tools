@@ -377,6 +377,7 @@ class MPRSpectrometer:
                     worker_args = (
                         self.input_beam[start_idx:end_idx],
                         self.transfer_map,
+                        self.conversion_foil.relative_mass,
                         map_order,
                         progress_counter,
                         progress_lock
@@ -417,6 +418,7 @@ class MPRSpectrometer:
         self,
         input_batch: np.ndarray,
         transfer_map: np.ndarray,
+        relative_mass: float,
         map_order: int,
         progress_counter,
         progress_lock
@@ -427,30 +429,44 @@ class MPRSpectrometer:
         Args:
             input_batch: Batch of input rays [N x 6]
             transfer_map: Transfer map coefficients
+            relative_mass: Relative mass of hydron to proton, only used if mass is included in transfer map
             map_order: Order of transfer map to apply
             progress_counter: Shared counter for progress tracking
             progress_lock: Lock for thread-safe progress updates
             
         Returns:
             Batch of output rays [N x 5]
-        """
-        import numpy as np
-        
+        """        
         batch_size = len(input_batch)
         output_batch = np.zeros((batch_size, 5))
         
+        ### Convert last column of transfer map to monomial powers for each term ###
+        # Need to convert term powers to integers
+        term_indices = transfer_map[-1].astype(int)
+        
+        # Find maximum number of digits
+        max_digits = len(str(np.max(term_indices)))
+        mass_included = max_digits == 7 # Only 6 digits if mass is not included
+        
+        # Convert to zero-padded strings
+        term_indices_str = np.array([str(x).zfill(max_digits) for x in term_indices])
+        
+        # Extract digits for each term
+        term_powers_array = np.array([list(s) for s in term_indices_str], dtype=int)
+        
+        ### Apply transfer map to each hydron ###
         for i, input_ray in enumerate(input_batch):
             # Initialize output ray with input energy
             output_ray = np.array([0.0, 0.0, 0.0, 0.0, input_ray[4]])
             
             # Apply each map term
-            for j, term_index in enumerate(transfer_map[-1]):
-                term_powers = self._extract_digits(term_index)
-                
+            for j, term_powers in enumerate(term_powers_array):                
                 # Only include terms up to specified order
                 if np.sum(term_powers) <= map_order:
                     # Calculate monomial term
                     monomial = np.prod([input_ray[k]**term_powers[k] for k in range(4)]) * input_ray[4]**term_powers[5]
+                    if mass_included:
+                        monomial *= relative_mass**term_powers[6]
                     
                     # Add contributions to each coordinate
                     for coord in range(4):  # x, angle_x, y, angle_y
@@ -463,27 +479,6 @@ class MPRSpectrometer:
                 progress_counter.value += 1
         
         return output_batch
-    
-    def _extract_digits(self, number: float) -> np.ndarray:
-        """
-        Extract digits from a number for transfer map indexing.
-        
-        Args:
-            number: Input number to extract digits from
-            
-        Returns:
-            Array of 6 digits
-        """
-        digits = np.zeros(6, dtype=int)
-        formatted_str = f"{number/1e5:.5f}"
-        
-        digit_idx = 0
-        for char in formatted_str:
-            if char not in ['.', 'e', '-'] and digit_idx < 6:
-                digits[digit_idx] = int(char)
-                digit_idx += 1
-                
-        return digits
     
     def save_input_beam(self, filepath: Optional[str] = None) -> None:
         """Save input beam to CSV file."""
@@ -744,6 +739,7 @@ class MPRSpectrometer:
             'aperture_distance_cm': self.conversion_foil.aperture_distance_cm,
             'aperture_radius_cm': self.conversion_foil.aperture_radius_cm,
             'aperture_type': self.conversion_foil.aperture_type,
+            'particle': self.conversion_foil.particle,
             'reference_energy_MeV': self.reference_energy,
             'min_energy': self.min_energy,
             'max_energy': self.max_energy,
