@@ -240,24 +240,13 @@ class MPRSpectrometer:
                 pbar.update(final_count - last_count)
             
             # Collect results
-            all_results = []
-            total_attempts = 0
+            self.input_beam = np.array([[]])
             
-            for future in as_completed(futures):
-                batch_results, batch_attempts = future.result()
-                all_results.extend(batch_results)
-                total_attempts += batch_attempts
+            for i, future in enumerate(as_completed(futures)):
+                batch_results = future.result()
+                self.input_beam = np.concatenate(self.input_beam, batch_results)
         
         pbar.close()
-        
-        # Convert to numpy array and ensure we don't exceed requested count
-        total_generated = min(len(all_results), num_hydrons)
-        self.input_beam = np.array(all_results[:total_generated])
-        
-        if total_generated < num_hydrons:
-            print(f"Warning: Only generated {total_generated}/{num_hydrons} hydrons due to high rejection rate")
-        
-        print(f'Generated {total_generated} hydrons from {total_attempts} total attempts using {max_workers} processes')
         
         # Save input beam to file
         if save_beam:
@@ -277,23 +266,20 @@ class MPRSpectrometer:
         reference_energy: float,
         progress_counter,
         progress_lock
-    ) -> Tuple[List[List[float]], int]:
+    ) -> np.ndarray:
         """Generate a batch of hydrons in a separate process."""
         # Create independent random number generator
         rng = np.random.default_rng(seed_offset)
         
-        batch_results = []
-        attempts = 0
-        max_attempts = batch_size * 20  # Prevent infinite loops
+        batch_results = np.array([])
         
-        while len(batch_results) < batch_size and attempts < max_attempts:
-            try:
-                attempts += 1
-                
+        while len(batch_results) < batch_size:
+            try:                
                 # Sample neutron energy
                 neutron_energy = rng.choice(neutron_energies, p=weighted_distribution)
                 
                 # Generate scattered hydron with the worker's RNG
+                # The hydrons generated are already accepted by the aperture
                 x0, y0, theta_s, phi_s, hydron_energy = conversion_foil.generate_scattered_hydron(
                     neutron_energy, 
                     include_kinematics, 
@@ -302,26 +288,26 @@ class MPRSpectrometer:
                     rng=rng  # Pass the worker's RNG
                 )
                 
-                if conversion_foil._check_aperture_acceptance(x0, y0, theta_s, phi_s):
-                    # Convert to spectrometer coordinates
-                    x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
-                    y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
-                    
-                    angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
-                    angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
-                    
-                    energy_relative = (hydron_energy - reference_energy) / reference_energy
-                    
-                    batch_results.append([x0, angle_x, y0, angle_y, energy_relative, neutron_energy])
-                    
-                    # Update progress counter thread-safely
-                    with progress_lock:
-                        progress_counter.value += 1
+                # Convert to spectrometer coordinates
+                x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
+                y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
+                
+                angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
+                angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
+                
+                energy_relative = (hydron_energy - reference_energy) / reference_energy
+                
+                batch_results = np.concatenate(batch_results, np.array([x0, angle_x, y0, angle_y, energy_relative, neutron_energy]))
+                
+                # Update progress counter thread-safely
+                with progress_lock:
+                    progress_counter.value += 1
                     
             except Exception:
+                print("Failed to generate hydron")
                 pass  # Skip failed generations
         
-        return batch_results, attempts
+        return batch_results
     
     def apply_transfer_map(
         self,
