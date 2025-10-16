@@ -27,6 +27,8 @@ class ConversionFoil:
         thickness: float,
         aperture_distance: float,
         aperture_radius: float,
+        aperture_width: Optional[float] = None,
+        aperture_height: Optional[float] = None,
         srim_data_path: Optional[str] = None,
         nh_cross_section_path: Optional[str] = None,
         nc12_cross_section_path: Optional[str] = None,
@@ -43,6 +45,8 @@ class ConversionFoil:
             thickness: Foil thickness in μm
             aperture_distance: Distance from foil to aperture in cm
             aperture_radius: Aperture radius in cm
+            aperture_width: Aperture width (in dispersion direction [x]) in cm (for rectangular apertures)
+            aperture_height: Aperture height (in non-dispersion direction [y]) in cm (for rectangular apertures)
             srim_data_path: Path to SRIM stopping power data
             nh_cross_section_path: Path to n-hydron elastic scattering cross sections (either protons or deuterons)
             nc12_cross_section_path: Path to n-C12 elastic scattering cross sections
@@ -58,6 +62,12 @@ class ConversionFoil:
         self.thickness = thickness * 1e-6      # μm to m
         self.aperture_distance = aperture_distance * 1e-2  # cm to m
         self.aperture_radius = aperture_radius * 1e-2      # cm to m
+        if aperture_type == 'rect':
+            if aperture_width is None or aperture_height is None:
+                raise ValueError("Aperture width and height must be provided for rectangular apertures.")
+            self.aperture_width = aperture_width * 1e-2        # cm to m
+            self.aperture_height = aperture_height * 1e-2      # cm to m
+            
         self.aperture_type = aperture_type
         
         # Calculate particle densities in CH2
@@ -143,6 +153,16 @@ class ConversionFoil:
         """Get aperture radius in cm."""
         return self.aperture_radius * 1e2
     
+    @property
+    def aperture_width_cm(self) -> float:
+        """Get aperture width in cm."""
+        return self.aperture_width * 1e2
+    
+    @property
+    def aperture_height_cm(self) -> float:
+        """Get aperture height in cm."""
+        return self.aperture_height * 1e2
+    
     def set_foil_radius(self, radius_cm: float) -> None:
         """Set foil radius in cm."""
         self.foil_radius = radius_cm * 1e-2
@@ -164,6 +184,18 @@ class ConversionFoil:
     def set_aperture_radius(self, radius_cm: float) -> None:
         """Set aperture radius in cm."""
         self.aperture_radius = radius_cm * 1e-2
+        
+    def set_aperture_width(self, width_cm: float) -> None:
+        """Set aperture width in cm (for rectangular apertures)."""
+        if self.aperture_type != 'rect':
+            raise ValueError("Aperture width can only be set for rectangular apertures.")
+        self.aperture_width = width_cm * 1e-2
+        
+    def set_aperture_height(self, height_cm: float) -> None:
+        """Set aperture height in cm (for rectangular apertures)."""
+        if self.aperture_type != 'rect':
+            raise ValueError("Aperture height can only be set for rectangular apertures.")
+        self.aperture_height = height_cm * 1e-2
     
     def calculate_stopping_power(self, energy_MeV: float) -> float:
         """
@@ -459,10 +491,9 @@ class ConversionFoil:
         
         if self.aperture_type == 'circ':
             return (x_aperture**2 + y_aperture**2) <= self.aperture_radius**2
-        # TODO: expand rectangular aperture to have two dimensions
         elif self.aperture_type == 'rect':
-            return (np.abs(x_aperture) <= self.aperture_radius and 
-                   np.abs(y_aperture) <= self.aperture_radius)
+            return (np.abs(x_aperture) <= self.aperture_width/2 and 
+                   np.abs(y_aperture) <= self.aperture_height/2)
         else:
             raise ValueError(f"Unsupported aperture type: {self.aperture_type}")
     
