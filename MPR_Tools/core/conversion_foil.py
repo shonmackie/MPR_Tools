@@ -385,6 +385,54 @@ class ConversionFoil:
         cos_theta_cm = 1 - 2 * np.cos(theta_lab)**2
         return 4 * np.cos(theta_lab) * self.get_differential_xs_CM(energy_MeV, cos_theta_cm)
     
+    def _sample_scattered_ray(
+        self,
+        rng: np.random.Generator,
+        scatter_angles: np.ndarray,
+        diff_xs: np.ndarray,
+        prob_z_cdf: Optional[np.ndarray] = None,
+        y_restriction: Optional[Literal['positive', 'negative']] = None
+    ) -> Tuple[float, float, float, float]:
+        """
+        Sample a scattered ray from the foil.
+        
+        Args:
+            rng: Random number generator
+            scatter_angles: Array of possible scattering angles
+            diff_xs: Differential cross section weights (normalized)
+            prob_z_cdf: Cumulative distribution for z-sampling (None for surface-only sampling)
+            y_restriction: Restrict y to positive or negative half (None for full foil)
+        """
+        # Sample initial position on foil surface
+        radius_sample = self.foil_radius * np.sqrt(rng.random())
+        angle_sample = 2 * np.pi * rng.random()
+        x0 = radius_sample * np.cos(angle_sample)
+        
+        # Apply y-restriction if specified
+        if y_restriction == 'positive':
+            y0 = abs(radius_sample * np.sin(angle_sample))
+        elif y_restriction == 'negative':
+            y0 = -abs(radius_sample * np.sin(angle_sample))
+        else:
+            y0 = radius_sample * np.sin(angle_sample)
+            
+        # Sample depth if prob_z_cdf provided
+        if prob_z_cdf is not None:
+            z0 = self.z_grid[np.searchsorted(prob_z_cdf, rng.random())]
+        else:
+            z0 = 0.0  # Sample at exit surface
+        
+        # Sample scattering angles
+        phi_scatter = 2 * np.pi * rng.random()
+        theta_scatter = rng.choice(scatter_angles, p=diff_xs)
+        
+        # Adjust initial coordinates for transport through foil
+        x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
+        y0 += z0 * np.tan(theta_scatter) * np.sin(phi_scatter)
+        
+        return x0, y0, theta_scatter, phi_scatter
+
+    
     def generate_scattered_hydron(
         self, 
         neutron_energy: float, 
@@ -392,7 +440,8 @@ class ConversionFoil:
         include_stopping_power_loss: bool = False,
         num_angle_samples: int = 10000,
         z_sampling: Literal['exp', 'uni'] = 'exp',
-        rng: Optional[np.random.Generator] = None
+        rng: Optional[np.random.Generator] = None,
+        y_restriction: Optional[Literal['positive', 'negative']] = None
     ) -> Tuple[float, float, float, float, float]:
         """
         Generate a scattered hydron from neutron interaction.
@@ -432,22 +481,14 @@ class ConversionFoil:
         
         # Generate rays until one passes through aperture
         accepted = False
-        while not accepted:
-            # Sample initial position in foil
-            radius_sample = self.foil_radius * np.sqrt(rng.random())
-            angle_sample = 2 * np.pi * rng.random()
-            x0 = radius_sample * np.cos(angle_sample)
-            y0 = radius_sample * np.sin(angle_sample)
+        # Limit number of rejections to avoid infinite loops
+        rejected = 0
+        while not accepted and rejected < 100:
+            x0, y0, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                rng, scatter_angles, diff_xs, prob_z_cdf, y_restriction
+            )
             z0 = self.z_grid[np.searchsorted(prob_z_cdf, rng.random())]
-            
-            # Sample scattering angles
-            phi_scatter = 2 * np.pi * rng.random()
-            theta_scatter = rng.choice(scatter_angles, p=diff_xs)
-            
-            # Adjust initial coordinates for transport through foil
-            x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
-            y0 += z0 * np.tan(theta_scatter) * np.sin(phi_scatter)
-            
+
             # Check if hydron passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
                 # Convert neutron energy to recoil hydron energy
@@ -465,6 +506,11 @@ class ConversionFoil:
                     final_energy = self.calculate_stopping_power_loss(final_energy, path_length)
                 
                 accepted = True
+            else:
+                rejected += 1
+                
+        if not accepted:
+            raise ValueError("Unable to generate a hydron that passes through the aperture.")
                 
         return x0, y0, theta_scatter, phi_scatter, final_energy
     
@@ -639,16 +685,13 @@ class ConversionFoil:
             try:
                 processed_count += 1
                 
-                # Sample random position in foil
-                radius = foil_radius * np.sqrt(rng.random())
-                angle = 2 * np.pi * rng.random()
-                x0 = radius * np.cos(angle)
-                y0 = radius * np.sin(angle)
+                # Sample scattered ray using helper method (no z-sampling for efficiency calculation)
+                x0, y0, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                    rng, scatter_angles, diff_xs, None
+                )
                 
-                # Sample scattering angles
-                phi_scatter = 2 * np.pi * rng.random()
-                theta_scatter = rng.choice(scatter_angles, p=diff_xs)
-                
+                # N.B. We do not consider the very small displacement due to foil thickness here
+
                 # Check aperture acceptance using the same logic as the original
                 if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
                     accepted_count += 1
