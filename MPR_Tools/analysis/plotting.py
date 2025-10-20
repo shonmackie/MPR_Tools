@@ -11,46 +11,33 @@ from scipy.stats import norm
 from scipy.interpolate import griddata
 from labellines import labelLines
 
+from ..core.spectrometer import MPRSpectrometer
+from ..core.dual_foil_spectrometer import DualFoilSpectrometer
+
 if TYPE_CHECKING:
-    from ..core.spectrometer import MPRSpectrometer
     from ..analysis.parameter_sweep import FoilSweeper
     import pandas as pd
 
 class SpectrometerPlotter:
     """Handles all plotting functionality for MPR spectrometer."""
     
-    def __init__(self, spectrometer: MPRSpectrometer) -> None:
-        self.spectrometer = spectrometer
-        self.dual_data = None  # Will be set for dual-foil mode
-        
-    def set_dual_data(
-        self, 
-        spectrometer_secondary: MPRSpectrometer,
-        primary_label: str = 'Protons (CH2)',
-        secondary_label: str = 'Deuterons (CD2)',
-        primary_color: str = 'blue',
-        secondary_color: str = 'red'
-    ) -> None:
-        """
-        Enable dual-foil plotting mode.
-        
-        When set, all plot methods will overlay data from both spectrometers
-        with distinct colors and labels.
-        
-        Args:
-            spectrometer_secondary: Secondary spectrometer (e.g., CD2)
-            primary_label: Label for primary data
-            secondary_label: Label for secondary data  
-            primary_color: Color for primary data
-            secondary_color: Color for secondary data
-        """
-        self.dual_data = {
-            'spectrometer': spectrometer_secondary,
-            'primary_label': primary_label,
-            'secondary_label': secondary_label,
-            'primary_color': primary_color,
-            'secondary_color': secondary_color
-        }
+    def __init__(self, spectrometer: Union[MPRSpectrometer, DualFoilSpectrometer]) -> None:
+        if isinstance(spectrometer, MPRSpectrometer):
+            self.spectrometer = spectrometer
+            self.dual_data = None  # Will be set for dual-foil mode
+        elif isinstance(spectrometer, DualFoilSpectrometer):
+            # Dual-foil mode, primary foil is CH2, secondary foil is CD2
+            self.spectrometer = spectrometer.spec_ch2
+            self.dual_data = {
+                'spectrometer': spectrometer.spec_cd2,
+                'primary_label': 'Protons (CH2)',
+                'secondary_label': 'Deuterons (CD2)',
+                'primary_color': 'blue',
+                'secondary_color': 'red'
+            }
+            self.dual_spectrometer = spectrometer
+        else:
+            raise ValueError(f'Invalid spectrometer type: {type(spectrometer)}. Should be MPRSpectrometer or DualFoilSpectrometer.')
     
     def plot_focal_plane_distribution(
         self, 
@@ -843,7 +830,7 @@ class SpectrometerPlotter:
             nh_xs_barns2 = foil2.nh_cross_section_data[1]  # Already in barns
             
             axs[1].plot(nh_energies_MeV2, nh_xs_barns2, 'darkorange', linewidth=2, 
-                    label=f'n-{foil2.particle[0]} elastic (Secondary)')
+                    label=f'n-{foil2.particle[0]} elastic')
             
             # Stopping power for dual data
             srim_energies_MeV2 = foil2.srim_data[0]  # Already in MeV
@@ -858,6 +845,145 @@ class SpectrometerPlotter:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Data plot saved to {filename}')
+        
+            
+    def plot_combined_foil(self, filename: Optional[str] = None) -> None:
+        """Plot combined foil input geometry showing y-restriction."""
+        if not self.dual_data:
+            raise ValueError("Dual data not available. Only applicable for dual foil spectrometers.")
+        
+        spec_ch2 = self.spectrometer
+        spec_cd2: MPRSpectrometer = self.dual_data['spectrometer']
+        
+        if filename is None:
+            filename = f'{spec_ch2.figure_directory}/combined_foil.png'
+        
+        fig, ax = plt.subplots(figsize=(6, 6))
+        
+        # CH2 (positive y)
+        x_ch2 = spec_ch2.input_beam[:, 0] * 100
+        y_ch2 = spec_ch2.input_beam[:, 2] * 100
+        ax.scatter(x_ch2, y_ch2, alpha=0.5, s=5, label='CH2 (Protons)', color='blue')
+        
+        # CD2 (negative y)
+        x_cd2 = spec_cd2.input_beam[:, 0] * 100
+        y_cd2 = spec_cd2.input_beam[:, 2] * 100
+        ax.scatter(x_cd2, y_cd2, alpha=0.5, s=5, label='CD2 (Deuterons)', color='red')
+        
+        # Draw foil boundary
+        theta = np.linspace(0, 2*np.pi, 100)
+        foil_r = spec_ch2.conversion_foil.foil_radius_cm
+        ax.plot(foil_r * np.cos(theta), foil_r * np.sin(theta), 'k-', 
+               linewidth=2, label='Foil boundary')
+        
+        # Draw y=0 dividing line
+        ax.axhline(0, color='black', linestyle='--', linewidth=2, alpha=0.7, label='Y=0 divider')
+        
+        # Add shaded regions to show foil halves
+        from matplotlib.patches import Wedge
+        wedge_upper = Wedge((0, 0), foil_r, 0, 180, facecolor='blue', alpha=0.1, 
+                           edgecolor='none')
+        wedge_lower = Wedge((0, 0), foil_r, 180, 360, facecolor='red', alpha=0.1, 
+                           edgecolor='none')
+        ax.add_patch(wedge_upper)
+        ax.add_patch(wedge_lower)
+        
+        # Add text annotation
+        ax.text(0.05, 0.95, 'CH2 (Protons)', transform=ax.transAxes, ha='left', va='top', color='blue', fontsize=16)
+        ax.text(0.95, 0.05, 'CD2 (Deuterons)', transform=ax.transAxes, ha='right', va='top', color='red', fontsize=16)
+        
+        ax.set_xlabel('X Position [cm]')
+        ax.set_ylabel('Y Position [cm]')
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Combined input geometry plot saved to {filename}')
+    
+    def plot_separation_analysis(self, filename: Optional[str] = None) -> None:
+        """
+        Plot detailed separation analysis showing crossover statistics.
+        """
+        if not self.dual_data:
+            raise ValueError("Dual data not available. Only applicable for dual foil spectrometers.")
+        
+        spec_ch2 = self.spectrometer
+        spec_cd2 = self.dual_data['spectrometer']
+        
+        if filename is None:
+            filename = f'{spec_ch2.figure_directory}/separation_analysis.png'
+        
+        # Get separation statistics
+        sep_stats = self.dual_spectrometer.calculate_physical_separation()
+        
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # Left plot: Y-position histograms
+        y_proton = spec_ch2.output_beam[:, 2] * 100  # cm
+        y_deuteron = spec_cd2.output_beam[:, 2] * 100  # cm
+        
+        bins = np.linspace(min(y_proton.min(), y_deuteron.min()), 
+                          max(y_proton.max(), y_deuteron.max()), 50)
+        
+        axes[0].hist(y_proton, bins=bins, alpha=0.6, label='Protons (CH2)', 
+                    color='blue', edgecolor='black', linewidth=0.5, density=True)
+        axes[0].hist(y_deuteron, bins=bins, alpha=0.6, label='Deuterons (CD2)', 
+                    color='red', edgecolor='black', linewidth=0.5, density=True)
+        axes[0].axvline(0, color='black', linestyle='--', linewidth=2, 
+                       label='Y=0 divider', alpha=0.7)
+        
+        # Add shaded regions for crossovers
+        axes[0].axvspan(0, bins[-1], alpha=0.1, color='red')
+        axes[0].axvspan(bins[0], 0, alpha=0.1, color='blue')
+        
+        # Set x limits
+        axes[0].set_xlim(bins[0], bins[-1])
+        
+        axes[0].set_xlabel('Y Position [cm]')
+        axes[0].set_ylabel('Probability Density')
+        axes[0].set_title('Y-Position Distribution at Detector')
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        
+        # Right plot: Separation statistics bar chart
+        categories = ['Protons\n(should be <0)', 'Deuterons\n(should be >0)', 'Overall']
+        stayed = [sep_stats['proton_separation_percentage'], 
+                 sep_stats['deuteron_separation_percentage'],
+                 sep_stats['overall_separation_percentage']]
+        crossed = [100 - sep_stats['proton_separation_percentage'],
+                  100 - sep_stats['deuteron_separation_percentage'],
+                  100 - sep_stats['overall_separation_percentage']]
+        
+        x = np.arange(len(categories))
+        width = 0.35
+        
+        bars1 = axes[1].bar(x - width/2, stayed, width, label='Stayed in region', 
+                           color='green', alpha=0.7, edgecolor='black')
+        bars2 = axes[1].bar(x + width/2, crossed, width, label='Crossed midline', 
+                           color='orange', alpha=0.7, edgecolor='black')
+        
+        # Add percentage labels on bars
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                axes[1].text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height:.1f}%',
+                           ha='center', va='bottom', fontsize=9)
+        
+        axes[1].set_ylabel('Percentage (%)')
+        axes[1].set_title('Physical Separation Statistics')
+        axes[1].set_xticks(x)
+        axes[1].set_xticklabels(categories)
+        axes[1].legend()
+        axes[1].set_ylim(0, 105)
+        axes[1].grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'Separation analysis plot saved to {filename}')
 
 # =========== Contour Plotting ===============       
 class PlotParameter:

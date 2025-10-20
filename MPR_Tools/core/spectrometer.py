@@ -11,7 +11,6 @@ import time
 from .conversion_foil import ConversionFoil
 from .hodoscope import Hodoscope
 from ..analysis.performance import PerformanceAnalyzer
-from ..analysis.plotting import SpectrometerPlotter
 
 class MPRSpectrometer:
     """
@@ -54,7 +53,6 @@ class MPRSpectrometer:
         
         # Initialize helper classes
         self.performance_analyzer = PerformanceAnalyzer(self)
-        self.plotter = SpectrometerPlotter(self)
         
         # Load transfer map
         # TODO: add functionality to check if a calibration curve exists for this map. If not, generate one!
@@ -692,34 +690,6 @@ class MPRSpectrometer:
     
     def generate_performance_curve(self, *args, **kwargs):
         return self.performance_analyzer.generate_performance_curve(*args, **kwargs)
-    
-    # Delegate plotting methods to helper classes  
-    def plot_focal_plane_distribution(self, *args, **kwargs):
-        return self.plotter.plot_focal_plane_distribution(*args, **kwargs)
-        
-    def plot_phase_space(self, *args, **kwargs):
-        return self.plotter.plot_phase_space(*args, **kwargs)
-    
-    def _plot_monoenergetic_analysis(self, *args, **kwargs):
-        return self.plotter._plot_monoenergetic_analysis(*args, **kwargs)
-    
-    def _plot_performance(self, *args, **kwargs):
-        return self.plotter._plot_performance(*args, **kwargs)
-    
-    def plot_simple_position_histogram(self, *args, **kwargs):
-        return self.plotter.plot_simple_position_histogram(*args, **kwargs)
-    
-    def plot_input_ray_geometry(self, *args, **kwargs):
-        return self.plotter.plot_input_ray_geometry(*args, **kwargs)
-    
-    def plot_hydron_density_heatmap(self, *args, **kwargs):
-        return self.plotter.plot_hydron_density_heatmap(*args, **kwargs)
-    
-    def plot_characteristic_rays(self, *args, **kwargs):
-        return self.plotter.plot_characteristic_rays(*args, **kwargs)
-    
-    def plot_synthetic_neutron_histogram(self, *args, **kwargs):
-        return self.plotter.plot_synthetic_neutron_histogram(*args, **kwargs)
     
     def get_system_summary(self) -> dict:
         """

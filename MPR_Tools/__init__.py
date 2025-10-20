@@ -9,6 +9,7 @@ from .core.hodoscope import Hodoscope
 from .core.spectrometer import MPRSpectrometer
 from .core.dual_foil_spectrometer import DualFoilSpectrometer
 from .analysis.parameter_sweep import FoilSweeper
+from .analysis.plotting import SpectrometerPlotter, SweepPlotter
 
 __version__ = "1.0.0"
-__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer']
+__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter']
