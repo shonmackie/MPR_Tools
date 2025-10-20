@@ -163,7 +163,8 @@ class MPRSpectrometer:
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         save_beam: bool = True,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = None,
+        y_restriction: Optional[Literal['positive', 'negative']] = None
     ) -> None:
         """
         Generate hydron rays from neutron energy distribution using Monte Carlo with multiprocessing.
@@ -186,6 +187,11 @@ class MPRSpectrometer:
         # Calculate hydrons per process
         hydrons_per_process = num_hydrons // max_workers
         remaining_hydrons = num_hydrons % max_workers
+        
+        # Only use neutron energies within acceptance range
+        idx = (neutron_energies >= self.min_energy) & (neutron_energies <= self.max_energy)
+        neutron_energies = neutron_energies[idx]
+        energy_distribution = energy_distribution[idx]
         
         # Weight energy distribution by n-h scattering cross section
         weighted_distribution = (energy_distribution * 
@@ -220,7 +226,8 @@ class MPRSpectrometer:
                         self.conversion_foil,
                         self.reference_energy,
                         progress_counter,
-                        progress_lock
+                        progress_lock,
+                        y_restriction
                     )
                     future = executor.submit(self._generate_batch_worker, *worker_args)
                     futures.append(future)
@@ -240,11 +247,11 @@ class MPRSpectrometer:
                 pbar.update(final_count - last_count)
             
             # Collect results
-            self.input_beam = np.array([[]])
+            self.input_beam = np.empty((0, 6), dtype=float)
             
             for i, future in enumerate(as_completed(futures)):
                 batch_results = future.result()
-                self.input_beam = np.concatenate(self.input_beam, batch_results)
+                self.input_beam = np.vstack((self.input_beam, batch_results))
         
         pbar.close()
         
@@ -265,13 +272,14 @@ class MPRSpectrometer:
         conversion_foil: ConversionFoil,
         reference_energy: float,
         progress_counter,
-        progress_lock
+        progress_lock,
+        y_restriction: Optional[Literal['positive', 'negative']] = None  # Add thi
     ) -> np.ndarray:
         """Generate a batch of hydrons in a separate process."""
         # Create independent random number generator
         rng = np.random.default_rng(seed_offset)
         
-        batch_results = np.array([])
+        batch_results = np.empty((0, 6), dtype=float)
         
         while len(batch_results) < batch_size:
             try:                
@@ -285,7 +293,8 @@ class MPRSpectrometer:
                     include_kinematics, 
                     include_stopping_power_loss, 
                     z_sampling=z_sampling,
-                    rng=rng  # Pass the worker's RNG
+                    rng=rng,  # Pass the worker's RNG
+                    y_restriction=y_restriction
                 )
                 
                 # Convert to spectrometer coordinates
@@ -297,14 +306,14 @@ class MPRSpectrometer:
                 
                 energy_relative = (hydron_energy - reference_energy) / reference_energy
                 
-                batch_results = np.concatenate(batch_results, np.array([x0, angle_x, y0, angle_y, energy_relative, neutron_energy]))
+                batch_results = np.vstack((batch_results, np.array([x0, angle_x, y0, angle_y, energy_relative, neutron_energy])))
                 
                 # Update progress counter thread-safely
                 with progress_lock:
                     progress_counter.value += 1
                     
             except Exception:
-                print("Failed to generate hydron")
+                print('Failed to generate hydron')
                 pass  # Skip failed generations
         
         return batch_results
@@ -621,7 +630,7 @@ class MPRSpectrometer:
         
         return energies
     
-    def get_proton_density_map(
+    def get_hydron_density_map(
         self, 
         dx: float = 0.005, 
         dy: float = 0.005
@@ -703,8 +712,8 @@ class MPRSpectrometer:
     def plot_input_ray_geometry(self, *args, **kwargs):
         return self.plotter.plot_input_ray_geometry(*args, **kwargs)
     
-    def plot_proton_density_heatmap(self, *args, **kwargs):
-        return self.plotter.plot_proton_density_heatmap(*args, **kwargs)
+    def plot_hydron_density_heatmap(self, *args, **kwargs):
+        return self.plotter.plot_hydron_density_heatmap(*args, **kwargs)
     
     def plot_characteristic_rays(self, *args, **kwargs):
         return self.plotter.plot_characteristic_rays(*args, **kwargs)

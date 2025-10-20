@@ -21,6 +21,36 @@ class SpectrometerPlotter:
     
     def __init__(self, spectrometer: MPRSpectrometer) -> None:
         self.spectrometer = spectrometer
+        self.dual_data = None  # Will be set for dual-foil mode
+        
+    def set_dual_data(
+        self, 
+        spectrometer_secondary: MPRSpectrometer,
+        primary_label: str = 'Protons (CH2)',
+        secondary_label: str = 'Deuterons (CD2)',
+        primary_color: str = 'blue',
+        secondary_color: str = 'red'
+    ) -> None:
+        """
+        Enable dual-foil plotting mode.
+        
+        When set, all plot methods will overlay data from both spectrometers
+        with distinct colors and labels.
+        
+        Args:
+            spectrometer_secondary: Secondary spectrometer (e.g., CD2)
+            primary_label: Label for primary data
+            secondary_label: Label for secondary data  
+            primary_color: Color for primary data
+            secondary_color: Color for secondary data
+        """
+        self.dual_data = {
+            'spectrometer': spectrometer_secondary,
+            'primary_label': primary_label,
+            'secondary_label': secondary_label,
+            'primary_color': primary_color,
+            'secondary_color': secondary_color
+        }
     
     def plot_focal_plane_distribution(
         self, 
@@ -82,6 +112,20 @@ class SpectrometerPlotter:
         ax.set_title(f'{self.spectrometer.conversion_foil.particle.capitalize()} Distribution in Focal Plane')
         ax.grid(True, alpha=0.3)
         
+        if self.dual_data:
+            spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            hydron_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
+            scatter2 = ax.scatter(
+                spec2.output_beam[:, 0]*100, 
+                spec2.output_beam[:, 2]*100,
+                c=hydron_energies2,
+                s=point_size,
+                cmap='cool',
+                alpha=0.7,
+            )
+            fig.colorbar(scatter2, label=f'{spec2.conversion_foil.particle.capitalize()} Energy [MeV]')
+            ax.set_title(f'{self.spectrometer.conversion_foil.particle.capitalize()} and {spec2.conversion_foil.particle.capitalize()} Distribution in Focal Plane')
+        
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -129,7 +173,7 @@ class SpectrometerPlotter:
             c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
         )
         axes[1, 0].set_xlabel('X Position [cm]')
-        axes[1, 0].set_ylabel('E$_{proton}$ [MeV]')
+        axes[1, 0].set_ylabel('E$_{hydron}$ [MeV]')
         axes[1, 0].set_title('X Position-Energy')
         axes[1, 0].grid(True, alpha=0.3)
         
@@ -145,6 +189,38 @@ class SpectrometerPlotter:
         
         # Add colorbar
         fig.colorbar(scatter1, ax=axes, label=f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]', shrink=0.8)
+        
+        # Plot dual data if available
+        if self.dual_data:
+            spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            hydron_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
+            
+            # X-Y position plot
+            scatter1 = axes[0, 0].scatter(
+                spec2.output_beam[:, 0] * 100, spec2.output_beam[:, 2] * 100,
+                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+            )
+            
+            # X position vs X angle
+            scatter2 = axes[0, 1].scatter(
+                spec2.output_beam[:, 0] * 100, spec2.output_beam[:, 1] * 1000,
+                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+            )
+            
+            # X position vs energy
+            scatter3 = axes[1, 0].scatter(
+                spec2.output_beam[:, 0] * 100, spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy,
+                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+            )
+            
+            # Y position vs Y angle
+            scatter4 = axes[1, 1].scatter(
+                spec2.output_beam[:, 2] * 100, spec2.output_beam[:, 3] * 1000,
+                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+            )
+            
+            # Add colorbar
+            fig.colorbar(scatter1, ax=axes, label=f'{spec2.conversion_foil.particle.capitalize()} Energy [MeV]', shrink=0.8)
         
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -223,7 +299,7 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(scatter, ax=ax)
-        cbar.set_label('Proton Energy [MeV]')
+        cbar.set_label('Hydron Energy [MeV]')
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
@@ -245,7 +321,7 @@ class SpectrometerPlotter:
         num_bins: int = 40
     ) -> None:
         """
-        Plot a simple histogram of proton counts vs horizontal position.
+        Plot a simple histogram of hydron counts vs horizontal position.
         
         Args:
             filename: Output filename for the plot
@@ -265,23 +341,36 @@ class SpectrometerPlotter:
         counts, bins, patches = ax.hist(
             x_positions, 
             bins=np.linspace(x_range[0], x_range[1], num_bins),
+            density=True,
             alpha=0.7,
             color='steelblue',
             edgecolor='black',
             linewidth=0.5
         )
         
+        # Add dual data if available
+        if self.dual_data:
+            spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            x_positions2 = spec2.output_beam[:, 0]*100 # cm
+            x_range2 = (x_positions2.min(), x_positions2.max())
+            
+            counts2, bins2, patches2 = ax.hist(
+                x_positions2, 
+                bins=np.linspace(x_range2[0], x_range2[1], num_bins),
+                density=True,
+                alpha=0.7,
+                color='indianred',
+                edgecolor='black',
+                linewidth=0.5,
+                label=self.dual_data['secondary_label']
+            )
+            ax.legend()
+        
         ax.set_xlabel('Horizontal Position [cm]')
         ax.set_ylabel('Counts')
-        ax.set_title('Proton Counts vs Position')
+        ax.set_title('Hydron Counts vs Position')
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
-        
-        # Add statistics text
-        mean_pos = np.mean(x_positions)
-        std_pos = np.std(x_positions)
-        ax.axvline(mean_pos, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_pos:.4f} m')
-        ax.legend()
         
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
@@ -311,10 +400,30 @@ class SpectrometerPlotter:
         
         # Foil (vertical line at z=0)
         ax.vlines(0, -foil_radius, foil_radius, color='blue', linewidth=3, label='Conversion Foil')
+        # Add text label for foil
+        ax.text(
+            0,
+            foil_radius,
+            'Foil',
+            ha='left',
+            va='bottom',
+            color='blue',
+            fontsize=12
+        )
         
         # Aperture (vertical line at aperture distance)
         ax.vlines(aperture_distance, -aperture_radius, aperture_radius, 
                 color='red', linewidth=3, label='Aperture')
+        # Add text label for aperture
+        ax.text(
+            aperture_distance,
+            aperture_radius,
+            'Aperture',
+            ha='right',
+            va='bottom',
+            color='red',
+            fontsize=12
+        )
         
         # Draw sample of input rays
         num_rays_to_plot = min(len(self.spectrometer.input_beam), 200)  # Limit for clarity
@@ -323,21 +432,51 @@ class SpectrometerPlotter:
         for i in range(0, len(self.spectrometer.input_beam), max(1, len(self.spectrometer.input_beam) // num_rays_to_plot)):
             ray = self.spectrometer.input_beam[i]
             x0, angle_x, y0, angle_y = ray[:4]
-            x0 *= 100 # cm
             y0 *= 100 # cm
             
-            # Calculate ray trajectory (assuming small angles)
-            slope = np.tan(angle_x)
-            x_trajectory = slope * z_coords + x0
+            # Calculate ray trajectory
+            slope = np.tan(angle_y)
+            y_trajectory = slope * z_coords + y0
             
-            # Only plot rays that stay within reasonable bounds
-            if np.all(np.abs(x_trajectory) < 2 * max(foil_radius, aperture_radius)):
-                ax.plot(z_coords, x_trajectory, alpha=0.4, color='green', linewidth=0.5)
+            ax.plot(z_coords, y_trajectory, alpha=0.4, color='green', linewidth=0.5)
+                
+        # Plot dual data if available
+        if self.dual_data:
+            spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            for i in range(0, len(spec2.input_beam), max(1, len(spec2.input_beam) // num_rays_to_plot)):
+                ray = spec2.input_beam[i]
+                x0, angle_x, y0, angle_y = ray[:4]
+                y0 *= 100 # cm
+                
+                # Calculate ray trajectory
+                slope = np.tan(angle_y)
+                y_trajectory = slope * z_coords + y0
+                
+                ax.plot(z_coords, y_trajectory, alpha=0.4, color='orange', linewidth=0.5)
+            
+            # Add text labels for dual rays
+            ax.text(
+                aperture_distance/2,
+                foil_radius,
+                self.dual_data['primary_label'],
+                ha='center',
+                va='bottom',
+                color='green',
+                fontsize=12
+            )
+            ax.text(
+                aperture_distance/2,
+                -foil_radius,
+                self.dual_data['secondary_label'],
+                ha='center',
+                va='top',
+                color='orange',
+                fontsize=12
+            )
         
         ax.set_xlabel('Z Distance [cm]')
-        ax.set_ylabel('X Position [cm]')
-        ax.set_title('Input Ray Geometry (X-Z Projection)')
-        ax.legend()
+        ax.set_ylabel('Y Position [cm]')
+        ax.set_title('Input Ray Geometry (Y-Z Projection)')
         ax.grid(True, alpha=0.3)
         
         # Set reasonable axis limits
@@ -350,14 +489,14 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Input ray geometry plot saved to {filename}')
 
-    def plot_proton_density_heatmap(
+    def plot_hydron_density_heatmap(
         self, 
         filename: Optional[str] = None,
         dx: float = 0.005, 
         dy: float = 0.005
     ) -> None:
         """
-        Plot a heatmap of proton density in the focal plane.
+        Plot a heatmap of hydron density in the focal plane.
         
         Args:
             filename: Output filename for the plot
@@ -365,9 +504,9 @@ class SpectrometerPlotter:
             dy: Y-direction resolution in meters
         """
         if filename == None:
-            filename = f'{self.spectrometer.figure_directory}/proton_density_heatmap.png'
+            filename = f'{self.spectrometer.figure_directory}/hydron_density_heatmap.png'
         
-        density, X_mesh, Y_mesh = self.spectrometer.get_proton_density_map(dx, dy)
+        density, X_mesh, Y_mesh = self.spectrometer.get_hydron_density_map(dx, dy)
         
         fig, ax = plt.subplots(figsize=(10, 8))
         
@@ -380,17 +519,25 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        cbar.set_label('log$_{10}$(Proton Density [protons/cm$^2$])')
+        cbar.set_label('log$_{10}$(Hydron Density [hydrons/cm$^2$])')
+        
+        # Add dual data if available
+        if self.dual_data:
+            spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            density2, X_mesh2, Y_mesh2 = spec2.get_hydron_density_map(dx, dy)
+            im2 = ax.pcolormesh(X_mesh2*100, Y_mesh2*100, np.log10(density2 * Yn * geometry_efficiency * foil_efficiency), cmap='cool', shading='auto', alpha=0.5)
+            cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
+            cbar2.set_label('log$_{10}$(Hydron Density [hydrons/cm$^2$]) - Secondary')
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
-        ax.set_title('Proton Density in Focal Plane')
+        ax.set_title('Hydron Density in Focal Plane')
         ax.set_aspect('equal')
         
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f'Proton density heatmap saved to {filename}')
+        print(f'Hydron density heatmap saved to {filename}')
         
     def plot_synthetic_neutron_histogram(
         self,
@@ -404,6 +551,12 @@ class SpectrometerPlotter:
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         # Plot histogram
         hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', linewidth=3, density=True)
+        
+        # Add dual data if available
+        if self.dual_data:
+            spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            dsr2, plasma_temperature2, fwhm2, dsr_energy_range2, primary_energy_range2, energies2 = spec2.get_plasma_parameters(n_bins=n_bins)
+            hist2, bins2, _ = ax.hist(energies2, bins=n_bins, histtype='step', color='tab:orange', linewidth=3, density=True)
         
         # Highlight dsr and primary range
         ax.axvspan(dsr_energy_range[0], dsr_energy_range[1], color='tab:red', alpha=0.2)
@@ -535,7 +688,7 @@ class SpectrometerPlotter:
         # Left y-axis: position
         color_position = 'tab:blue'
         ax1.set_xlabel('Neutron Energy [MeV]')
-        ax1.set_ylabel('Proton Position [cm]', color=color_position)
+        ax1.set_ylabel('Hydron Position [cm]', color=color_position)
         
         # Plot position curve
         ax1.plot(energies, positions * 100, color=color_position, linewidth=2,

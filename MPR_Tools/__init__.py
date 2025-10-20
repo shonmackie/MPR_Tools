@@ -7,7 +7,8 @@ A comprehensive toolkit for analyzing the performance of Magnetic Proton Recoil 
 from .core.conversion_foil import ConversionFoil
 from .core.hodoscope import Hodoscope
 from .core.spectrometer import MPRSpectrometer
+from .core.dual_foil_spectrometer import DualFoilSpectrometer
 from .analysis.parameter_sweep import FoilSweeper
 
 __version__ = "1.0.0"
-__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper']
+__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer']
