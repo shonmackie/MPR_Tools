@@ -764,90 +764,100 @@ class SpectrometerPlotter:
             angle_range: Angular range (min, max) in radians for differential cross section
             num_angles: Number of angular points for differential cross section
         """
+        foil = self.spectrometer.conversion_foil
+        title = f'{foil.particle} at {energy_MeV:.2f} MeV'
+        
         if figure_directory is None:
             figure_directory = self.spectrometer.figure_directory
         if filename_prefix is None:
-            filename_prefix = f'{figure_directory}/foil_{self.spectrometer.conversion_foil.particle}'
+            filename_prefix = f'{figure_directory}/foil_{foil.particle}'
         else:
             filename_prefix = f'{figure_directory}/{filename_prefix}'
+            
+        fig, axs = plt.subplots(1, 3, figsize=(8, 4))
         
         # ========== Plot 1: Differential Cross Section vs Lab Angle ==========
-        fig, ax = plt.subplots(figsize=(5, 4))
-        
-        cos_angles = np.linspace(np.cos(angle_range[0]), np.cos(angle_range[1]), num_angles)
-        angles_rad = np.arccos(cos_angles)
+        angles_rad = np.linspace(angle_range[0], angle_range[1], num_angles)
         angles_deg = np.degrees(angles_rad)
         
-        diff_xs_lab = self.spectrometer.conversion_foil.calculate_differential_xs_lab(angles_rad, energy_MeV)
+        diff_xs_lab = foil.calculate_differential_xs_lab(angles_rad, energy_MeV)
         
-        ax.plot(angles_deg, diff_xs_lab * 1e28, 'b-', linewidth=2)
-        ax.set_xlabel('Angle [deg]')
-        ax.set_ylabel('d$\sigma$/d$\Omega$ [barns/sr]')
-        ax.set_title(f'Differential Cross Section - {self.spectrometer.conversion_foil.particle.capitalize()} at {energy_MeV:.1f} MeV')
-        ax.grid(True, alpha=0.3)
-        
-        filename = f'{filename_prefix}_E{energy_MeV:.1f}MeV_differential_xs.png'
-        fig.tight_layout()
-        fig.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f'Differential cross section plot saved to {filename}')
+        axs[0].plot(angles_deg, diff_xs_lab * 1e28, 'tab:blue', linewidth=2)
+        axs[0].set_xlabel('Angle [deg]')
+        axs[0].set_ylabel('d$\sigma$/d$\Omega$ [barns/sr]')
+        axs[0].grid(True, alpha=0.3)
         
         # ========== Plot 2: Cross Sections vs Energy ==========
-        fig, ax = plt.subplots(figsize=(5, 4))
-        
         # Use raw data from files (no interpolation)
         # n-hydron cross section data
-        nh_energies_eV = self.spectrometer.conversion_foil.nh_cross_section_data[0]
+        nh_energies_eV = foil.nh_cross_section_data[0]
         nh_energies_MeV = nh_energies_eV * 1e-6  # Convert eV to MeV
-        nh_xs_barns = self.spectrometer.conversion_foil.nh_cross_section_data[1]  # Already in barns
+        nh_xs_barns = foil.nh_cross_section_data[1]  # Already in barns
         
         # n-C12 cross section data
-        nc12_energies_eV = self.spectrometer.conversion_foil.nc12_cross_section_data[0]
+        nc12_energies_eV = foil.nc12_cross_section_data[0]
         nc12_idx = (nc12_energies_eV >= np.min(nh_energies_eV)) & (nc12_energies_eV <= np.max(nh_energies_eV))
         nc12_energies_MeV = nc12_energies_eV[nc12_idx] * 1e-6  # Convert eV to MeV
-        nc12_xs_barns = self.spectrometer.conversion_foil.nc12_cross_section_data[1, nc12_idx]  # Already in barns
+        nc12_xs_barns = foil.nc12_cross_section_data[1, nc12_idx]  # Already in barns
         
-        ax.plot(nh_energies_MeV, nh_xs_barns, 'r-', linewidth=2, 
-                label=f'n-{self.spectrometer.conversion_foil.particle[0]} elastic')
-        ax.plot(nc12_energies_MeV, nc12_xs_barns, 'g-', linewidth=2, 
+        axs[1].plot(nh_energies_MeV, nh_xs_barns, 'tab:blue', linewidth=2, 
+                label=f'n-{foil.particle[0]} elastic')
+        axs[1].plot(nc12_energies_MeV, nc12_xs_barns, 'g-', linewidth=2, 
                 label='n-C12 elastic')
-        ax.axvline(energy_MeV, color='k', linestyle='--', alpha=0.7, 
+        axs[1].axvline(energy_MeV, color='k', linestyle='--', alpha=0.7, 
                     label=f'Current energy: {energy_MeV:.1f} MeV')
         
-        ax.set_xlabel('Neutron Energy [MeV]')
-        ax.set_ylabel('Cross Section [barns]')
-        ax.grid(True, alpha=0.3)
-        ax.set_yscale('log')
-        ax.set_xscale('log')
-        ax.legend()
-        
-        filename = f'{filename_prefix}_cross_sections.png'
-        fig.tight_layout()
-        fig.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f'Cross sections plot saved to {filename}')
+        axs[1].set_xlabel('Neutron Energy [MeV]')
+        axs[1].set_ylabel('Cross Section [barns]')
+        axs[1].grid(True, alpha=0.3)
+        axs[1].set_yscale('log')
+        axs[1].set_xscale('log')
         
         # ========== Plot 3: Stopping Power vs Energy ==========
-        fig, ax = plt.subplots(figsize=(5, 4))
-        
         # Use raw SRIM data (no interpolation)
-        srim_energies_MeV = self.spectrometer.conversion_foil.srim_data[0]  # Already in MeV
-        srim_stopping_power = self.spectrometer.conversion_foil.srim_data[1] + self.spectrometer.conversion_foil.srim_data[2]  # Electronic + nuclear stopping
+        srim_energies_MeV = foil.srim_data[0]  # Already in MeV
+        srim_stopping_power = foil.srim_data[1] + foil.srim_data[2]  # Electronic + nuclear stopping
         
-        ax.plot(srim_energies_MeV, srim_stopping_power, 'purple', linewidth=2)
+        axs[2].plot(srim_energies_MeV, srim_stopping_power, 'tab:blue', linewidth=2)
         
-        ax.set_title(f'{self.spectrometer.conversion_foil.particle.capitalize()} in {self.spectrometer.conversion_foil.foil_material}')
-        ax.set_xlabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
-        ax.set_ylabel('Stopping Power [MeV/mm]')
-        ax.grid(True, alpha=0.3)
-        ax.set_xscale('log')
-        ax.set_yscale('log')
+        axs[2].set_xlabel(f'Hydron Energy [MeV]')
+        axs[2].set_ylabel('Stopping Power [MeV/mm]')
+        axs[2].grid(True, alpha=0.3)
+        axs[2].set_xscale('log')
+        axs[2].set_yscale('log')
         
-        filename = f'{filename_prefix}_stopping_power.png'
+        # Add dual data if available
+        if self.dual_data:
+            spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            foil2 = spec2.conversion_foil
+            title = f'{foil.particle} and {foil2.particle} at {energy_MeV:.2f} MeV'
+            
+            # differential cross section data
+            diff_xs_lab2 = foil2.calculate_differential_xs_lab(angles_rad, energy_MeV)
+            
+            axs[0].plot(angles_deg, diff_xs_lab2 * 1e28, 'darkorange', linewidth=2)
+            
+            # n-hydron cross section data
+            nh_energies_eV2 = foil2.nh_cross_section_data[0]
+            nh_energies_MeV2 = nh_energies_eV2 * 1e-6  # Convert eV to MeV
+            nh_xs_barns2 = foil2.nh_cross_section_data[1]  # Already in barns
+            
+            axs[1].plot(nh_energies_MeV2, nh_xs_barns2, 'darkorange', linewidth=2, 
+                    label=f'n-{foil2.particle[0]} elastic (Secondary)')
+            
+            # Stopping power for dual data
+            srim_energies_MeV2 = foil2.srim_data[0]  # Already in MeV
+            srim_stopping_power2 = foil2.srim_data[1] + foil2.srim_data[2]  # Electronic + nuclear stopping
+            
+            axs[2].plot(srim_energies_MeV2, srim_stopping_power2, 'darkorange', linewidth=2)
+        
+        axs[1].legend()
+        filename = f'{filename_prefix}_E{energy_MeV:.1f}MeV_data.png'
+        fig.suptitle(title)
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f'Stopping power plot saved to {filename}')
+        print(f'Data plot saved to {filename}')
 
 # =========== Contour Plotting ===============       
 class PlotParameter:
