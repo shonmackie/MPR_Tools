@@ -507,7 +507,9 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        cbar.set_label('log$_{10}$(Hydron Density [hydrons/cm$^2$])')
+        particle = self.spectrometer.conversion_foil.particle
+        units = f'[{particle}/cm$^2$-source]' if neutron_yield == None else f'[{particle}/cm$^2$]'
+        cbar.set_label(f'log$_{{10}}$(Fluence {units})')
         
         # Add dual data if available
         if self.dual_data:
@@ -515,11 +517,12 @@ class SpectrometerPlotter:
             density2, X_mesh2, Y_mesh2 = performance_analyzer2.get_hydron_density_map(dx, dy)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap='cool', shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-            cbar2.set_label('log$_{10}$(Hydron Density [hydrons/cm$^2$]) - Secondary')
+            particle2 = self.dual_data['spectrometer'].conversion_foil.particle
+            units = f'[{particle2}/cm$^2$-source]' if neutron_yield == None else f'[{particle2}/cm$^2$]'
+            cbar2.set_label(f'log$_{{10}}$(Fluence {units})')
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
-        ax.set_title('Hydron Density in Focal Plane')
         ax.set_aspect('equal')
         
         fig.tight_layout()
