@@ -23,8 +23,6 @@ class PerformanceAnalyzer:
         num_hydrons: int = 10000,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
-        generate_figure: bool = False,
-        figure_name: Optional[str] = None,
         verbose: bool = False
     ) -> Tuple[float, float, float, float]:
         """
@@ -36,8 +34,6 @@ class PerformanceAnalyzer:
             num_hydrons: Number of hydrons to simulate
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
-            generate_figure: Whether to generate analysis plots
-            figure_name: Name for output figure
             verbose: Print detailed results
             
         Returns:
@@ -77,16 +73,7 @@ class PerformanceAnalyzer:
         dispersion = np.gradient(mean_positions, energies)[1]
 
         energy_resolution = 1000 / (dispersion / fwhm_0) if fwhm_0 > 0 else 0 # keV
-        
-        # Generate figure if requested
-        if generate_figure:
-            if figure_name == None:
-                figure_name = (
-                    f'{self.spectrometer.figure_directory}/Monoenergetic_En{neutron_energy:.1f}MeV_T{self.spectrometer.conversion_foil.thickness_um:.0f}um_E0{self.spectrometer.reference_energy:.1f}MeV.png'
-                )
-            
-            self.spectrometer._plot_monoenergetic_analysis(figure_name, neutron_energy, mean_position_0, std_deviation_0)
-        
+
         if verbose:
             print('Ion Optical Image Parameters:')
             print(f'  Mean position [cm]: {mean_position_0 * 100:.3f}')
@@ -103,7 +90,6 @@ class PerformanceAnalyzer:
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         output_filename: Optional[str] = None,
-        generate_figure: bool = True,
         reset: bool = True
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -116,7 +102,6 @@ class PerformanceAnalyzer:
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
-            generate_figure: Whether to generate comprehensive plot
             reset: Whether to regenerate the dataset or load an existing one
             
         Returns:
@@ -146,7 +131,6 @@ class PerformanceAnalyzer:
                     num_hydrons=num_hydrons_per_energy, 
                     include_kinematics=include_kinematics, 
                     include_stopping_power_loss=include_stopping_power_loss,
-                    generate_figure=False,
                     verbose=False
                 )
                 positions_mean[i] = mean_pos
@@ -186,13 +170,182 @@ class PerformanceAnalyzer:
             geometric_efficiencies = df['geometric efficiency'].to_numpy()
             total_efficiencies = df['total efficiency'].to_numpy()
         
-        # Generate performance figure if requested
-        if generate_figure:
-            figure_name = output_filename.replace('.csv', '.png')
-            self.spectrometer._plot_performance(
-                figure_name, 
-                energies, positions_mean, positions_std, 
-                energy_resolutions, total_efficiencies
-            )
-        
         return energies, positions_mean, positions_std, energy_resolutions, total_efficiencies
+    
+    def get_plasma_parameters(
+        self,
+        n_bins: int = 200,
+        dsr_energy_range: Tuple[float, float] = (10, 12),
+        primary_energy_range: Tuple[float, float] = (13, 15)
+    ) -> Tuple[float, float, float, Tuple[float, float], Tuple[float, float], np.ndarray]:
+        """
+        Get plasma parameters from the spectrometer object.
+        
+        Args:
+            n_bins:
+                Number of bins to use for histogram
+            dsr_energy_range:
+                Energy range for DSR in MeV
+            primary_energy_range:
+                Energy range for primary neutrons in MeV
+            
+        Returns:
+            Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies)
+        """
+        energies = self._get_neutron_spectrum()
+        
+        # Calculate dsr
+        ds_count = np.sum((energies > dsr_energy_range[0]) & (energies < dsr_energy_range[1]))
+        primary_count = np.sum((energies > primary_energy_range[0]) & (energies < primary_energy_range[1]))
+        dsr = ds_count / primary_count
+        
+        # Bin the energies into bins
+        hist, edges = np.histogram(energies, bins=n_bins)
+        
+        # Calculate plasma temperature
+        # Find FWHM of 14.1 MeV peak
+        # From J A Frenje 2020 Plasma Phys. Control. Fusion 62 023001
+        fwhm = self._get_fwhm(hist, edges)
+        m_rat = 5.0 # sum of neutron plus alpha mass divided by neutron mass
+        plasma_temperature = 9e-5 * m_rat / self.spectrometer.reference_energy * (fwhm * 1000)**2
+        
+        return dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies
+
+    def _get_fwhm(self, hist, edges):
+        """
+        Get full width at half maximum (FWHM) of largest peak of a histogram.
+        """
+        peak_idx = np.argmax(hist)
+        half_max = hist[peak_idx] / 2.0
+        
+        # Find leftmost and rightmost crossings
+        left_indices = np.where(hist[:peak_idx] >= half_max)[0]
+        right_indices = np.where(hist[peak_idx:] >= half_max)[0] + peak_idx
+        
+        if len(left_indices) == 0 or len(right_indices) == 0:
+            return 0.0
+        left_idx = left_indices[0]
+        right_idx = right_indices[-1]
+        return edges[right_idx] - edges[left_idx]
+    
+    def _load_performance_curve(self, performance_curve_file: Optional[str] = None) -> pd.DataFrame:
+        """
+        Loads comprehensive performance curve for analysis
+        """
+        # Load comprehensive performance curve
+        performance_curve_file = performance_curve_file or 'comprehensive_performance.csv'
+        try:
+            performance_df = pd.read_csv(f'{self.spectrometer.figure_directory}/{performance_curve_file}')
+            return performance_df
+        except:
+            raise ValueError(f'Performance curve file {performance_curve_file} not found. May need to generate first.')
+        
+    def _get_neutron_spectrum(self) -> np.ndarray:
+        """
+        Get neutron spectrum based on the x position of the output beam.
+        
+        Returns:
+            Neutron spectrum
+        """
+        # Convert the x positions to neutron energies based on the offset curve
+        x_positions = self.spectrometer.output_beam[:, 0]
+        
+        # Load comprehensive performance curve
+        performance_df = self._load_performance_curve()
+        input_energies = performance_df['energy [MeV]']
+        position_mean = performance_df['position mean [m]']
+        position_std = performance_df['position std [m]']
+        
+        # Interpolate to get the energies for the x positions
+        # TODO: interpolate with error
+        energies = np.interp(x_positions, position_mean, input_energies)
+        
+        return energies
+    
+    def get_hydron_density_map(
+        self, 
+        dx: float = 0.5, 
+        dy: float = 0.5,
+        foil_distance: Optional[float] = None,
+        neutron_yield: Optional[float] = None
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Calculate the density of proton impact sites in the focal plane.
+        
+        Args:
+            dx: X-direction resolution in cm
+            dy: Y-direction resolution in cm
+            foil_distance, optional: Distance between foil and target in meters
+            neutron_yield, optional: Neutron yield
+            
+        Returns:
+            Tuple of (density_array, X_meshgrid, Y_meshgrid)
+        """
+        if len(self.spectrometer.output_beam) == 0:
+            raise ValueError("No output beam data available. Run apply_transfer_map() first.")
+        
+        x_positions = self.spectrometer.output_beam[:, 0]
+        y_positions = self.spectrometer.output_beam[:, 2]
+        
+        # Convert to cm
+        x_positions *= 100
+        y_positions *= 100
+        
+        # Define grid boundaries
+        x_min, x_max = np.min(x_positions), np.max(x_positions)
+        y_min, y_max = np.min(y_positions), np.max(y_positions)
+        
+        # Create coordinate arrays
+        x_coords = np.linspace(x_min, x_max, int((x_max - x_min) / dx) + 1)
+        y_coords = np.linspace(y_min, y_max, int((y_max - y_min) / dy) + 1)
+        
+        print(f"Grid bounds: X=[{x_min:.4f}, {x_max:.4f}], Y=[{y_min:.4f}, {y_max:.4f}]")
+        
+        # Create meshgrids
+        X_mesh, Y_mesh = np.meshgrid(x_coords, y_coords)
+        density = np.zeros_like(X_mesh)
+        
+        # Calculate cell area in cm^2
+        cell_area_cm2 = dx*dy
+        
+        # Load performance curve to get foil efficiency and aperture solid angle
+        performance_df = self._load_performance_curve()
+        performance_energies = performance_df['energy [MeV]']
+        performance_efficiencies = performance_df['total efficiency']
+        
+        # Interpolate to get the efficiencies for the input energies
+        input_energies = self.spectrometer.input_beam[:, 4]
+        input_efficiencies = np.interp(input_energies, performance_energies, performance_efficiencies)
+        
+        # Bin protons into grid cells
+        for i, (x_pos, y_pos) in enumerate(zip(x_positions, y_positions)):
+            # Convert coordinates to grid indices
+            x_idx = int((x_pos - x_min) / dx)
+            y_idx = int((y_pos - y_min) / dy)
+            
+            # Ensure indices are within bounds
+            x_idx = max(0, min(x_idx, density.shape[1] - 1))
+            y_idx = max(0, min(y_idx, density.shape[0] - 1))
+            
+            # Add efficiency to cell
+            density[y_idx, x_idx] += input_efficiencies[i]
+        
+        # Convert to protons/cm^2/source_proton
+        total_protons = len(self.spectrometer.output_beam)
+        density /= (cell_area_cm2 * total_protons)
+        
+        # Calculate foil solid angle fraction
+        if foil_distance:
+            foil_solid_angle_fraction = self.spectrometer.conversion_foil.foil_radius**2 / (4 * foil_distance**2)
+            density *= foil_solid_angle_fraction
+            
+        # Add neutron yield
+        if neutron_yield:
+            density *= neutron_yield
+        
+        # Save the density map as csv
+        density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density.flatten()))
+        density_df = pd.DataFrame(density_data, columns=['X', 'Y', 'Density'])
+        density_df.to_csv(f'{self.spectrometer.figure_directory}/hydron_density_map.csv', index=False)        
+        
+        return density, X_mesh, Y_mesh

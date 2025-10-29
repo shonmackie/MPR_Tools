@@ -13,6 +13,7 @@ from labellines import labelLines
 
 from ..core.spectrometer import MPRSpectrometer
 from ..core.dual_foil_spectrometer import DualFoilSpectrometer
+from ..analysis.performance import PerformanceAnalyzer
 
 if TYPE_CHECKING:
     from ..analysis.parameter_sweep import FoilSweeper
@@ -25,11 +26,14 @@ class SpectrometerPlotter:
         if isinstance(spectrometer, MPRSpectrometer):
             self.spectrometer = spectrometer
             self.dual_data = None  # Will be set for dual-foil mode
+            self.performance_analyzer = PerformanceAnalyzer(spectrometer)
+            
         elif isinstance(spectrometer, DualFoilSpectrometer):
             # Dual-foil mode, primary foil is CH2, secondary foil is CD2
             self.spectrometer = spectrometer.spec_ch2
             self.dual_data = {
                 'spectrometer': spectrometer.spec_cd2,
+                'performance_analyzer': PerformanceAnalyzer(spectrometer.spec_cd2),
                 'primary_label': 'Protons (CH2)',
                 'secondary_label': 'Deuterons (CD2)',
                 'primary_color': 'blue',
@@ -479,30 +483,27 @@ class SpectrometerPlotter:
     def plot_hydron_density_heatmap(
         self, 
         filename: Optional[str] = None,
-        dx: float = 0.005, 
-        dy: float = 0.005
+        dx: float = 0.5, 
+        dy: float = 0.5,
+        neutron_yield: Optional[float] = None
     ) -> None:
         """
         Plot a heatmap of hydron density in the focal plane.
         
         Args:
             filename: Output filename for the plot
-            dx: X-direction resolution in meters
-            dy: Y-direction resolution in meters
+            dx: X-direction resolution in cm
+            dy: Y-direction resolution in cm
         """
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/hydron_density_heatmap.png'
         
-        density, X_mesh, Y_mesh = self.spectrometer.get_hydron_density_map(dx, dy)
+        density, X_mesh, Y_mesh = self.performance_analyzer.get_hydron_density_map(dx, dy, foil_distance=6.0, neutron_yield=neutron_yield)
         
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        # TODO: make this more generic to be per neutron by incorporating the efficiency at each energy
-        Yn = 1e16
-        geometry_efficiency = (np.pi * 0.8**2) / (np.pi * 600**2)
-        foil_efficiency = 0.25e-4
-        im = ax.pcolormesh(X_mesh*100, Y_mesh*100, np.log10(density * Yn * geometry_efficiency * foil_efficiency), cmap='plasma', shading='auto')
+        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(density), cmap='plasma', shading='auto')
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
@@ -510,9 +511,9 @@ class SpectrometerPlotter:
         
         # Add dual data if available
         if self.dual_data:
-            spec2: MPRSpectrometer = self.dual_data['spectrometer']
-            density2, X_mesh2, Y_mesh2 = spec2.get_hydron_density_map(dx, dy)
-            im2 = ax.pcolormesh(X_mesh2*100, Y_mesh2*100, np.log10(density2 * Yn * geometry_efficiency * foil_efficiency), cmap='cool', shading='auto', alpha=0.5)
+            performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
+            density2, X_mesh2, Y_mesh2 = performance_analyzer2.get_hydron_density_map(dx, dy)
+            im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap='cool', shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
             cbar2.set_label('log$_{10}$(Hydron Density [hydrons/cm$^2$]) - Secondary')
         
@@ -533,7 +534,7 @@ class SpectrometerPlotter:
     ):
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/synthetic_neutron_histogram.png'
-        dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies = self.spectrometer.get_plasma_parameters(n_bins=n_bins)
+        dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies = self.performance_analyzer.get_plasma_parameters(n_bins=n_bins)
         
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         # Plot histogram
@@ -541,8 +542,8 @@ class SpectrometerPlotter:
         
         # Add dual data if available
         if self.dual_data:
-            spec2: MPRSpectrometer = self.dual_data['spectrometer']
-            dsr2, plasma_temperature2, fwhm2, dsr_energy_range2, primary_energy_range2, energies2 = spec2.get_plasma_parameters(n_bins=n_bins)
+            performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
+            dsr2, plasma_temperature2, fwhm2, dsr_energy_range2, primary_energy_range2, energies2 = performance_analyzer2.get_plasma_parameters(n_bins=n_bins)
             hist2, bins2, _ = ax.hist(energies2, bins=n_bins, histtype='step', color='tab:orange', linewidth=3, density=True)
         
         # Highlight dsr and primary range
@@ -611,14 +612,21 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Synthetic neutron histogram saved to {filename}')
     
-    def _plot_monoenergetic_analysis(
-        self, 
-        filename: str, 
+    def plot_monoenergetic_analysis(
+        self,  
         neutron_energy: float, 
         mean_pos: float, 
-        std_dev: float
+        std_dev: float,
+        filename: Optional[str] = None,
     ) -> None:
         """Generate analysis plots for monoenergetic performance."""
+        if filename == None:
+            filename = (
+                f'{self.spectrometer.figure_directory}/' 
+                f'Monoenergetic_En{neutron_energy:.1f}MeV_'
+                f'T{self.spectrometer.conversion_foil.thickness_um:.0f}um_'
+                f'E0{self.spectrometer.reference_energy:.1f}MeV.png'
+            )
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         
         # Histogram of x positions
@@ -659,14 +667,14 @@ class SpectrometerPlotter:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
     
-    def _plot_performance(
-        self, 
-        filename: str, 
+    def plot_performance(
+        self,  
         energies: np.ndarray, 
         positions: np.ndarray, 
         position_uncertainties: np.ndarray,
         energy_resolutions: np.ndarray,
-        total_efficiencies: np.ndarray
+        total_efficiencies: np.ndarray,
+        filename: Optional[str] = None
     ) -> None:
         """Generate comprehensive performance plot with shared x-axis."""
         fig, ax1 = plt.subplots(1, 1, figsize=(6, 4))

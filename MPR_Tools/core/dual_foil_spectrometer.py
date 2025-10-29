@@ -152,7 +152,8 @@ class DualFoilSpectrometer:
         """
         # Split hydrons between foils based on energy_distribution
         ch2_idx = (neutron_energies >= self.ch2_min_energy) & (neutron_energies <= self.ch2_max_energy)
-        ch2_fraction = np.sum(energy_distribution[ch2_idx]) / np.sum(energy_distribution)
+        cd2_idx = (neutron_energies >= self.cd2_min_energy) & (neutron_energies <= self.cd2_max_energy)
+        ch2_fraction = np.sum(energy_distribution[ch2_idx]) / (np.sum(energy_distribution[ch2_idx]) + np.sum(energy_distribution[cd2_idx]))
         num_ch2 = int(num_hydrons * ch2_fraction)
         num_cd2 = num_hydrons - num_ch2
         

@@ -10,6 +10,7 @@ from .core.spectrometer import MPRSpectrometer
 from .core.dual_foil_spectrometer import DualFoilSpectrometer
 from .analysis.parameter_sweep import FoilSweeper
 from .analysis.plotting import SpectrometerPlotter, SweepPlotter
+from .analysis.performance import PerformanceAnalyzer
 
 __version__ = "1.0.0"
-__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter']
+__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter', 'PerformanceAnalyzer']
