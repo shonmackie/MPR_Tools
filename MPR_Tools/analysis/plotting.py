@@ -11,6 +11,11 @@ from scipy.stats import norm
 from scipy.interpolate import griddata
 from labellines import labelLines
 
+# Set default plotting parameters
+plt.rcParams['font.size'] = 16
+plt.rcParams['xtick.labelsize'] = 16
+plt.rcParams['ytick.labelsize'] = 16
+
 from ..core.spectrometer import MPRSpectrometer
 from ..core.dual_foil_spectrometer import DualFoilSpectrometer
 from ..analysis.performance import PerformanceAnalyzer
@@ -27,19 +32,24 @@ class SpectrometerPlotter:
             self.spectrometer = spectrometer
             self.dual_data = None  # Will be set for dual-foil mode
             self.performance_analyzer = PerformanceAnalyzer(spectrometer)
+            self.primary_color = 'tab:red'
+            self.primary_cmap = 'plasma'
             
         elif isinstance(spectrometer, DualFoilSpectrometer):
             # Dual-foil mode, primary foil is CH2, secondary foil is CD2
             self.spectrometer = spectrometer.spec_ch2
+            self.performance_analyzer = PerformanceAnalyzer(self.spectrometer)
             self.dual_data = {
                 'spectrometer': spectrometer.spec_cd2,
                 'performance_analyzer': PerformanceAnalyzer(spectrometer.spec_cd2),
                 'primary_label': 'Protons (CH2)',
                 'secondary_label': 'Deuterons (CD2)',
-                'primary_color': 'blue',
-                'secondary_color': 'red'
+                'secondary_color': 'tab:blue',
+                'secondary_cmap': 'GnBu'
             }
             self.dual_spectrometer = spectrometer
+            self.primary_color = 'tab:red'
+            self.primary_cmap = 'YlOrRd'
         else:
             raise ValueError(f'Invalid spectrometer type: {type(spectrometer)}. Should be MPRSpectrometer or DualFoilSpectrometer.')
     
@@ -93,7 +103,7 @@ class SpectrometerPlotter:
             self.spectrometer.output_beam[:, 2]*100,
             c=hydron_energies,
             s=point_size,
-            cmap='plasma',
+            cmap=self.primary_cmap,
             alpha=0.7
         )
         
@@ -111,7 +121,7 @@ class SpectrometerPlotter:
                 spec2.output_beam[:, 2]*100,
                 c=hydron_energies2,
                 s=point_size,
-                cmap='cool',
+                cmap=self.dual_data['secondary_cmap'],
                 alpha=0.7,
             )
             fig.colorbar(scatter2, label=f'{spec2.conversion_foil.particle.capitalize()} Energy [MeV]')
@@ -133,15 +143,19 @@ class SpectrometerPlotter:
             filename = f'{self.spectrometer.figure_directory}/phase_space.png'
         
         fig, axes = plt.subplots(2, 2, figsize=(8, 6), layout='constrained')
-        fig.suptitle('Phase Space', fontsize=16)
+        fig.suptitle('Phase Space')
         
         # Color by hydron energy
+        x_pos = self.spectrometer.output_beam[:, 0]
+        x_angle = self.spectrometer.output_beam[:, 1]
+        y_pos = self.spectrometer.output_beam[:, 2]
+        y_angle = self.spectrometer.output_beam[:, 3]
         hydron_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         
         # X-Y position plot
         scatter1 = axes[0, 0].scatter(
-            self.spectrometer.output_beam[:, 0] * 100, self.spectrometer.output_beam[:, 2] * 100,
-            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
+            x_pos, y_pos, c=hydron_energies,
+            s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[0, 0].set_xlabel('X Position [cm]')
         axes[0, 0].set_ylabel('Y Position [cm]')
@@ -150,8 +164,8 @@ class SpectrometerPlotter:
         
         # X position vs X angle
         scatter2 = axes[0, 1].scatter(
-            self.spectrometer.output_beam[:, 0] * 100, self.spectrometer.output_beam[:, 1] * 1000,
-            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
+            x_pos, x_angle * 1000, c=hydron_energies, 
+            s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[0, 1].set_xlabel('X Position [cm]')
         axes[0, 1].set_ylabel('X Angle [mrad]')
@@ -160,8 +174,8 @@ class SpectrometerPlotter:
         
         # X position vs energy
         scatter3 = axes[1, 0].scatter(
-            self.spectrometer.output_beam[:, 0] * 100, self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy,
-            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
+            x_pos, hydron_energies, c=hydron_energies,
+            s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[1, 0].set_xlabel('X Position [cm]')
         axes[1, 0].set_ylabel('E$_{hydron}$ [MeV]')
@@ -170,8 +184,8 @@ class SpectrometerPlotter:
         
         # Y position vs Y angle
         scatter4 = axes[1, 1].scatter(
-            self.spectrometer.output_beam[:, 2] * 100, self.spectrometer.output_beam[:, 3] * 1000,
-            c=hydron_energies, s=2.0, cmap='plasma', alpha=0.7
+            y_pos, y_angle * 1000, c=hydron_energies,
+            s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[1, 1].set_xlabel('Y Position [cm]')
         axes[1, 1].set_ylabel('Y Angle [mrad]')
@@ -184,30 +198,34 @@ class SpectrometerPlotter:
         # Plot dual data if available
         if self.dual_data:
             spec2: MPRSpectrometer = self.dual_data['spectrometer']
+            x_pos2 = spec2.output_beam[:, 0]
+            x_angle2 = spec2.output_beam[:, 1]
+            y_pos2 = spec2.output_beam[:, 2]
+            y_angle2 = spec2.output_beam[:, 3]
             hydron_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
             
             # X-Y position plot
             scatter1 = axes[0, 0].scatter(
-                spec2.output_beam[:, 0] * 100, spec2.output_beam[:, 2] * 100,
-                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+                x_pos2, y_pos2, c=hydron_energies2,
+                s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
             # X position vs X angle
             scatter2 = axes[0, 1].scatter(
-                spec2.output_beam[:, 0] * 100, spec2.output_beam[:, 1] * 1000,
-                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+                x_pos2, x_angle2 * 1000, c=hydron_energies2,
+                s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
             # X position vs energy
             scatter3 = axes[1, 0].scatter(
-                spec2.output_beam[:, 0] * 100, spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy,
-                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+                x_pos2, hydron_energies2, c=hydron_energies2,
+                s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
             # Y position vs Y angle
             scatter4 = axes[1, 1].scatter(
-                spec2.output_beam[:, 2] * 100, spec2.output_beam[:, 3] * 1000,
-                c=hydron_energies2, s=2.0, cmap='cool', alpha=0.7
+                y_pos2, y_angle2 * 1000, c=hydron_energies2,
+                s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
             # Add colorbar
@@ -272,7 +290,7 @@ class SpectrometerPlotter:
         
         # Create subplots
         fig, ax = plt.subplots(figsize=(16, 8))
-        fig.suptitle('Characteristic Ray Analysis', fontsize=16)
+        fig.suptitle('Characteristic Ray Analysis')
         
         # Focal plane distribution        
         # Scatter plot colored by energy
@@ -282,7 +300,7 @@ class SpectrometerPlotter:
             self.spectrometer.output_beam[:, 2] * 100,  # Convert to cm
             c=output_energies,
             s=20,
-            cmap='plasma',
+            cmap=self.primary_cmap,
             alpha=0.7,
             edgecolors='black',
             linewidths=0.5
@@ -334,7 +352,7 @@ class SpectrometerPlotter:
             bins=np.linspace(x_range[0], x_range[1], num_bins),
             density=True,
             alpha=0.7,
-            color='steelblue',
+            color=self.primary_color,
             edgecolor='black',
             linewidth=0.5
         )
@@ -350,7 +368,7 @@ class SpectrometerPlotter:
                 bins=np.linspace(x_range2[0], x_range2[1], num_bins),
                 density=True,
                 alpha=0.7,
-                color='indianred',
+                color=self.dual_data['secondary_color'],
                 edgecolor='black',
                 linewidth=0.5,
                 label=self.dual_data['secondary_label']
@@ -390,7 +408,7 @@ class SpectrometerPlotter:
         aperture_radius = self.spectrometer.conversion_foil.aperture_radius * 100
         
         # Foil (vertical line at z=0)
-        ax.vlines(0, -foil_radius, foil_radius, color='blue', linewidth=3, label='Conversion Foil')
+        ax.vlines(0, -foil_radius, foil_radius, color='tab:purple', linewidth=3, label='Conversion Foil')
         # Add text label for foil
         ax.text(
             0,
@@ -398,13 +416,13 @@ class SpectrometerPlotter:
             'Foil',
             ha='left',
             va='bottom',
-            color='blue',
+            color='tab:purple',
             fontsize=12
         )
         
         # Aperture (vertical line at aperture distance)
         ax.vlines(aperture_distance, -aperture_radius, aperture_radius, 
-                color='red', linewidth=3, label='Aperture')
+                color='tab:orange', linewidth=3, label='Aperture')
         # Add text label for aperture
         ax.text(
             aperture_distance,
@@ -412,7 +430,7 @@ class SpectrometerPlotter:
             'Aperture',
             ha='right',
             va='bottom',
-            color='red',
+            color='tab:orange',
             fontsize=12
         )
         
@@ -429,7 +447,7 @@ class SpectrometerPlotter:
             slope = np.tan(angle_y)
             y_trajectory = slope * z_coords + y0
             
-            ax.plot(z_coords, y_trajectory, alpha=0.4, color='green', linewidth=0.5)
+            ax.plot(z_coords, y_trajectory, alpha=0.4, color=self.primary_color, linewidth=0.5)
                 
         # Plot dual data if available
         if self.dual_data:
@@ -443,7 +461,7 @@ class SpectrometerPlotter:
                 slope = np.tan(angle_y)
                 y_trajectory = slope * z_coords + y0
                 
-                ax.plot(z_coords, y_trajectory, alpha=0.4, color='orange', linewidth=0.5)
+                ax.plot(z_coords, y_trajectory, alpha=0.4, color=self.dual_data['secondary_color'], linewidth=0.5)
             
             # Add text labels for dual rays
             ax.text(
@@ -452,7 +470,7 @@ class SpectrometerPlotter:
                 self.dual_data['primary_label'],
                 ha='center',
                 va='bottom',
-                color='green',
+                color=self.primary_color,
                 fontsize=12
             )
             ax.text(
@@ -461,13 +479,12 @@ class SpectrometerPlotter:
                 self.dual_data['secondary_label'],
                 ha='center',
                 va='top',
-                color='orange',
+                color=self.dual_data['secondary_color'],
                 fontsize=12
             )
         
         ax.set_xlabel('Z Distance [cm]')
         ax.set_ylabel('Y Position [cm]')
-        ax.set_title('Input Ray Geometry (Y-Z Projection)')
         ax.grid(True, alpha=0.3)
         
         # Set reasonable axis limits
@@ -503,7 +520,7 @@ class SpectrometerPlotter:
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(density), cmap='plasma', shading='auto')
+        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(density), cmap=self.primary_cmap, shading='auto')
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
@@ -515,7 +532,7 @@ class SpectrometerPlotter:
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             density2, X_mesh2, Y_mesh2 = performance_analyzer2.get_hydron_density_map(dx, dy)
-            im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap='cool', shading='auto', alpha=0.5)
+            im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
             units = f'[{particle2}/cm$^2$-source]' if neutron_yield == None else f'[{particle2}/cm$^2$]'
@@ -655,7 +672,7 @@ class SpectrometerPlotter:
             self.spectrometer.output_beam[:, 2]*100,
             c=hydron_energies,
             s=1.0,
-            cmap='plasma',
+            cmap=self.primary_cmap,
             alpha=0.6
         )
         
@@ -681,7 +698,7 @@ class SpectrometerPlotter:
     ) -> None:
         """Generate comprehensive performance plot with shared x-axis."""
         fig, ax1 = plt.subplots(1, 1, figsize=(6, 4))
-        fig.suptitle('Comprehensive Performance', fontsize=16)
+        fig.suptitle('Comprehensive Performance')
         
         # Left y-axis: position
         color_position = 'tab:blue'
@@ -849,7 +866,7 @@ class SpectrometerPlotter:
             
             axs[2].plot(srim_energies_MeV2, srim_stopping_power2, 'darkorange', linewidth=2)
         
-        axs[1].legend()
+        fig.legend()
         filename = f'{filename_prefix}_E{energy_MeV:.1f}MeV_data.png'
         fig.suptitle(title)
         fig.tight_layout()
@@ -874,12 +891,12 @@ class SpectrometerPlotter:
         # CH2 (positive y)
         x_ch2 = spec_ch2.input_beam[:, 0] * 100
         y_ch2 = spec_ch2.input_beam[:, 2] * 100
-        ax.scatter(x_ch2, y_ch2, alpha=0.5, s=5, label='CH2 (Protons)', color='blue')
+        ax.scatter(x_ch2, y_ch2, alpha=0.5, s=5, label='CH2 (Protons)', color=self.primary_color)
         
         # CD2 (negative y)
         x_cd2 = spec_cd2.input_beam[:, 0] * 100
         y_cd2 = spec_cd2.input_beam[:, 2] * 100
-        ax.scatter(x_cd2, y_cd2, alpha=0.5, s=5, label='CD2 (Deuterons)', color='red')
+        ax.scatter(x_cd2, y_cd2, alpha=0.5, s=5, label='CD2 (Deuterons)', color=self.dual_data['secondary_color'])
         
         # Draw foil boundary
         theta = np.linspace(0, 2*np.pi, 100)
@@ -892,16 +909,16 @@ class SpectrometerPlotter:
         
         # Add shaded regions to show foil halves
         from matplotlib.patches import Wedge
-        wedge_upper = Wedge((0, 0), foil_r, 0, 180, facecolor='blue', alpha=0.1, 
+        wedge_upper = Wedge((0, 0), foil_r, 0, 180, facecolor=self.primary_color, alpha=0.1, 
                            edgecolor='none')
-        wedge_lower = Wedge((0, 0), foil_r, 180, 360, facecolor='red', alpha=0.1, 
+        wedge_lower = Wedge((0, 0), foil_r, 180, 360, facecolor=self.dual_data['secondary_color'], alpha=0.1, 
                            edgecolor='none')
         ax.add_patch(wedge_upper)
         ax.add_patch(wedge_lower)
         
         # Add text annotation
-        ax.text(0.05, 0.95, 'CH2 (Protons)', transform=ax.transAxes, ha='left', va='top', color='blue', fontsize=16)
-        ax.text(0.95, 0.05, 'CD2 (Deuterons)', transform=ax.transAxes, ha='right', va='top', color='red', fontsize=16)
+        ax.text(0.05, 0.95, 'CH2 (Protons)', transform=ax.transAxes, ha='left', va='top', color=self.primary_color)
+        ax.text(0.95, 0.05, 'CD2 (Deuterons)', transform=ax.transAxes, ha='right', va='top', color=self.dual_data['secondary_color'])
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
@@ -932,30 +949,41 @@ class SpectrometerPlotter:
         fig, axes = plt.subplots(1, 2, figsize=(14, 6))
         
         # Left plot: Y-position histograms
-        y_proton = spec_ch2.output_beam[:, 2] * 100  # cm
-        y_deuteron = spec_cd2.output_beam[:, 2] * 100  # cm
+        y_proton = spec_ch2.output_beam[:, 2] # cm
+        y_deuteron = spec_cd2.output_beam[:, 2]  # cm
         
         bins = np.linspace(min(y_proton.min(), y_deuteron.min()), 
                           max(y_proton.max(), y_deuteron.max()), 50)
         
         axes[0].hist(y_proton, bins=bins, alpha=0.6, label='Protons (CH2)', 
-                    color='blue', edgecolor='black', linewidth=0.5, density=True)
+                    color=self.primary_color, edgecolor='black', linewidth=0.5, density=True)
         axes[0].hist(y_deuteron, bins=bins, alpha=0.6, label='Deuterons (CD2)', 
-                    color='red', edgecolor='black', linewidth=0.5, density=True)
-        axes[0].axvline(0, color='black', linestyle='--', linewidth=2, 
+                    color=self.dual_data['secondary_color'], edgecolor='black', linewidth=0.5, density=True)
+        line = axes[0].axvline(0, color='black', linestyle='--', linewidth=2, 
                        label='Y=0 divider', alpha=0.7)
+        # Add label to vertical line
+        labelLines([line], yoffsets=0.1, align=True)
         
         # Add shaded regions for crossovers
-        axes[0].axvspan(0, bins[-1], alpha=0.1, color='red')
-        axes[0].axvspan(bins[0], 0, alpha=0.1, color='blue')
+        axes[0].axvspan(0, bins[-1], alpha=0.1, color=self.dual_data['secondary_color'])
+        axes[0].axvspan(bins[0], 0, alpha=0.1, color=self.primary_color)
+        
+        # Add text labels to regions
+        axes[0].text(
+            (np.mean(bins[bins <= 0]) - bins[0]) / (bins[-1] - bins[0]),
+            0.9, 'Protons', transform=axes[0].transAxes, 
+            ha='center', va='center', color=self.primary_color
+        )
+        axes[0].text(
+            (np.mean(bins[bins >= 0]) - bins[0]) / (bins[-1] - bins[0]),
+            0.9, 'Deuterons', transform=axes[0].transAxes, 
+            ha='center', va='center', color=self.dual_data['secondary_color']
+        )
         
         # Set x limits
         axes[0].set_xlim(bins[0], bins[-1])
-        
         axes[0].set_xlabel('Y Position [cm]')
         axes[0].set_ylabel('Probability Density')
-        axes[0].set_title('Y-Position Distribution at Detector')
-        axes[0].legend()
         axes[0].grid(True, alpha=0.3)
         
         # Right plot: Separation statistics bar chart
@@ -971,9 +999,9 @@ class SpectrometerPlotter:
         width = 0.35
         
         bars1 = axes[1].bar(x - width/2, stayed, width, label='Stayed in region', 
-                           color='green', alpha=0.7, edgecolor='black')
+                           color='tab:green', alpha=0.7, edgecolor='black')
         bars2 = axes[1].bar(x + width/2, crossed, width, label='Crossed midline', 
-                           color='orange', alpha=0.7, edgecolor='black')
+                           color='tab:orange', alpha=0.7, edgecolor='black')
         
         # Add percentage labels on bars
         for bars in [bars1, bars2]:
@@ -981,10 +1009,9 @@ class SpectrometerPlotter:
                 height = bar.get_height()
                 axes[1].text(bar.get_x() + bar.get_width()/2., height,
                            f'{height:.1f}%',
-                           ha='center', va='bottom', fontsize=9)
+                           ha='center', va='bottom')
         
         axes[1].set_ylabel('Percentage (%)')
-        axes[1].set_title('Physical Separation Statistics')
         axes[1].set_xticks(x)
         axes[1].set_xticklabels(categories)
         axes[1].legend()

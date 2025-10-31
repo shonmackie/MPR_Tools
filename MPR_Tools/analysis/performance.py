@@ -1,7 +1,8 @@
 """Performance analysis methods for MPR spectrometer."""
 
 from __future__ import annotations
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Tuple, Optional, Union, TYPE_CHECKING
+import warnings
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
@@ -228,7 +229,7 @@ class PerformanceAnalyzer:
         right_idx = right_indices[-1]
         return edges[right_idx] - edges[left_idx]
     
-    def _load_performance_curve(self, performance_curve_file: Optional[str] = None) -> pd.DataFrame:
+    def _load_performance_curve(self, performance_curve_file: Optional[str] = None) -> Union[pd.DataFrame, None]:
         """
         Loads comprehensive performance curve for analysis
         """
@@ -238,9 +239,10 @@ class PerformanceAnalyzer:
             performance_df = pd.read_csv(f'{self.spectrometer.figure_directory}/{performance_curve_file}')
             return performance_df
         except:
-            raise ValueError(f'Performance curve file {performance_curve_file} not found. May need to generate first.')
+            warnings.warn(f'Performance curve file {performance_curve_file} not found. May need to generate first.', RuntimeWarning)
+            return
         
-    def _get_neutron_spectrum(self) -> np.ndarray:
+    def _get_neutron_spectrum(self) -> Union[np.ndarray, None]:
         """
         Get neutron spectrum based on the x position of the output beam.
         
@@ -252,6 +254,8 @@ class PerformanceAnalyzer:
         
         # Load comprehensive performance curve
         performance_df = self._load_performance_curve()
+        if performance_df is None:
+            raise ValueError('Performance curve file not found. May need to generate first.')
         input_energies = performance_df['energy [MeV]']
         position_mean = performance_df['position mean [m]']
         position_std = performance_df['position std [m]']
@@ -310,12 +314,15 @@ class PerformanceAnalyzer:
         
         # Load performance curve to get foil efficiency and aperture solid angle
         performance_df = self._load_performance_curve()
-        performance_energies = performance_df['energy [MeV]']
-        performance_efficiencies = performance_df['total efficiency']
-        
-        # Interpolate to get the efficiencies for the input energies
-        input_energies = self.spectrometer.input_beam[:, 4]
-        input_efficiencies = np.interp(input_energies, performance_energies, performance_efficiencies)
+        if performance_df is not None:
+            performance_energies = performance_df['energy [MeV]']
+            performance_efficiencies = performance_df['total efficiency']
+            
+            # Interpolate to get the efficiencies for the input energies
+            input_energies = self.spectrometer.input_beam[:, 4]
+            input_efficiencies = np.interp(input_energies, performance_energies, performance_efficiencies)
+        else:
+            input_efficiencies = np.ones(len(self.spectrometer.input_beam))
         
         # Bin protons into grid cells
         for i, (x_pos, y_pos) in enumerate(zip(x_positions, y_positions)):
