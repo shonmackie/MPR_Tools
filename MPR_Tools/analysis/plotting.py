@@ -697,13 +697,16 @@ class SpectrometerPlotter:
         filename: Optional[str] = None
     ) -> None:
         """Generate comprehensive performance plot with shared x-axis."""
-        fig, ax1 = plt.subplots(1, 1, figsize=(6, 4))
+        if filename == None:
+            filename = f'{self.spectrometer.figure_directory}/comprehensive_performance.png'
+        
+        fig, ax1 = plt.subplots(1, 1, figsize=(8, 5))
         fig.suptitle('Comprehensive Performance')
         
         # Left y-axis: position
         color_position = 'tab:blue'
         ax1.set_xlabel('Neutron Energy [MeV]')
-        ax1.set_ylabel('Hydron Position [cm]', color=color_position)
+        ax1.set_ylabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Position [cm]', color=color_position)
         
         # Plot position curve
         ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
@@ -730,15 +733,15 @@ class SpectrometerPlotter:
         # Offset the third axis to the right
         ax3.spines['right'].set_position(('outward', 60))
         color_efficiency = 'tab:green'
-        ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency, 
+        ax3.plot(energies, total_efficiencies*1e8, color=color_efficiency, 
                         linewidth=2, marker='s', markersize=4,
                         label=f'Efficiency')
-        ax3.set_ylabel(r'Efficiency[$\times$1e-6]', color=color_efficiency)
+        ax3.set_ylabel(r'Efficiency[$\times$1e-8]', color=color_efficiency)
         ax3.tick_params(axis='y', labelcolor=color_efficiency)
         
         # Label lines on their respective axes
         range = energies.max() - energies.min()
-        labelLines(ax1.get_lines(), xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
+        labelLines(ax1.get_lines(), xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
         labelLines(ax2.get_lines(), xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
         labelLines(ax3.get_lines(), xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
         

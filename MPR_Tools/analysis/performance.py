@@ -57,16 +57,16 @@ class PerformanceAnalyzer:
             mean_position, std_deviation = norm.fit(x_positions)
             return mean_position, std_deviation
         
-        # Analyze focal plane distribution of target energy beamlet
-        mean_position_0, std_deviation_0 = _get_positions(neutron_energy, num_hydrons)
-        fwhm_0 = 2 * np.sqrt(2 * np.log(2)) * std_deviation_0
-        
         # Analyze focal plane distribution of target energy +/- delta
         E_low = neutron_energy * (1 - delta_energy)
         E_high = neutron_energy * (1 + delta_energy)
         # To save compute time, since we're only interested in the mean, use less hydrons
         mean_position_low, std_deviation_low = _get_positions(E_low, num_hydrons // 10)
         mean_position_high, std_deviation_high = _get_positions(E_high, num_hydrons // 10)
+        
+        # Analyze focal plane distribution of target energy beamlet
+        mean_position_0, std_deviation_0 = _get_positions(neutron_energy, num_hydrons)
+        fwhm_0 = 2 * np.sqrt(2 * np.log(2)) * std_deviation_0
 
         mean_positions = np.r_[mean_position_low, mean_position_0, mean_position_high]
         energies = np.r_[E_low, neutron_energy, E_high]
@@ -263,7 +263,7 @@ class PerformanceAnalyzer:
         # Interpolate to get the energies for the x positions
         # TODO: interpolate with error
         energies = np.interp(x_positions, position_mean, input_energies)
-        
+        breakpoint()
         return energies
     
     def get_hydron_density_map(
@@ -288,12 +288,8 @@ class PerformanceAnalyzer:
         if len(self.spectrometer.output_beam) == 0:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
         
-        x_positions = self.spectrometer.output_beam[:, 0]
-        y_positions = self.spectrometer.output_beam[:, 2]
-        
-        # Convert to cm
-        x_positions *= 100
-        y_positions *= 100
+        x_positions = self.spectrometer.output_beam[:, 0] * 100
+        y_positions = self.spectrometer.output_beam[:, 2] * 100
         
         # Define grid boundaries
         x_min, x_max = np.min(x_positions), np.max(x_positions)
