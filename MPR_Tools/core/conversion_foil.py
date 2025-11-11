@@ -10,7 +10,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 import time
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 from ..config.constants import AVOGADRO, NEUTRON_MASS, FOIL_MATERIALS, DEFAULT_DATA_PATHS
 
@@ -309,12 +308,12 @@ class ConversionFoil:
             Formulae are from section 4.1 of ENDF Manual: https://www.oecd-nea.org/dbdata/data/endf102.htm#LinkTarget_12655
         """
         # Extract energy grid
-        energy_grid = self.differential_xs_data[0]
+        energies = self.differential_xs_data[0]
         # Cosine grid
-        cos_theta_grid = np.linspace(-1, 1, 100)
+        cos_theta_cm = np.linspace(1, -1, 100)
         
         # Initialize lookup table
-        xs_lookup = np.zeros((len(energy_grid), len(cos_theta_grid)))
+        sigma_cm = np.zeros((len(energies), len(cos_theta_cm)))
         
         # Helper function to evaluate Legendre expansion
         def _evaluate_legendre(coefficients, cos_theta):
@@ -330,7 +329,7 @@ class ConversionFoil:
             return legval(cos_theta, legendre_coeffs)
         
         # Fill lookup table
-        for i, energy in enumerate(energy_grid):
+        for i, energy in enumerate(energies):
             # Extract coefficients for this energy
             # a0 term is always 1
             coefficients = np.append(np.array([1.0]), self.differential_xs_data[1:, i])
@@ -342,38 +341,32 @@ class ConversionFoil:
             sigma_E = self.get_nh_cross_section(energy/1e6)
             
             # Evaluate for all cosine theta values
-            for j, cos_theta in enumerate(cos_theta_grid):
+            for j, cos_theta in enumerate(cos_theta_cm):
                 legendre_coefficient = _evaluate_legendre(coefficients, cos_theta)
-                xs_lookup[i, j] = sigma_E / (2 * np.pi) * legendre_coefficient
+                sigma_cm[i, j] = sigma_E / (2 * np.pi) * legendre_coefficient
+                
+        '''
+        Convert center of mass angle to lab angle
+        From https://doi.org/10.1063/1.1721536
+        P. F. Zweifel; H. Hurwitz, Jr. Tranformation of Scattering Cross Sections. J. Appl. Phys. 25, 1241–1245 (1954)
+        and https://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node52.html
+        '''
+        gamma = NEUTRON_MASS / self.hydron_mass
+        # There are two separate scattering angles for neutron and the hydron
+        cos_theta_lab_neutron = (cos_theta_cm + gamma) / np.sqrt(1 + gamma**2 + 2 * gamma * cos_theta_cm)
+        cos_theta_lab_hydron = np.sqrt((1 - cos_theta_cm) / 2)
+        # Convert cross section to lab frame
+        sigma_lab = (1 + gamma**2 + 2 * gamma * cos_theta_cm)**1.5 / np.abs(1 + gamma * cos_theta_cm) * sigma_cm
         
-        # Create interpolation object for fast lookups
-        self.diff_xs_interpolator = RectBivariateSpline(
-            energy_grid, cos_theta_grid, xs_lookup, 
+        # Create interpolation objects for fast lookups
+        self.diff_xs_hydron_interpolator = RectBivariateSpline(
+            energies, cos_theta_lab_hydron, sigma_lab,
             kx=1, ky=1, s=0  # Linear interpolation, no smoothing
         )
     
-    def get_differential_xs_CM(self, energy_MeV: float, cos_theta_cm: float | np.ndarray) -> np.ndarray:
-        """
-        Get center-of-mass differential scattering cross section using interpolator.
-        
-        Args:
-            energy_MeV: Incident neutron energy in MeV
-            cos_theta_cm: Cosine of CM scattering angle
-        Returns:
-            Differential cross section
-        """
-        energy_eV = energy_MeV * 1e6
-        diff_xs = self.diff_xs_interpolator(energy_eV, cos_theta_cm)
-        if diff_xs.shape[0] == 1:
-            return diff_xs.flatten()
-        else:
-            return diff_xs
-    
     def calculate_differential_xs_lab(self, theta_lab: float | np.ndarray, energy_MeV: float) -> np.ndarray:
         """
-        Calculate lab-frame differential scattering cross section.
-        From https://doi.org/10.1063/1.1721536
-        P. F. Zweifel; H. Hurwitz, Jr. Tranformation of Scattering Cross Sections. J. Appl. Phys. 25, 1241–1245 (1954)
+        Calculate lab-frame differential scattering cross section
         
         Args:
             theta_lab: Lab-frame scattering angle in radians
@@ -382,8 +375,14 @@ class ConversionFoil:
         Returns:
             Lab-frame differential cross section
         """
-        cos_theta_cm = 1 - 2 * np.cos(theta_lab)**2
-        return 4 * np.cos(theta_lab) * self.get_differential_xs_CM(energy_MeV, cos_theta_cm)
+        # Convert to energy in eV and use interpolator
+        energy_eV = energy_MeV * 1e6
+        diff_xs = self.diff_xs_hydron_interpolator(energy_eV, np.cos(theta_lab))
+        if diff_xs.shape[0] == 1:
+            return diff_xs.flatten()
+        else:
+            return diff_xs
+    
     
     def _sample_scattered_ray(
         self,
@@ -448,7 +447,7 @@ class ConversionFoil:
         
         Args:
             neutron_energy: Incident neutron energy in MeV
-            include_kinematics: Include cos^2θ energy loss in scattering
+            include_kinematics: Include energy loss from non-perpendicular scattering
             include_stopping_power_loss: Include SRIM energy loss calculation
             num_angle_samples: Number of scattering angle samples
             z_sampling: Depth sampling method ('exp' or 'uni')
@@ -463,7 +462,7 @@ class ConversionFoil:
             
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        scatter_angles = np.linspace(0, max_angle, num_angle_samples)
+        scatter_angles = np.linspace(max_angle, 0, num_angle_samples)
         
         # Calculate differential cross section weights
         diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
@@ -491,19 +490,19 @@ class ConversionFoil:
 
             # Check if hydron passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
-                # Convert neutron energy to recoil hydron energy
-                # Not assuming any kinematic or stopping power losses (yet)
-                mass_coefficient = 4 * self.hydron_mass * NEUTRON_MASS / (self.hydron_mass + NEUTRON_MASS)**2
-                final_energy = mass_coefficient * neutron_energy
+                # Initialize hydron energy
+                hydron_energy = neutron_energy
                 
                 # Apply kinematic energy loss
                 if include_kinematics:
-                    final_energy *= np.cos(theta_scatter)**2
+                    # Calculate energy loss from (382) of https://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node52.html
+                    gamma = NEUTRON_MASS / self.hydron_mass
+                    hydron_energy *= 4 * gamma / (1 + gamma)**2 * np.cos(theta_scatter)**2
                 
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
-                    final_energy = self.calculate_stopping_power_loss(final_energy, path_length)
+                    hydron_energy = self.calculate_stopping_power_loss(hydron_energy, path_length)
                 
                 accepted = True
             else:
@@ -512,7 +511,7 @@ class ConversionFoil:
         if not accepted:
             raise ValueError("Unable to generate a hydron that passes through the aperture.")
                 
-        return x0, y0, theta_scatter, phi_scatter, final_energy
+        return x0, y0, theta_scatter, phi_scatter, hydron_energy
     
     def _check_aperture_acceptance(
         self, 
@@ -576,7 +575,7 @@ class ConversionFoil:
                             (1 - np.exp(-total_xs * self.thickness)) / total_xs)
         
         # Prepare angular distributions
-        scatter_angles = np.linspace(0, np.pi/2, num_angle_samples)
+        scatter_angles = np.linspace(np.pi/2, 0, num_angle_samples)
         diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
         diff_xs /= np.sum(diff_xs)  # Normalize
         

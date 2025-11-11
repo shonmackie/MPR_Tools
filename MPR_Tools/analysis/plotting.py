@@ -789,10 +789,10 @@ class SpectrometerPlotter:
         else:
             filename_prefix = f'{figure_directory}/{filename_prefix}'
             
-        fig, axs = plt.subplots(1, 3, figsize=(8, 4))
+        fig, axs = plt.subplots(1, 3, figsize=(10, 5))
         
         # ========== Plot 1: Differential Cross Section vs Lab Angle ==========
-        angles_rad = np.linspace(angle_range[0], angle_range[1], num_angles)
+        angles_rad = np.linspace(angle_range[1], angle_range[0], num_angles)
         angles_deg = np.degrees(angles_rad)
         
         diff_xs_lab = foil.calculate_differential_xs_lab(angles_rad, energy_MeV)
