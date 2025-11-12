@@ -263,7 +263,7 @@ class PerformanceAnalyzer:
         # Interpolate to get the energies for the x positions
         # TODO: interpolate with error
         energies = np.interp(x_positions, position_mean, input_energies)
-        breakpoint()
+        
         return energies
     
     def get_hydron_density_map(

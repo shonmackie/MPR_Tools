@@ -346,17 +346,12 @@ class ConversionFoil:
                 sigma_cm[i, j] = sigma_E / (2 * np.pi) * legendre_coefficient
                 
         '''
-        Convert center of mass angle to lab angle
-        From https://doi.org/10.1063/1.1721536
-        P. F. Zweifel; H. Hurwitz, Jr. Tranformation of Scattering Cross Sections. J. Appl. Phys. 25, 1241–1245 (1954)
-        and https://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node52.html
+        Convert center of mass frame to lab frame
+        From Dan Casey MIT Thesis (2016), Appendix A
         '''
-        gamma = NEUTRON_MASS / self.hydron_mass
-        # There are two separate scattering angles for neutron and the hydron
-        cos_theta_lab_neutron = (cos_theta_cm + gamma) / np.sqrt(1 + gamma**2 + 2 * gamma * cos_theta_cm)
+        # This is the angle and differential cross section for the recoil hydron, NOT the scattered neutron
         cos_theta_lab_hydron = np.sqrt((1 - cos_theta_cm) / 2)
-        # Convert cross section to lab frame
-        sigma_lab = (1 + gamma**2 + 2 * gamma * cos_theta_cm)**1.5 / np.abs(1 + gamma * cos_theta_cm) * sigma_cm
+        sigma_lab = 4 * cos_theta_lab_hydron * sigma_cm
         
         # Create interpolation objects for fast lookups
         self.diff_xs_hydron_interpolator = RectBivariateSpline(
