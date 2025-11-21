@@ -9,6 +9,7 @@ from tqdm import tqdm
 import itertools
 from copy import deepcopy
 import optuna
+from ..analysis.performance import PerformanceAnalyzer
 
 if TYPE_CHECKING:
     from ..core.spectrometer import MPRSpectrometer
@@ -29,6 +30,7 @@ class FoilSweeper:
             spectrometer: MPRSpectrometer instance to use for analysis
         """
         self.spectrometer = spectrometer
+        self.performance_analyzer = PerformanceAnalyzer(spectrometer)
         self.results_df: Optional[pd.DataFrame] = None
         self.sweep_parameters: Dict[str, np.ndarray] = {}
         
@@ -155,12 +157,11 @@ class FoilSweeper:
             )
             
             # Calculate performance metrics using spectrometer's parallelized methods
-            mean_pos, std_pos, fwhm, energy_res = self.spectrometer.analyze_monoenergetic_performance(
+            mean_pos, std_pos, fwhm, energy_res, gradient = self.performance_analyzer.analyze_monoenergetic_performance(
                 neutron_energy,
                 num_hydrons=num_hydrons,
                 include_kinematics=True,
                 include_stopping_power_loss=True,
-                generate_figure=False,
                 verbose=False
             )
             
@@ -174,7 +175,8 @@ class FoilSweeper:
                 'mean_position': mean_pos,
                 'std_position': std_pos,
                 'fwhm': fwhm, # MeV
-                'energy_resolution': energy_res # keV
+                'energy_resolution': energy_res, # keV
+                'gradient': gradient
             })
             
             return result

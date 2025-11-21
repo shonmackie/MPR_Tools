@@ -146,9 +146,9 @@ class SpectrometerPlotter:
         fig.suptitle('Phase Space')
         
         # Color by hydron energy
-        x_pos = self.spectrometer.output_beam[:, 0]
+        x_pos = self.spectrometer.output_beam[:, 0] * 100
         x_angle = self.spectrometer.output_beam[:, 1]
-        y_pos = self.spectrometer.output_beam[:, 2]
+        y_pos = self.spectrometer.output_beam[:, 2] * 100
         y_angle = self.spectrometer.output_beam[:, 3]
         hydron_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         
@@ -554,7 +554,8 @@ class SpectrometerPlotter:
     ):
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/synthetic_neutron_histogram.png'
-        dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies = self.performance_analyzer.get_plasma_parameters(n_bins=n_bins)
+        dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std = self.performance_analyzer.get_plasma_parameters(n_bins=n_bins)
+        fwhm = right_edge - left_edge
         
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         # Plot histogram
@@ -563,7 +564,8 @@ class SpectrometerPlotter:
         # Add dual data if available
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
-            dsr2, plasma_temperature2, fwhm2, dsr_energy_range2, primary_energy_range2, energies2 = performance_analyzer2.get_plasma_parameters(n_bins=n_bins)
+            dsr2, plasma_temperature2, left_edge2, right_edge2, dsr_energy_range2, primary_energy_range2, energies2, energies_std2 = performance_analyzer2.get_plasma_parameters(n_bins=n_bins)
+            fwhm2 = right_edge2 - left_edge2
             hist2, bins2, _ = ax.hist(energies2, bins=n_bins, histtype='step', color='tab:orange', linewidth=3, density=True)
         
         # Highlight dsr and primary range
@@ -593,12 +595,11 @@ class SpectrometerPlotter:
         
         # Add double sided arrow to indicate fwhm
         height = max(hist)
-        # TODO: fix this weird offset from the fwhm
-        peak_center = bins[np.argmax(hist) + 2]
+        peak_center = bins[np.argmax(hist)]
         ax.annotate(
             f'FWHM = {int(fwhm*1000):3d} keV  \n$T_i$ = {plasma_temperature:.2f} keV   ',
-            xy=(peak_center + fwhm/2, height/2),
-            xytext=(peak_center - fwhm/2, height/2),
+            xy=(right_edge, height/2),
+            xytext=(left_edge, height/2),
             arrowprops=dict(
                 arrowstyle='<->',
                 color='black',
@@ -629,6 +630,7 @@ class SpectrometerPlotter:
         
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.show()
         plt.close(fig)
         print(f'Synthetic neutron histogram saved to {filename}')
     
@@ -733,10 +735,10 @@ class SpectrometerPlotter:
         # Offset the third axis to the right
         ax3.spines['right'].set_position(('outward', 60))
         color_efficiency = 'tab:green'
-        ax3.plot(energies, total_efficiencies*1e8, color=color_efficiency, 
+        ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency, 
                         linewidth=2, marker='s', markersize=4,
                         label=f'Efficiency')
-        ax3.set_ylabel(r'Efficiency[$\times$1e-8]', color=color_efficiency)
+        ax3.set_ylabel(r'Efficiency[$\times$1e-6]', color=color_efficiency)
         ax3.tick_params(axis='y', labelcolor=color_efficiency)
         
         # Label lines on their respective axes

@@ -347,7 +347,7 @@ class ConversionFoil:
                 
         '''
         Convert center of mass frame to lab frame
-        From Dan Casey MIT Thesis (2016), Appendix A
+        From Dan Casey MIT Thesis (2012), Appendix A
         '''
         # This is the angle and differential cross section for the recoil hydron, NOT the scattered neutron
         cos_theta_lab_hydron = np.sqrt((1 - cos_theta_cm) / 2)

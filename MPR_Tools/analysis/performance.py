@@ -25,7 +25,7 @@ class PerformanceAnalyzer:
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         verbose: bool = False
-    ) -> Tuple[float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float]:
         """
         Analyze spectrometer performance for monoenergetic neutrons.
         
@@ -82,7 +82,7 @@ class PerformanceAnalyzer:
             print(f'  FWHM [cm]: {fwhm_0 * 100:.3f}')
             print(f'  Energy resolution [keV]: {energy_resolution * 1000:.2f}')
         
-        return mean_position_0, std_deviation_0, fwhm_0, energy_resolution
+        return mean_position_0, std_deviation_0, fwhm_0, energy_resolution, dispersion
     def generate_performance_curve(
         self,
         num_energies: int = 40,
@@ -120,6 +120,7 @@ class PerformanceAnalyzer:
             
             positions_mean = np.zeros_like(energies)
             positions_std = np.zeros_like(energies)
+            gradients = np.zeros_like(energies)
             energy_resolutions = np.zeros_like(energies)
             scattering_efficiencies = np.zeros_like(energies)
             geometric_efficiencies = np.zeros_like(energies)
@@ -127,7 +128,7 @@ class PerformanceAnalyzer:
             
             for i, energy in enumerate(tqdm(energies, desc='Calculating performance for a range of energies...')):
                 # Calculate location and resolution from monoenergetic analysis
-                mean_pos, std_dev, fwhm, energy_res = self.analyze_monoenergetic_performance(
+                mean_pos, std_dev, fwhm, energy_res, gradient = self.analyze_monoenergetic_performance(
                     energy,
                     num_hydrons=num_hydrons_per_energy, 
                     include_kinematics=include_kinematics, 
@@ -137,6 +138,7 @@ class PerformanceAnalyzer:
                 positions_mean[i] = mean_pos
                 positions_std[i] = std_dev
                 energy_resolutions[i] = energy_res
+                gradients[i] = gradient
                 
                 # Calculate efficiency for this energy
                 scattering_efficiency, geometric_efficiency, total_efficiency = self.spectrometer.conversion_foil.calculate_efficiency(
@@ -152,6 +154,7 @@ class PerformanceAnalyzer:
                 'energy [MeV]': energies,
                 'position mean [m]': positions_mean,
                 'position std [m]': positions_std,
+                'gradient [m/MeV]': gradients,
                 'resolution [MeV]': energy_resolutions,
                 'scattering efficiency': scattering_efficiencies,
                 'geometric efficiency': geometric_efficiencies,
@@ -178,7 +181,7 @@ class PerformanceAnalyzer:
         n_bins: int = 200,
         dsr_energy_range: Tuple[float, float] = (10, 12),
         primary_energy_range: Tuple[float, float] = (13, 15)
-    ) -> Tuple[float, float, float, Tuple[float, float], Tuple[float, float], np.ndarray]:
+    ) -> Tuple[float, float, float, float, Tuple[float, float], Tuple[float, float], np.ndarray, np.ndarray]:
         """
         Get plasma parameters from the spectrometer object.
         
@@ -193,7 +196,7 @@ class PerformanceAnalyzer:
         Returns:
             Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies)
         """
-        energies = self._get_neutron_spectrum()
+        energies, energies_std = self._get_neutron_spectrum()
         
         # Calculate dsr
         ds_count = np.sum((energies > dsr_energy_range[0]) & (energies < dsr_energy_range[1]))
@@ -206,13 +209,14 @@ class PerformanceAnalyzer:
         # Calculate plasma temperature
         # Find FWHM of 14.1 MeV peak
         # From J A Frenje 2020 Plasma Phys. Control. Fusion 62 023001
-        fwhm = self._get_fwhm(hist, edges)
+        left_edge, right_edge = self._get_fwhm(hist, edges)
+        fwhm = (right_edge - left_edge)
         m_rat = 5.0 # sum of neutron plus alpha mass divided by neutron mass
         plasma_temperature = 9e-5 * m_rat / self.spectrometer.reference_energy * (fwhm * 1000)**2
         
-        return dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies
+        return dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std
 
-    def _get_fwhm(self, hist, edges):
+    def _get_fwhm(self, hist, edges) -> Tuple[float, float]:
         """
         Get full width at half maximum (FWHM) of largest peak of a histogram.
         """
@@ -221,13 +225,13 @@ class PerformanceAnalyzer:
         
         # Find leftmost and rightmost crossings
         left_indices = np.where(hist[:peak_idx] >= half_max)[0]
-        right_indices = np.where(hist[peak_idx:] >= half_max)[0] + peak_idx
+        right_indices = np.where(hist[peak_idx:] >= half_max)[0] + peak_idx + 1
         
         if len(left_indices) == 0 or len(right_indices) == 0:
-            return 0.0
+            return 0.0, 0.0
         left_idx = left_indices[0]
         right_idx = right_indices[-1]
-        return edges[right_idx] - edges[left_idx]
+        return edges[left_idx], edges[right_idx]
     
     def _load_performance_curve(self, performance_curve_file: Optional[str] = None) -> Union[pd.DataFrame, None]:
         """
@@ -242,7 +246,7 @@ class PerformanceAnalyzer:
             warnings.warn(f'Performance curve file {performance_curve_file} not found. May need to generate first.', RuntimeWarning)
             return
         
-    def _get_neutron_spectrum(self) -> Union[np.ndarray, None]:
+    def _get_neutron_spectrum(self) -> Tuple[np.ndarray, np.ndarray]:
         """
         Get neutron spectrum based on the x position of the output beam.
         
@@ -259,12 +263,15 @@ class PerformanceAnalyzer:
         input_energies = performance_df['energy [MeV]']
         position_mean = performance_df['position mean [m]']
         position_std = performance_df['position std [m]']
+        gradient = performance_df['gradient [m/MeV]']
         
         # Interpolate to get the energies for the x positions
         # TODO: interpolate with error
         energies = np.interp(x_positions, position_mean, input_energies)
+        # Calculate energy uncertainty sigma_E = sigma_x / |dx/dE|
+        energies_std = np.interp(x_positions, position_mean, position_std / np.abs(gradient))
         
-        return energies
+        return energies, energies_std
     
     def get_hydron_density_map(
         self, 
