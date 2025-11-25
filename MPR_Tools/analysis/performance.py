@@ -1,7 +1,7 @@
 """Performance analysis methods for MPR spectrometer."""
 
 from __future__ import annotations
-from typing import Tuple, Optional, Union, TYPE_CHECKING
+from typing import Tuple, Optional, Union, Literal, TYPE_CHECKING
 import warnings
 import numpy as np
 import pandas as pd
@@ -274,12 +274,13 @@ class PerformanceAnalyzer:
         return energies, energies_std
     
     def get_hydron_density_map(
-        self, 
+        self,
+        particle: Literal['proton', 'deuteron'] = 'proton',
         dx: float = 0.5, 
         dy: float = 0.5,
         foil_distance: Optional[float] = None,
         neutron_yield: Optional[float] = None
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Calculate the density of proton impact sites in the focal plane.
         
@@ -297,6 +298,7 @@ class PerformanceAnalyzer:
         
         x_positions = self.spectrometer.output_beam[:, 0] * 100
         y_positions = self.spectrometer.output_beam[:, 2] * 100
+        input_energies = self.spectrometer.input_beam[:, 4]
         
         # Define grid boundaries
         x_min, x_max = np.min(x_positions), np.max(x_positions)
@@ -310,7 +312,7 @@ class PerformanceAnalyzer:
         
         # Create meshgrids
         X_mesh, Y_mesh = np.meshgrid(x_coords, y_coords)
-        density = np.zeros_like(X_mesh)
+        density_map = np.zeros_like(X_mesh)
         
         # Calculate cell area in cm^2
         cell_area_cm2 = dx*dy
@@ -322,10 +324,20 @@ class PerformanceAnalyzer:
             performance_efficiencies = performance_df['total efficiency']
             
             # Interpolate to get the efficiencies for the input energies
-            input_energies = self.spectrometer.input_beam[:, 4]
             input_efficiencies = np.interp(input_energies, performance_energies, performance_efficiencies)
         else:
             input_efficiencies = np.ones(len(self.spectrometer.input_beam))
+            
+        # If detector is used, calculate the sensitivity for the incident hydron
+        sensitivity_map = np.zeros_like(density_map)
+        if self.spectrometer.hodoscope.detector_used:
+            # Interpolate detector sensitivity for each particle
+            sensitivity = self.spectrometer.hodoscope.sensitivity[particle]
+            sensitivity_energies = sensitivity['energy']
+            sensitivity_yields = sensitivity['yields']
+            sensitivity_efficiencies = np.interp(input_energies, sensitivity_energies, sensitivity_yields)
+        else:
+            sensitivity_efficiencies = np.ones(len(self.spectrometer.input_beam))
         
         # Bin protons into grid cells
         for i, (x_pos, y_pos) in enumerate(zip(x_positions, y_positions)):
@@ -334,28 +346,35 @@ class PerformanceAnalyzer:
             y_idx = int((y_pos - y_min) / dy)
             
             # Ensure indices are within bounds
-            x_idx = max(0, min(x_idx, density.shape[1] - 1))
-            y_idx = max(0, min(y_idx, density.shape[0] - 1))
+            x_idx = max(0, min(x_idx, density_map.shape[1] - 1))
+            y_idx = max(0, min(y_idx, density_map.shape[0] - 1))
             
             # Add efficiency to cell
-            density[y_idx, x_idx] += input_efficiencies[i]
+            density_map[y_idx, x_idx] += input_efficiencies[i]
+            
+            # If detector is used, weight by sensitivity efficiency
+            if self.spectrometer.hodoscope.detector_used:
+                sensitivity_map[y_idx, x_idx] += input_efficiencies[i] * sensitivity_efficiencies[i]
         
         # Convert to protons/cm^2/source_proton
         total_protons = len(self.spectrometer.output_beam)
-        density /= (cell_area_cm2 * total_protons)
+        density_map /= (cell_area_cm2 * total_protons)
+        sensitivity_map /= (cell_area_cm2 * total_protons)
         
         # Calculate foil solid angle fraction
         if foil_distance:
             foil_solid_angle_fraction = self.spectrometer.conversion_foil.foil_radius**2 / (4 * foil_distance**2)
-            density *= foil_solid_angle_fraction
+            density_map *= foil_solid_angle_fraction
+            sensitivity_map *= foil_solid_angle_fraction
             
         # Add neutron yield
         if neutron_yield:
-            density *= neutron_yield
+            density_map *= neutron_yield
+            sensitivity_map *= neutron_yield
         
         # Save the density map as csv
-        density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density.flatten()))
-        density_df = pd.DataFrame(density_data, columns=['X', 'Y', 'Density'])
+        density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density_map.flatten(), sensitivity_map.flatten()))
+        density_df = pd.DataFrame(density_data, columns=['X', 'Y', 'Density', 'Sensitivity'])
         density_df.to_csv(f'{self.spectrometer.figure_directory}/hydron_density_map.csv', index=False)        
         
-        return density, X_mesh, Y_mesh
+        return density_map, sensitivity_map, X_mesh, Y_mesh

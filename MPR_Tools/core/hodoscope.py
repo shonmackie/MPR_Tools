@@ -2,6 +2,7 @@
 
 from typing import Optional
 import numpy as np
+import os
 
 class Hodoscope:
     """
@@ -16,7 +17,8 @@ class Hodoscope:
         channels_left: int, 
         channels_right: int, 
         detector_width: float, 
-        detector_height: float
+        detector_height: float,
+        detector_sensitivity_dir: Optional[str] = None
     ):
         """
         Initialize hodoscope detector array.
@@ -33,6 +35,13 @@ class Hodoscope:
         
         self.detector_width = detector_width * 1e-2   # cm to m
         self.detector_height = detector_height * 1e-2  # cm to m
+        
+        if detector_sensitivity_dir is not None:
+            self.detector_sensitivity_dir = detector_sensitivity_dir
+            self._build_detector_sensitivity()
+            self.detector_used = True
+        else:
+            self.detector_used = False
         
         # Calculate detector centers
         self._calculate_channel_edges()
@@ -95,3 +104,58 @@ class Hodoscope:
         # Find which channel the position falls into
         channel = np.searchsorted(self.channel_edges[1:], x_position)
         return int(channel)
+    
+    def _build_detector_sensitivity(self) -> None:
+        """
+        Build detector sensitivity from files in the specified directory. Sensitivity files should
+        include the detector type and the sensitivity for protons, deuterons, neutrons, and photons at various energies.
+        """
+        # Parse directory name
+        self.detector_type, self.thickness = self.detector_sensitivity_dir.split("/")[-1].split('_')[:2]
+        # Thickness will be in mm, get it as a float
+        self.thickness = float(self.thickness.replace("mm", ""))
+        
+        self.sensitivity = {}
+        
+        # Parse the detector sensitivity files
+        for file in os.listdir(self.detector_sensitivity_dir):
+            if file.endswith(".txt"):
+                # Parse the file name to get the detector type and energy
+                particle = file.split("_")[0]
+                
+                # Load the sensitivity data
+                sensitivity_data = np.loadtxt(f'{self.detector_sensitivity_dir}/{file}', delimiter=',')
+                energy = sensitivity_data[:, 0] # in MeV
+                yields = sensitivity_data[:, 1] # in # photons/particle
+                
+                self.sensitivity[particle] = {
+                    'energy': energy,
+                    'yields': yields
+                }
+    
+    def get_total_background(self) -> float:
+        """
+        Calculate the density of background photons generated in the detector.
+            
+        Returns:
+            float: Total background density in photons/cm^2-source
+        """
+        # Assume background neutrons and gammas are uniformly distributed across the detector
+        if not self.detector_used:
+            raise ValueError("Detector not used; cannot calculate background density map.")
+        
+        # TODO: implement actual background with energy distribution
+        total_photons = 1.4e-14 # Photons/cm^2-source
+        total_neutrons = 1.1e-14 # Neutrons/cm^2-source
+        
+        # Randomly sample background neutrons and gammas across the detector area with uniform distribution across energy range
+        neutron_sensitivity = self.sensitivity['neutron']
+        gamma_sensitivity = self.sensitivity['gamma']
+        
+        average_neutron_yield = np.trapezoid(neutron_sensitivity['yields'], neutron_sensitivity['energy']) / (neutron_sensitivity['energy'][-1] - neutron_sensitivity['energy'][0])
+        average_gamma_yield = np.trapezoid(gamma_sensitivity['yields'], gamma_sensitivity['energy']) / (gamma_sensitivity['energy'][-1] - gamma_sensitivity['energy'][0])
+        
+        # Calculate total background in units of photons/cm^2-source
+        total_background = total_neutrons * average_neutron_yield + total_photons * average_gamma_yield
+        
+        return total_background

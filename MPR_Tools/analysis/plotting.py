@@ -515,8 +515,9 @@ class SpectrometerPlotter:
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/hydron_density_heatmap.png'
         
-        density, X_mesh, Y_mesh = self.performance_analyzer.get_hydron_density_map(dx, dy, foil_distance=6.0, neutron_yield=neutron_yield)
-        
+        particle = self.spectrometer.conversion_foil.particle
+        density, sensitivity, X_mesh, Y_mesh = self.performance_analyzer.get_hydron_density_map(particle, dx, dy, foil_distance=6.0, neutron_yield=neutron_yield)
+
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
@@ -524,17 +525,16 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        particle = self.spectrometer.conversion_foil.particle
         units = f'[{particle}/cm$^2$-source]' if neutron_yield == None else f'[{particle}/cm$^2$]'
         cbar.set_label(f'log$_{{10}}$(Fluence {units})')
         
         # Add dual data if available
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
-            density2, X_mesh2, Y_mesh2 = performance_analyzer2.get_hydron_density_map(dx, dy)
+            particle2 = self.dual_data['spectrometer'].conversion_foil.particle
+            density2, sensitivity2, X_mesh2, Y_mesh2 = performance_analyzer2.get_hydron_density_map(particle2, dx, dy)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-            particle2 = self.dual_data['spectrometer'].conversion_foil.particle
             units = f'[{particle2}/cm$^2$-source]' if neutron_yield == None else f'[{particle2}/cm$^2$]'
             cbar2.set_label(f'log$_{{10}}$(Fluence {units})')
         
@@ -546,6 +546,82 @@ class SpectrometerPlotter:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Hydron density heatmap saved to {filename}')
+        
+        # If detector is used, also plot sensitivity map
+        if self.spectrometer.hodoscope.detector_used:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(sensitivity), cmap=self.primary_cmap, shading='auto')
+            cbar = fig.colorbar(im, ax=ax, shrink=0.6)
+            units = f'[photons/cm$^2$-source]' if neutron_yield == None else f'[photons/cm$^2$]'
+            cbar.set_label(f'log$_{{10}}$(Detector Sensitivity {units})')
+            
+            # Add dual data if available
+            if self.dual_data:
+                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(sensitivity2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
+                cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
+                units = f'[photons/cm$^2$-source]' if neutron_yield == None else f'[photons/cm$^2$]'
+                cbar2.set_label(f'log$_{{10}}$(Detector Sensitivity {units})')
+            
+            ax.set_xlabel('X Position [cm]')
+            ax.set_ylabel('Y Position [cm]')
+            ax.set_aspect('equal')
+            fig.tight_layout()
+            sensitivity_filename = filename.replace('.png', '_sensitivity.png')
+            fig.savefig(sensitivity_filename, dpi=150, bbox_inches='tight')
+            print(f'Detector sensitivity heatmap saved to {sensitivity_filename}')
+            
+            # Now plot the signal-to-background ratio map
+            fig, ax = plt.subplots(figsize=(10, 8))
+            
+            # Get signal-to-background ratio
+            total_background = self.spectrometer.hodoscope.get_total_background()
+            total_background *= neutron_yield if neutron_yield != None else 1.0
+            signal_to_background = sensitivity / total_background
+            
+            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(signal_to_background), cmap=self.primary_cmap, shading='auto')
+            cbar = fig.colorbar(im, ax=ax, shrink=0.6)
+            cbar.set_label('log$_{10}$(S/B)')
+            
+            if self.dual_data:
+                signal_to_background2 = sensitivity2 / total_background
+                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(signal_to_background2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
+                cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
+                cbar2.set_label('log$_{10}$(S/B)')
+            
+            ax.set_xlabel('X Position [cm]')
+            ax.set_ylabel('Y Position [cm]')
+            ax.set_aspect('equal')
+            fig.tight_layout()
+            signal_to_background_filename = filename.replace('.png', '_signal_to_background.png')
+            fig.savefig(signal_to_background_filename, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f'Signal-to-background ratio heatmap saved to {signal_to_background_filename}')
+            
+            # Plot y-integrated S/B profile
+            fig, ax = plt.subplots(figsize=(8, 4))
+            # TODO: Actually integrate the signal. Only integrate over region where signal is non-zero
+            y_integrated_signal_to_background = np.sum(sensitivity, axis=0) / (total_background * Y_mesh.shape[0])
+            # Take middle few rows
+            middle_idx = int(Y_mesh.shape[0]/2)
+            y_integrated_signal_to_background = np.sum(sensitivity[middle_idx - 5:middle_idx + 5, :], axis=0) / (total_background * 10)
+            x_values = X_mesh[0, :]
+            ax.plot(x_values, np.log10(y_integrated_signal_to_background), label='Signal-to-Background')
+            if self.dual_data:
+                y_integrated_signal_to_background2 = np.sum(sensitivity2, axis=0) / (total_background * Y_mesh2.shape[0])
+                # Take middle few rows
+                middle_idx2 = int(Y_mesh2.shape[0]/2)
+                y_integrated_signal_to_background2 = np.sum(sensitivity2[middle_idx2 - 5:middle_idx2 + 5, :], axis=0) / (total_background * 10)
+                x_values2 = X_mesh2[0, :]
+                ax.plot(x_values2, np.log10(y_integrated_signal_to_background2), label='Signal-to-Background (Dual)')
+            
+            ax.set_xlabel('X Position [cm]')
+            ax.set_ylabel('log$_{10}$(S/B)')
+            ax.grid(True, alpha=0.6)
+            fig.tight_layout()
+            y_integrated_filename = filename.replace('.png', '_y_integrated_signal_to_background.png')
+            fig.savefig(y_integrated_filename, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f'Y-integrated signal-to-background profile saved to {y_integrated_filename}')
         
     def plot_synthetic_neutron_histogram(
         self,
@@ -560,6 +636,16 @@ class SpectrometerPlotter:
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         # Plot histogram
         hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', linewidth=3, density=True)
+        # Add energy standard deviation
+        hist_std = self._get_histogram_std(bins, energies, energies_std)
+        ax.fill_between(
+            bins[1:], 
+            hist - hist_std, 
+            hist + hist_std,
+            color='tab:blue',
+            alpha=0.3,
+            step='pre'
+        )
         
         # Add dual data if available
         if self.dual_data:
@@ -567,6 +653,16 @@ class SpectrometerPlotter:
             dsr2, plasma_temperature2, left_edge2, right_edge2, dsr_energy_range2, primary_energy_range2, energies2, energies_std2 = performance_analyzer2.get_plasma_parameters(n_bins=n_bins)
             fwhm2 = right_edge2 - left_edge2
             hist2, bins2, _ = ax.hist(energies2, bins=n_bins, histtype='step', color='tab:orange', linewidth=3, density=True)
+            # Add energy standard deviation for dual data
+            hist_std2 = self._get_histogram_std(bins2, energies2, energies_std2)
+            ax.fill_between(
+                bins2[1:], 
+                hist2 - hist_std2, 
+                hist2 + hist_std2,
+                color='tab:orange',
+                alpha=0.3,
+                step='pre'
+            )
         
         # Highlight dsr and primary range
         ax.axvspan(dsr_energy_range[0], dsr_energy_range[1], color='tab:red', alpha=0.2)
@@ -595,7 +691,6 @@ class SpectrometerPlotter:
         
         # Add double sided arrow to indicate fwhm
         height = max(hist)
-        peak_center = bins[np.argmax(hist)]
         ax.annotate(
             f'FWHM = {int(fwhm*1000):3d} keV  \n$T_i$ = {plasma_temperature:.2f} keV   ',
             xy=(right_edge, height/2),
@@ -630,9 +725,31 @@ class SpectrometerPlotter:
         
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.show()
         plt.close(fig)
         print(f'Synthetic neutron histogram saved to {filename}')
+        
+    def _get_histogram_std(self, bins, energies, energies_std, density=True):
+        """Helper function to compute histogram standard deviation."""
+        # Get which bin each energy falls into
+        bin_indices = np.digitize(energies, bins) - 1
+        hist_std = np.zeros(len(bins) - 1)
+        
+        for i, energy_std in enumerate(energies_std):
+            # Find the bin index for this energy
+            bin_index = bin_indices[i]
+            if 0 <= bin_index < len(hist_std):
+                # Accumulate variance
+                hist_std[bin_index] += (energy_std ** 2)
+        
+        # Take square root to get standard deviation
+        hist_std = np.sqrt(hist_std)
+        
+        # Normalize if density is True
+        if density:
+            bin_widths = np.diff(bins)
+            hist_std /= (len(energies) * bin_widths)
+        
+        return hist_std
     
     def plot_monoenergetic_analysis(
         self,  
