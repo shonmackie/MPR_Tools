@@ -1,0 +1,7 @@
+optuna
+matplotlib
+matplotlib-label-lines
+numpy
+pandas
+tqdm
+scipy
