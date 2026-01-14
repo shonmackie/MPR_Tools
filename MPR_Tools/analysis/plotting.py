@@ -921,7 +921,7 @@ class SpectrometerPlotter:
         
         axs[0].plot(angles_deg, diff_xs_lab * 1e28, 'tab:blue', linewidth=2)
         axs[0].set_xlabel('Angle [deg]')
-        axs[0].set_ylabel('d$\sigma$/d$\Omega$ [barns/sr]')
+        axs[0].set_ylabel('d$\\sigma$/d$\\Omega$ [barns/sr]')
         axs[0].grid(True, alpha=0.3)
         
         # ========== Plot 2: Cross Sections vs Energy ==========
