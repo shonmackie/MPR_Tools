@@ -75,27 +75,20 @@ class SpectrometerPlotter:
         # Draw hodoscope if requested
         if include_hodoscope:
             # Convert to cm
-            detector_width = self.spectrometer.hodoscope.detector_width * 100
-            detector_height = self.spectrometer.hodoscope.detector_height * 100
+            heights = self.spectrometer.hodoscope.channel_heights * 100
             edges = self.spectrometer.hodoscope.channel_edges * 100
             
             # Draw detector boundaries
-            for i, edge in enumerate(edges):                
-                # Vertical lines for detector edges
-                # Left-most and right-most edges
-                if i == 0 or i == len(edges) - 1:
-                    line_style = '-'
-                    line_width = 1.0
-                else:
-                    line_style = '--'
-                    line_width = 0.5
-                ax.vlines(edge, -detector_height/2, detector_height/2, 
-                          color='black', linestyle=line_style, linewidth=line_width)
-            
-            # Horizontal lines for detector top/bottom
-            ax.hlines([-detector_height/2, detector_height/2], edges[0], 
-                      edges[-1], color='black', linewidth=1.0)
-        
+            edge_lengths = np.minimum(heights[0:-1], heights[1:])
+            ax.vlines(edges[1:-1], -edge_lengths/2, edge_lengths/2,
+                      color='black', linestyle='--', linewidth=0.5)
+
+            # Draw detector envelope
+            x = np.repeat(edges, 2)
+            y = np.concatenate([[0], np.repeat(heights/2, 2), [0]])
+            ax.plot(x, y, color='black', linewidth=1.0)
+            ax.plot(x, -y, color='black', linewidth=1.0)
+
         # Scatter plot of hydron positions
         hydron_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         scatter = ax.scatter(
@@ -921,7 +914,7 @@ class SpectrometerPlotter:
         
         axs[0].plot(angles_deg, diff_xs_lab * 1e28, 'tab:blue', linewidth=2)
         axs[0].set_xlabel('Angle [deg]')
-        axs[0].set_ylabel('d$\sigma$/d$\Omega$ [barns/sr]')
+        axs[0].set_ylabel('d$\\sigma$/d$\\Omega$ [barns/sr]')
         axs[0].grid(True, alpha=0.3)
         
         # ========== Plot 2: Cross Sections vs Energy ==========

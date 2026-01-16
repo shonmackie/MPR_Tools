@@ -567,7 +567,6 @@ class MPRSpectrometer:
             'max_energy': self.max_energy,
             'hodoscope_channels': self.hodoscope.total_channels,
             'detector_width_cm': self.hodoscope.detector_width_cm,
-            'detector_height_cm': self.hodoscope.detector_height_cm,
             'num_input_hydrons': len(self.input_beam),
             'num_output_hydrons': len(self.output_beam)
         }

@@ -129,7 +129,7 @@ class ConversionFoil:
         # Need to read as a pandas df and convert to numpy because some 
         # differential cross sections have different number of Legendre 
         # coefficients for each energy
-        self.differential_xs_data = pd.read_csv(self.differential_xs_path, sep='\s+', comment='#').to_numpy(dtype=np.float64).T
+        self.differential_xs_data = pd.read_csv(self.differential_xs_path, sep=r'\s+', comment='#').to_numpy(dtype=np.float64).T
         print(f'Loaded differential scattering data from {self.differential_xs_path}')
     
     @property
