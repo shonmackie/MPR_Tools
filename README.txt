@@ -7,3 +7,6 @@ Each object has functionality that numerically simulates the action of that subs
 
 This package is setup so that you can easily add MPR_Tools to your python path and import it in other scripts elsewhere on your machine. To do this, navigate to the directory this README is in, and run in the command prompt "pip install -e ."
 This will automatically add MPR_Tools as an importable package.
+
+There are also tests in the `tests` directory meant to be run using Pytest.
+Run them with `python -m pytest`.
