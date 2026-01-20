@@ -4,6 +4,8 @@ from typing import Tuple, Optional, Literal
 import numpy as np
 from numpy.polynomial.legendre import legval
 from pathlib import Path
+
+from scipy import integrate
 from scipy.interpolate import RectBivariateSpline
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -118,6 +120,7 @@ class ConversionFoil:
     def _load_data_files(self) -> None:
         """Load all required data files."""
         self.srim_data = np.genfromtxt(self.srim_data_path, skip_header=2, unpack=True)
+        self.integrated_srim_data = ConversionFoil._preintegrate_srim_data(*self.srim_data)
         print(f'Loaded SRIM data from {self.srim_data_path}')
         
         self.nh_cross_section_data = np.genfromtxt(self.nh_cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
@@ -196,27 +199,10 @@ class ConversionFoil:
             raise ValueError("Aperture height can only be set for rectangular apertures.")
         self.aperture_height = height_cm * 1e-2
     
-    def calculate_stopping_power(self, energy_MeV: float) -> float:
-        """
-        Calculate stopping power dE/dx [MeV/mm] for hydrons in the foil.
-        
-        Args:
-            energy_MeV: hydron energy in MeV
-            
-        Returns:
-            Stopping power in MeV/mm
-        """
-        return np.interp(
-            energy_MeV, 
-            self.srim_data[0], 
-            self.srim_data[1] + self.srim_data[2]  # electronic + nuclear stopping
-        )
-    
     def calculate_stopping_power_loss(
         self, 
         initial_energy: float, 
         path_length: float, 
-        num_steps: int = 1000
     ) -> float:
         """
         Calculate energy after slowing down in foil material.
@@ -226,27 +212,26 @@ class ConversionFoil:
         Args:
             initial_energy: Initial hydron energy in MeV
             path_length: Distance traveled through material in m
-            num_steps: Number of discretization steps
-            
+
         Returns:
             Final hydron energy in MeV
         """
-        step_size = path_length / num_steps
-        energy = initial_energy
-        
-        for _ in range(num_steps):
-            # stopping power is in MeV/mm, convert to MeV/m
-            energy -= self.calculate_stopping_power(energy) * step_size * 1e3 
-            if energy <= 0:
-                break
-                
-        return max(energy, 0)
+        # check to make sure we're within the data bounds
+        if initial_energy > self.integrated_srim_data[0][-1]:
+            raise ValueError(
+                f"We can't slow a {initial_energy} MeV particle because the SRIM data "
+                f"doesn't go up that high.")
+        initial_x = np.interp(
+            initial_energy, self.integrated_srim_data[0], self.integrated_srim_data[1])
+        final_x = initial_x - path_length
+        final_energy = np.interp(
+            final_x, self.integrated_srim_data[1], self.integrated_srim_data[0])
+        return final_energy
     
     def calculate_initial_energy(
         self, 
         final_energy: float, 
         path_length: float, 
-        num_steps: int = 1000
     ) -> float:
         """
         Calculate initial energy by reversing energy loss calculation.
@@ -254,19 +239,46 @@ class ConversionFoil:
         Args:
             final_energy: Final hydron energy in MeV
             path_length: Distance traveled through material in m
-            num_steps: Number of discretization steps
-            
+
         Returns:
             Initial hydron energy in MeV
         """
-        step_size = path_length / num_steps
-        energy = final_energy
-        
-        for _ in range(num_steps):
-            # stopping power is in MeV/mm, convert to MeV/m
-            energy += self.calculate_stopping_power(energy) * step_size * 1e3
-            
-        return energy
+        final_x = np.interp(
+            final_energy, self.integrated_srim_data[0], self.integrated_srim_data[1])
+        initial_x = final_x + path_length
+        initial_energy = np.interp(
+            initial_x, self.integrated_srim_data[1], self.integrated_srim_data[0])
+        # check to make sure we didn't hit the data bound
+        if initial_energy == self.integrated_srim_data[0][-1]:
+            raise ValueError(
+                f"Calculating the initial energy of this particle failed because we hit "
+                f"the upper limit of the SRIM data, {initial_energy} MeV.")
+        return initial_energy
+
+    @staticmethod
+    def _preintegrate_srim_data(energy, electronic_stopping, nuclear_stopping) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        convert dE/dx vs. E table into a range vs. E table, so that we can do slowing calculations with a single lookup
+
+        Args:
+            energy: Array of hydron energies at which stopping has been calculated, in MeV
+            electronic_stopping: the stopping rate due to interactions with electrons, in MeV/mm
+            nuclear_stopping: the stopping rate due to interactions with nuclei, in MeV/mm
+
+        Returns:
+            Array of hydron energies at which range has been calculated, in MeV
+            Distance a hydron at the given energy can travel in solid matter before stopping, in m
+        """
+        # add an infinity to the bottom of the stopping table so that behavior is defined down to E=0
+        E = np.concatenate([[0], energy])  # MeV
+        dE_dx = np.concatenate([[np.inf], electronic_stopping + nuclear_stopping])  # MeV/mm
+
+        # do the integral
+        dx_dE = 1 / dE_dx  # mm/MeV
+        x = integrate.cumulative_trapezoid(x=E, y=dx_dE, initial=0)  # mm
+
+        # convert x to m when you return
+        return E, x * 1e-3
     
     def get_nh_cross_section(self, energy_MeV: float) -> float:
         """
