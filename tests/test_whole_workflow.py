@@ -6,7 +6,7 @@ from MPR_Tools import MPRSpectrometer, ConversionFoil, Hodoscope, SpectrometerPl
 
 def test_whole_workflow():
     # instantiate the output directory
-    os.makedirs("output", exist_ok=True)
+    os.makedirs("tests/output", exist_ok=True)
 
     # instantiate the spectrometer
     nspc = MPRSpectrometer(
@@ -18,7 +18,7 @@ def test_whole_workflow():
             foil_material="CD2",
             aperture_type="circ",
         ),
-        "test_map.txt",
+        "tests/test_map.txt",
         16,
         12, 20,
         Hodoscope(
@@ -27,7 +27,7 @@ def test_whole_workflow():
             detector_width=100,
             detector_height=10,
         ),
-        figure_directory="output"
+        figure_directory="tests/output"
     )
 
     # use a Dirac delta function input spectrum
