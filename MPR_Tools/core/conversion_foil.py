@@ -34,7 +34,6 @@ class ConversionFoil:
         nh_cross_section_path: Optional[str] = None,
         nc12_cross_section_path: Optional[str] = None,
         differential_xs_path: Optional[str] = None,
-        z_grid_points: int = 1000000,
         foil_material: Literal['CH2', 'CD2'] = 'CH2',
         aperture_type: Literal['circ', 'rect'] = 'circ'
     ):
@@ -52,7 +51,6 @@ class ConversionFoil:
             nh_cross_section_path: Path to n-hydron elastic scattering cross sections (either protons or deuterons)
             nc12_cross_section_path: Path to n-C12 elastic scattering cross sections
             differential_xs_path: Path to differential cross section data
-            z_grid_points: Number of z-direction grid points
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
         """
@@ -84,10 +82,6 @@ class ConversionFoil:
         density_factor = foil_density * AVOGADRO * 1e6
         self.carbon_density = density_factor / molecular_weight # carbon/m^3
         self.hydron_density = self.carbon_density * 2 # hydrons/m^3
-        
-        # Initialize sampling grids
-        # Exit of the foil is z=0
-        self.z_grid = np.linspace(-self.thickness, 0, z_grid_points)
         
         # Load cross section and stopping power data
         module_dir = Path(__file__).parent
@@ -396,9 +390,9 @@ class ConversionFoil:
         rng: np.random.Generator,
         scatter_angles: np.ndarray,
         diff_xs: np.ndarray,
-        prob_z_cdf: Optional[np.ndarray] = None,
+        attenuation: float,
         y_restriction: Optional[Literal['positive', 'negative']] = None
-    ) -> Tuple[float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float]:
         """
         Sample a scattered ray from the foil.
         
@@ -406,7 +400,7 @@ class ConversionFoil:
             rng: Random number generator
             scatter_angles: Array of possible scattering angles
             diff_xs: Differential cross section weights (normalized)
-            prob_z_cdf: Cumulative distribution for z-sampling (None for surface-only sampling)
+            attenuation: neutron fluence falloff rate in 1/m (0 for uniform sampling; -inf for front-surface-only sampling)
             y_restriction: Restrict y to positive or negative half (None for full foil)
         """
         # Sample initial position on foil surface
@@ -422,12 +416,16 @@ class ConversionFoil:
         else:
             y0 = radius_sample * np.sin(angle_sample)
             
-        # Sample depth if prob_z_cdf provided
-        if prob_z_cdf is not None:
-            z0 = self.z_grid[np.searchsorted(prob_z_cdf, rng.random())]
-        else:
+        # Sample depth
+        if attenuation == -np.inf:
             z0 = 0.0  # Sample at exit surface
-        
+        elif abs(self.thickness*attenuation) < 1e-12:
+            z0 = rng.uniform(-self.thickness, 0)  # Uniform distribution
+        else:
+            front_bound = 1
+            back_bound = np.exp(self.thickness*attenuation)
+            z0 = -np.log(rng.uniform(front_bound, back_bound))/attenuation  # Truncated exponential distribution
+
         # Sample scattering angles
         phi_scatter = 2 * np.pi * rng.random()
         theta_scatter = rng.choice(scatter_angles, p=diff_xs)
@@ -436,9 +434,9 @@ class ConversionFoil:
         x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
         y0 += z0 * np.tan(theta_scatter) * np.sin(phi_scatter)
         
-        return x0, y0, theta_scatter, phi_scatter
+        return x0, y0, z0, theta_scatter, phi_scatter
 
-    
+
     def generate_scattered_hydron(
         self, 
         neutron_energy: float, 
@@ -477,23 +475,19 @@ class ConversionFoil:
         
         # Set up z-sampling probability
         if z_sampling == 'exp':
-            total_cross_section = (self.get_nh_cross_section(neutron_energy) * self.hydron_density +
-                                self.get_nc12_cross_section(neutron_energy) * self.carbon_density)
-            prob_z = np.exp(-(self.z_grid + self.thickness) * total_cross_section)
+            attenuation = (self.get_nh_cross_section(neutron_energy) * self.hydron_density +
+                           self.get_nc12_cross_section(neutron_energy) * self.carbon_density)
         else:  # uniform
-            prob_z = np.ones_like(self.z_grid)
-            
-        prob_z_cdf = np.cumsum(prob_z) / np.sum(prob_z)
-        
+            attenuation = 0
+
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
         rejected = 0
         while not accepted and rejected < 100:
-            x0, y0, theta_scatter, phi_scatter = self._sample_scattered_ray(
-                rng, scatter_angles, diff_xs, prob_z_cdf, y_restriction
+            x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                rng, scatter_angles, diff_xs, attenuation, y_restriction
             )
-            z0 = self.z_grid[np.searchsorted(prob_z_cdf, rng.random())]
 
             # Check if hydron passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
@@ -692,8 +686,8 @@ class ConversionFoil:
                 processed_count += 1
                 
                 # Sample scattered ray using helper method (no z-sampling for efficiency calculation)
-                x0, y0, theta_scatter, phi_scatter = self._sample_scattered_ray(
-                    rng, scatter_angles, diff_xs, None
+                x0, y0, _, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                    rng, scatter_angles, diff_xs, attenuation=-np.inf
                 )
                 
                 # N.B. We do not consider the very small displacement due to foil thickness here
