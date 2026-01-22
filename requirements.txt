@@ -3,5 +3,6 @@ matplotlib
 matplotlib-label-lines
 numpy
 pandas
+pytest
 tqdm
 scipy

@@ -4,6 +4,8 @@ from typing import Tuple, Optional, Literal
 import numpy as np
 from numpy.polynomial.legendre import legval
 from pathlib import Path
+
+from scipy import integrate
 from scipy.interpolate import RectBivariateSpline
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -32,7 +34,6 @@ class ConversionFoil:
         nh_cross_section_path: Optional[str] = None,
         nc12_cross_section_path: Optional[str] = None,
         differential_xs_path: Optional[str] = None,
-        z_grid_points: int = 1000000,
         foil_material: Literal['CH2', 'CD2'] = 'CH2',
         aperture_type: Literal['circ', 'rect'] = 'circ'
     ):
@@ -50,7 +51,6 @@ class ConversionFoil:
             nh_cross_section_path: Path to n-hydron elastic scattering cross sections (either protons or deuterons)
             nc12_cross_section_path: Path to n-C12 elastic scattering cross sections
             differential_xs_path: Path to differential cross section data
-            z_grid_points: Number of z-direction grid points
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
         """
@@ -83,10 +83,6 @@ class ConversionFoil:
         self.carbon_density = density_factor / molecular_weight # carbon/m^3
         self.hydron_density = self.carbon_density * 2 # hydrons/m^3
         
-        # Initialize sampling grids
-        # Exit of the foil is z=0
-        self.z_grid = np.linspace(-self.thickness, 0, z_grid_points)
-        
         # Load cross section and stopping power data
         module_dir = Path(__file__).parent
         if srim_data_path is None:
@@ -118,6 +114,7 @@ class ConversionFoil:
     def _load_data_files(self) -> None:
         """Load all required data files."""
         self.srim_data = np.genfromtxt(self.srim_data_path, skip_header=2, unpack=True)
+        self.integrated_srim_data = ConversionFoil._preintegrate_srim_data(*self.srim_data)
         print(f'Loaded SRIM data from {self.srim_data_path}')
         
         self.nh_cross_section_data = np.genfromtxt(self.nh_cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
@@ -196,27 +193,10 @@ class ConversionFoil:
             raise ValueError("Aperture height can only be set for rectangular apertures.")
         self.aperture_height = height_cm * 1e-2
     
-    def calculate_stopping_power(self, energy_MeV: float) -> float:
-        """
-        Calculate stopping power dE/dx [MeV/mm] for hydrons in the foil.
-        
-        Args:
-            energy_MeV: hydron energy in MeV
-            
-        Returns:
-            Stopping power in MeV/mm
-        """
-        return np.interp(
-            energy_MeV, 
-            self.srim_data[0], 
-            self.srim_data[1] + self.srim_data[2]  # electronic + nuclear stopping
-        )
-    
     def calculate_stopping_power_loss(
         self, 
         initial_energy: float, 
         path_length: float, 
-        num_steps: int = 1000
     ) -> float:
         """
         Calculate energy after slowing down in foil material.
@@ -226,27 +206,26 @@ class ConversionFoil:
         Args:
             initial_energy: Initial hydron energy in MeV
             path_length: Distance traveled through material in m
-            num_steps: Number of discretization steps
             
         Returns:
             Final hydron energy in MeV
         """
-        step_size = path_length / num_steps
-        energy = initial_energy
-        
-        for _ in range(num_steps):
-            # stopping power is in MeV/mm, convert to MeV/m
-            energy -= self.calculate_stopping_power(energy) * step_size * 1e3 
-            if energy <= 0:
-                break
-                
-        return max(energy, 0)
+        # check to make sure we're within the data bounds
+        if initial_energy > self.integrated_srim_data[0][-1]:
+            raise ValueError(
+                f"We can't slow a {initial_energy} MeV particle because the SRIM data "
+                f"doesn't go up that high.")
+        initial_x = np.interp(
+            initial_energy, self.integrated_srim_data[0], self.integrated_srim_data[1])
+        final_x = initial_x - path_length
+        final_energy = np.interp(
+            final_x, self.integrated_srim_data[1], self.integrated_srim_data[0])
+        return final_energy
     
     def calculate_initial_energy(
         self, 
         final_energy: float, 
         path_length: float, 
-        num_steps: int = 1000
     ) -> float:
         """
         Calculate initial energy by reversing energy loss calculation.
@@ -254,19 +233,46 @@ class ConversionFoil:
         Args:
             final_energy: Final hydron energy in MeV
             path_length: Distance traveled through material in m
-            num_steps: Number of discretization steps
             
         Returns:
             Initial hydron energy in MeV
         """
-        step_size = path_length / num_steps
-        energy = final_energy
-        
-        for _ in range(num_steps):
-            # stopping power is in MeV/mm, convert to MeV/m
-            energy += self.calculate_stopping_power(energy) * step_size * 1e3
-            
-        return energy
+        final_x = np.interp(
+            final_energy, self.integrated_srim_data[0], self.integrated_srim_data[1])
+        initial_x = final_x + path_length
+        initial_energy = np.interp(
+            initial_x, self.integrated_srim_data[1], self.integrated_srim_data[0])
+        # check to make sure we didn't hit the data bound
+        if initial_energy == self.integrated_srim_data[0][-1]:
+            raise ValueError(
+                f"Calculating the initial energy of this particle failed because we hit "
+                f"the upper limit of the SRIM data, {initial_energy} MeV.")
+        return initial_energy
+
+    @staticmethod
+    def _preintegrate_srim_data(energy, electronic_stopping, nuclear_stopping) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        convert dE/dx vs. E table into a range vs. E table, so that we can do slowing calculations with a single lookup
+
+        Args:
+            energy: Array of hydron energies at which stopping has been calculated, in MeV
+            electronic_stopping: the stopping rate due to interactions with electrons, in MeV/mm
+            nuclear_stopping: the stopping rate due to interactions with nuclei, in MeV/mm
+
+        Returns:
+            Array of hydron energies at which range has been calculated, in MeV
+            Distance a hydron at the given energy can travel in solid matter before stopping, in m
+        """
+        # add an infinity to the bottom of the stopping table so that behavior is defined down to E=0
+        E = np.concatenate([[0], energy])  # MeV
+        dE_dx = np.concatenate([[np.inf], electronic_stopping + nuclear_stopping])  # MeV/mm
+
+        # do the integral
+        dx_dE = 1 / dE_dx  # mm/MeV
+        x = integrate.cumulative_trapezoid(x=E, y=dx_dE, initial=0)  # mm
+
+        # convert x to m when you return
+        return E, x * 1e-3
     
     def get_nh_cross_section(self, energy_MeV: float) -> float:
         """
@@ -384,9 +390,9 @@ class ConversionFoil:
         rng: np.random.Generator,
         scatter_angles: np.ndarray,
         diff_xs: np.ndarray,
-        prob_z_cdf: Optional[np.ndarray] = None,
+        attenuation: float,
         y_restriction: Optional[Literal['positive', 'negative']] = None
-    ) -> Tuple[float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float]:
         """
         Sample a scattered ray from the foil.
         
@@ -394,7 +400,8 @@ class ConversionFoil:
             rng: Random number generator
             scatter_angles: Array of possible scattering angles
             diff_xs: Differential cross section weights (normalized)
-            prob_z_cdf: Cumulative distribution for z-sampling (None for surface-only sampling)
+            attenuation: neutron fluence falloff rate for z-sampling, in 1/m
+                         (0 for uniform sampling; -inf for front-surface-only sampling)
             y_restriction: Restrict y to positive or negative half (None for full foil)
         """
         # Sample initial position on foil surface
@@ -410,11 +417,17 @@ class ConversionFoil:
         else:
             y0 = radius_sample * np.sin(angle_sample)
             
-        # Sample depth if prob_z_cdf provided
-        if prob_z_cdf is not None:
-            z0 = self.z_grid[np.searchsorted(prob_z_cdf, rng.random())]
-        else:
+        # Sample depth
+        if attenuation == -np.inf:
             z0 = 0.0  # Sample at exit surface
+        elif attenuation == np.inf:
+            z0 = -self.thickness  # Sample at entrance surface
+        elif abs(self.thickness*attenuation) < 1e-9:
+            z0 = rng.uniform(-self.thickness, 0)  # Uniform distribution
+        else:
+            front_bound = 1
+            back_bound = np.exp(self.thickness*attenuation)
+            z0 = -np.log(rng.uniform(front_bound, back_bound))/attenuation  # Truncated exponential distribution
         
         # Sample scattering angles
         phi_scatter = 2 * np.pi * rng.random()
@@ -424,7 +437,7 @@ class ConversionFoil:
         x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
         y0 += z0 * np.tan(theta_scatter) * np.sin(phi_scatter)
         
-        return x0, y0, theta_scatter, phi_scatter
+        return x0, y0, z0, theta_scatter, phi_scatter
 
     
     def generate_scattered_hydron(
@@ -465,23 +478,19 @@ class ConversionFoil:
         
         # Set up z-sampling probability
         if z_sampling == 'exp':
-            total_cross_section = (self.get_nh_cross_section(neutron_energy) * self.hydron_density +
-                                self.get_nc12_cross_section(neutron_energy) * self.carbon_density)
-            prob_z = np.exp(-(self.z_grid + self.thickness) * total_cross_section)
+            attenuation = (self.get_nh_cross_section(neutron_energy) * self.hydron_density +
+                           self.get_nc12_cross_section(neutron_energy) * self.carbon_density)
         else:  # uniform
-            prob_z = np.ones_like(self.z_grid)
-            
-        prob_z_cdf = np.cumsum(prob_z) / np.sum(prob_z)
+            attenuation = 0
         
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
         rejected = 0
         while not accepted and rejected < 100:
-            x0, y0, theta_scatter, phi_scatter = self._sample_scattered_ray(
-                rng, scatter_angles, diff_xs, prob_z_cdf, y_restriction
+            x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                rng, scatter_angles, diff_xs, attenuation, y_restriction
             )
-            z0 = self.z_grid[np.searchsorted(prob_z_cdf, rng.random())]
 
             # Check if hydron passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
@@ -680,8 +689,8 @@ class ConversionFoil:
                 processed_count += 1
                 
                 # Sample scattered ray using helper method (no z-sampling for efficiency calculation)
-                x0, y0, theta_scatter, phi_scatter = self._sample_scattered_ray(
-                    rng, scatter_angles, diff_xs, None
+                x0, y0, _, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                    rng, scatter_angles, diff_xs, attenuation=-np.inf
                 )
                 
                 # N.B. We do not consider the very small displacement due to foil thickness here
