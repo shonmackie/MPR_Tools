@@ -206,7 +206,7 @@ class ConversionFoil:
         Args:
             initial_energy: Initial hydron energy in MeV
             path_length: Distance traveled through material in m
-
+            
         Returns:
             Final hydron energy in MeV
         """
@@ -233,7 +233,7 @@ class ConversionFoil:
         Args:
             final_energy: Final hydron energy in MeV
             path_length: Distance traveled through material in m
-
+            
         Returns:
             Initial hydron energy in MeV
         """
@@ -400,7 +400,8 @@ class ConversionFoil:
             rng: Random number generator
             scatter_angles: Array of possible scattering angles
             diff_xs: Differential cross section weights (normalized)
-            attenuation: neutron fluence falloff rate in 1/m (0 for uniform sampling; -inf for front-surface-only sampling)
+            attenuation: neutron fluence falloff rate for z-sampling, in 1/m
+                         (0 for uniform sampling; -inf for front-surface-only sampling)
             y_restriction: Restrict y to positive or negative half (None for full foil)
         """
         # Sample initial position on foil surface
@@ -419,13 +420,15 @@ class ConversionFoil:
         # Sample depth
         if attenuation == -np.inf:
             z0 = 0.0  # Sample at exit surface
-        elif abs(self.thickness*attenuation) < 1e-12:
+        elif attenuation == np.inf:
+            z0 = -self.thickness  # Sample at entrance surface
+        elif abs(self.thickness*attenuation) < 1e-9:
             z0 = rng.uniform(-self.thickness, 0)  # Uniform distribution
         else:
             front_bound = 1
             back_bound = np.exp(self.thickness*attenuation)
             z0 = -np.log(rng.uniform(front_bound, back_bound))/attenuation  # Truncated exponential distribution
-
+        
         # Sample scattering angles
         phi_scatter = 2 * np.pi * rng.random()
         theta_scatter = rng.choice(scatter_angles, p=diff_xs)
@@ -436,7 +439,7 @@ class ConversionFoil:
         
         return x0, y0, z0, theta_scatter, phi_scatter
 
-
+    
     def generate_scattered_hydron(
         self, 
         neutron_energy: float, 
@@ -479,7 +482,7 @@ class ConversionFoil:
                            self.get_nc12_cross_section(neutron_energy) * self.carbon_density)
         else:  # uniform
             attenuation = 0
-
+        
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
