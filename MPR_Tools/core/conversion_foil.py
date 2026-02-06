@@ -73,6 +73,14 @@ class ConversionFoil:
         # Calculate relative mass, either 0 for protons or ~1 for deuterons
         self.relative_mass = (self.particle_mass - FOIL_MATERIALS['CH2']['particle_mass']) / FOIL_MATERIALS['CH2']['particle_mass']
         
+        density_factor = self.foil_density * AVOGADRO * 1e6
+        self.carbon_density = density_factor / self.molecular_weight # carbon/m^3
+        self.hydron_density = self.carbon_density * 2 # hydrons/m^3
+        
+        # Initialize sampling grids
+        # Exit of the foil is z=0
+        self.z_grid = np.linspace(-self.thickness, 0, z_grid_points)
+        
         # Load cross section and stopping power data
         self._load_data_files()
         

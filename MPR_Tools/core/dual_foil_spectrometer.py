@@ -1,8 +1,7 @@
+import os
 from typing import Optional, Literal
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
 
 from .conversion_foil import ConversionFoil
 from .hodoscope import Hodoscope
@@ -24,7 +23,8 @@ class DualFoilSpectrometer:
         thickness_cd2: float,
         aperture_distance: float,
         aperture_radius: float,
-        transfer_map_path: str,
+        proton_transfer_map_path: str,
+        deuteron_transfer_map_path: str,
         reference_energy: float,
         ch2_min_energy: float,
         ch2_max_energy: float,
@@ -33,7 +33,7 @@ class DualFoilSpectrometer:
         hodoscope: Hodoscope,
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
-        figure_directory: str = '.',
+        run_directory: str = '.',
         aperture_type: Literal['circ', 'rect'] = 'circ',
         **shared_foil_kwargs
     ):
@@ -46,7 +46,8 @@ class DualFoilSpectrometer:
             thickness_cd2: CD2 foil thickness in μm
             aperture_distance: Distance from foil to aperture in cm
             aperture_radius: Aperture radius in cm (for circular)
-            transfer_map_path: Path to COSY transfer map file
+            proton_transfer_map_path: Path to COSY transfer map file for protons
+            deuteron_transfer_map_path: Path to COSY transfer map file for deuterons
             reference_energy: Reference energy in MeV
             ch2_min_energy: Minimum acceptance energy in MeV for CH2 foil
             ch2_max_energy: Maximum acceptance energy in MeV for CH2 foil
@@ -55,7 +56,7 @@ class DualFoilSpectrometer:
             hodoscope: Hodoscope detector system
             aperture_width: Aperture width in cm (for rectangular)
             aperture_height: Aperture height in cm (for rectangular)
-            figure_directory: Directory for saving figures
+            run_directory: Directory for saving run data and figures
             aperture_type: Type of aperture ('circ' or 'rect')
             **shared_foil_kwargs: Additional arguments passed to both ConversionFoil instances
         """
@@ -63,12 +64,16 @@ class DualFoilSpectrometer:
         print('Initializing Dual-Foil MPR Spectrometer...')
         print('='*70)
         
-        self.figure_directory = figure_directory
+        self.data_directory = f'{run_directory}/data'
         self.reference_energy = reference_energy
         self.ch2_min_energy = ch2_min_energy
         self.ch2_max_energy = ch2_max_energy
         self.cd2_min_energy = cd2_min_energy
         self.cd2_max_energy = cd2_max_energy
+        
+        # Create directories if they don't exist
+        if not os.path.exists(self.data_directory):
+            os.makedirs(self.data_directory)
         
         # Create CH2 foil and spectrometer (positive y half)
         print('\n--- Initializing CH2 (Proton) Spectrometer ---')
@@ -86,12 +91,12 @@ class DualFoilSpectrometer:
         
         self.spec_ch2 = MPRSpectrometer(
             conversion_foil=foil_ch2,
-            transfer_map_path=transfer_map_path,
+            transfer_map_path=proton_transfer_map_path,
             reference_energy=reference_energy,
             min_energy=ch2_min_energy,
             max_energy=ch2_max_energy,
             hodoscope=hodoscope,
-            figure_directory=figure_directory
+            run_directory=run_directory
         )
         
         # Create CD2 foil and spectrometer (negative y half)
@@ -108,14 +113,16 @@ class DualFoilSpectrometer:
             **shared_foil_kwargs
         )
         
+        # Adjust reference energy for deuterons based on mass ratio
+        deuteron_reference_energy = reference_energy / foil_cd2.hydron_mass * foil_ch2.hydron_mass
         self.spec_cd2 = MPRSpectrometer(
             conversion_foil=foil_cd2,
-            transfer_map_path=transfer_map_path,
-            reference_energy=reference_energy,
+            transfer_map_path=deuteron_transfer_map_path,
+            reference_energy=deuteron_reference_energy,
             min_energy=cd2_min_energy,
             max_energy=cd2_max_energy,
             hodoscope=hodoscope,
-            figure_directory=figure_directory
+            run_directory=run_directory
         )
         
         # Combined beam storage
@@ -314,7 +321,7 @@ class DualFoilSpectrometer:
     def _save_combined_input_beam(self, filepath: Optional[str] = None) -> None:
         """Save combined input beam to CSV."""
         if filepath is None:
-            filepath = f'{self.figure_directory}/combined_input_beam.csv'
+            filepath = f'{self.data_directory}/combined_input_beam.csv'
         
         df = pd.DataFrame({
             'x0': self.combined_input_beam[:, 0],
@@ -331,7 +338,7 @@ class DualFoilSpectrometer:
     def _save_combined_output_beam(self, filepath: Optional[str] = None) -> None:
         """Save combined output beam to CSV."""
         if filepath is None:
-            filepath = f'{self.figure_directory}/combined_output_beam.csv'
+            filepath = f'{self.data_directory}/combined_output_beam.csv'
         
         df = pd.DataFrame({
             'x0': self.combined_output_beam[:, 0],
@@ -358,9 +365,9 @@ class DualFoilSpectrometer:
         """
         # Read combined beams
         if combined_input_path is None:
-            combined_input_path = f'{self.figure_directory}/combined_input_beam.csv'
+            combined_input_path = f'{self.data_directory}/combined_input_beam.csv'
         if combined_output_path is None:
-            combined_output_path = f'{self.figure_directory}/combined_output_beam.csv'
+            combined_output_path = f'{self.data_directory}/combined_output_beam.csv'
         
         input_df = pd.read_csv(combined_input_path)
         output_df = pd.read_csv(combined_output_path)

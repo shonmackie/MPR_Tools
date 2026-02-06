@@ -1,27 +1,34 @@
 """Performance analysis methods for MPR spectrometer."""
 
 from __future__ import annotations
-from typing import Tuple, Optional, Union, Literal, TYPE_CHECKING
+from typing import Tuple, Optional, Union, Literal
 import warnings
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
 from tqdm import tqdm
 
-if TYPE_CHECKING:
-    from ..core.spectrometer import MPRSpectrometer
+from ..core.spectrometer import MPRSpectrometer
+from ..core.dual_foil_spectrometer import DualFoilSpectrometer
 
 class PerformanceAnalyzer:
     """Handles performance analysis for MPR spectrometer."""
     
-    def __init__(self, spectrometer: MPRSpectrometer):
-        self.spectrometer = spectrometer
+    def __init__(self, spectrometer: Union[MPRSpectrometer, DualFoilSpectrometer]):
+        if isinstance(spectrometer, MPRSpectrometer):
+            self.spectrometer = spectrometer
+        elif isinstance(spectrometer, DualFoilSpectrometer):
+            self.spectrometer = spectrometer.spec_ch2
+            self.dual_spectrometer = spectrometer.spec_cd2
+        else:
+            raise ValueError(f"Unsupported spectrometer type: {type(spectrometer)}")
     
     def analyze_monoenergetic_performance(
         self,
         input_energy: float,
         delta_energy: float = 0.05,
         num_recoil_particles: int = 10000,
+        spectrometer: Optional[MPRSpectrometer] = None,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         verbose: bool = False
@@ -33,14 +40,19 @@ class PerformanceAnalyzer:
             input_energy: Incident input particle energy in MeV
             delta_energy: Percentage deviation from target energy for resolution calculation
             num_recoil_particles: Number of recoil particles to simulate
+            spectrometer: MPRSpectrometer to analyze (defaults to self.spectrometer)
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             verbose: Print detailed results
-            
+
         Returns:
-            Tuple of (mean_position, std_deviation, fwhm, energy_resolution)
+            Tuple of (mean_position, std_deviation, fwhm, energy_resolution, dispersion)
         """
-        print(f'\nAnalyzing performance for {input_energy:.3f} MeV monoenergetic input particles...')
+        if spectrometer is None:
+            spectrometer = self.spectrometer
+
+        foil_name = spectrometer.conversion_foil.foil_material
+        print(f'\nAnalyzing {foil_name} performance for {input_energy:.3f} MeV monoenergetic input particles...')
         
         # Helper function for generating recoil positions mean and std
         def _get_positions(energy: float, num_recoils: int) -> Tuple[float, float]:
@@ -52,8 +64,8 @@ class PerformanceAnalyzer:
                 include_stopping_power_loss,
                 save_beam=False
             )
-            self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
-            x_positions = self.spectrometer.output_beam[:, 0]
+            spectrometer.apply_transfer_map(map_order=5, save_beam=False)
+            x_positions = spectrometer.output_beam[:, 0]
             mean_position, std_deviation = norm.fit(x_positions)
             return mean_position, std_deviation
         
@@ -92,10 +104,11 @@ class PerformanceAnalyzer:
         include_stopping_power_loss: bool = True,
         output_filename: Optional[str] = None,
         reset: bool = True
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> pd.DataFrame:
         """
         Generate comprehensive performance analysis including location, resolution, and efficiency.
-        
+        If a dual-foil spectrometer is used, analyzes both foils.
+
         Args:
             num_energies: Number of energy points to simulate
             num_recoils_per_energy: Number of recoil events per energy point for location/resolution
@@ -104,84 +117,95 @@ class PerformanceAnalyzer:
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
             reset: Whether to regenerate the dataset or load an existing one
-            
+
         Returns:
-            Tuple of (energies, positions_mean, positions_std, energy_resolutions, total_efficiencies)
+            Tuple of (energies, positions_mean, positions_std, energy_resolutions, total_efficiencies, foil_species)
         """
         print('\nGenerating comprehensive performance analysis...')
-        
+
         # Save comprehensive data
         if output_filename == None:
-            output_filename = f'{self.spectrometer.figure_directory}/comprehensive_performance.csv'
-        
-        if reset:
-            # Energy range
-            energies = np.linspace(self.spectrometer.min_energy, self.spectrometer.max_energy, num_energies)
-            
-            positions_mean = np.zeros_like(energies)
-            positions_std = np.zeros_like(energies)
-            gradients = np.zeros_like(energies)
-            energy_resolutions = np.zeros_like(energies)
-            scattering_efficiencies = np.zeros_like(energies)
-            geometric_efficiencies = np.zeros_like(energies)
-            total_efficiencies = np.zeros_like(energies)
-            
-            for i, energy in enumerate(tqdm(energies, desc='Calculating performance for a range of energies...')):
-                # Calculate location and resolution from monoenergetic analysis
-                mean_pos, std_dev, fwhm, energy_res, gradient = self.analyze_monoenergetic_performance(
-                    energy,
-                    num_recoil_particles=num_recoils_per_energy,
-                    include_kinematics=include_kinematics, 
-                    include_stopping_power_loss=include_stopping_power_loss,
-                    verbose=False
-                )
-                positions_mean[i] = mean_pos
-                positions_std[i] = std_dev
-                energy_resolutions[i] = energy_res
-                gradients[i] = gradient
-                
-                # Calculate efficiency for this energy
-                scattering_efficiency, geometric_efficiency, total_efficiency = self.spectrometer.conversion_foil.calculate_efficiency(
-                    energy, 
-                    num_samples=num_efficiency_samples
-                )
-                scattering_efficiencies[i] = scattering_efficiency
-                geometric_efficiencies[i] = geometric_efficiency
-                total_efficiencies[i] = total_efficiency
-            
-            # Save results to a csv
-            df = pd.DataFrame({
-                'energy [MeV]': energies,
-                'position mean [m]': positions_mean,
-                'position std [m]': positions_std,
-                'gradient [m/MeV]': gradients,
-                'resolution [MeV]': energy_resolutions,
-                'scattering efficiency': scattering_efficiencies,
-                'geometric efficiency': geometric_efficiencies,
-                'total efficiency': total_efficiencies
-            })
-            df.to_csv(output_filename, index=False)
-            
-            print(f'Comprehensive performance data saved to {output_filename}')
-        
+            output_filename = f'{self.spectrometer.data_directory}/comprehensive_performance.csv'
         else:
-            df = pd.read_csv(f'{output_filename}')
-            energies = df['energy [MeV]'].to_numpy()
-            positions_mean = df['position mean [m]'].to_numpy()
-            positions_std = df['position std [m]'].to_numpy()
-            energy_resolutions = df['resolution [MeV]'].to_numpy()
-            scattering_efficiencies = df['scattering efficiency'].to_numpy()
-            geometric_efficiencies = df['geometric efficiency'].to_numpy()
-            total_efficiencies = df['total efficiency'].to_numpy()
-        
-        return energies, positions_mean, positions_std, energy_resolutions, total_efficiencies
+            output_filename = f'{self.spectrometer.data_directory}/{output_filename}'
+
+        if reset:
+            # Determine spectrometers to analyze
+            spectrometers = [self.spectrometer]
+            if hasattr(self, 'dual_spectrometer'):
+                spectrometers.append(self.dual_spectrometer)
+
+            all_dfs = []
+
+            for spec in spectrometers:
+                foil_name = spec.conversion_foil.foil_material
+                print(f'\nAnalyzing {foil_name} foil...')
+
+                # Energy range
+                energies = np.linspace(spec.min_energy, spec.max_energy, num_energies)
+
+                positions_mean = np.zeros_like(energies)
+                positions_std = np.zeros_like(energies)
+                gradients = np.zeros_like(energies)
+                energy_resolutions = np.zeros_like(energies)
+                scattering_efficiencies = np.zeros_like(energies)
+                geometric_efficiencies = np.zeros_like(energies)
+                total_efficiencies = np.zeros_like(energies)
+
+                for i, energy in enumerate(tqdm(energies, desc=f'Calculating {foil_name} performance...')):
+                    # Calculate location and resolution from monoenergetic analysis
+                    mean_pos, std_dev, fwhm, energy_res, gradient = self.analyze_monoenergetic_performance(
+                        energy,
+                        num_recoil_particles=num_recoils_per_energy,
+                        spectrometer=spec,
+                        include_kinematics=include_kinematics,
+                        include_stopping_power_loss=include_stopping_power_loss,
+                        verbose=False
+                    )
+                    positions_mean[i] = mean_pos
+                    positions_std[i] = std_dev
+                    energy_resolutions[i] = energy_res
+                    gradients[i] = gradient
+
+                    # Calculate efficiency for this energy
+                    scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
+                        energy,
+                        num_samples=num_efficiency_samples
+                    )
+                    scattering_efficiencies[i] = scattering_efficiency
+                    geometric_efficiencies[i] = geometric_efficiency
+                    total_efficiencies[i] = total_efficiency
+
+                # Create DataFrame for this foil
+                foil_df = pd.DataFrame({
+                    'foil': foil_name,
+                    'energy [MeV]': energies,
+                    'position mean [m]': positions_mean,
+                    'position std [m]': positions_std,
+                    'gradient [m/MeV]': gradients,
+                    'resolution [keV]': energy_resolutions,
+                    'scattering efficiency': scattering_efficiencies,
+                    'geometric efficiency': geometric_efficiencies,
+                    'total efficiency': total_efficiencies
+                })
+                all_dfs.append(foil_df)
+
+            # Combine all foil DataFrames
+            df = pd.concat(all_dfs, ignore_index=True)
+            df.to_csv(output_filename, index=False)
+
+            print(f'Comprehensive performance data saved to {output_filename}')
+
+        else:
+            df = pd.read_csv(output_filename)
+
+        return df
     
     def get_plasma_parameters(
         self,
-        n_bins: int = 200,
         dsr_energy_range: Tuple[float, float] = (10, 12),
         primary_energy_range: Tuple[float, float] = (13, 15)
-    ) -> Tuple[float, float, float, float, Tuple[float, float], Tuple[float, float], np.ndarray, np.ndarray]:
+    ) -> Tuple[float, float, float, float, Tuple[float, float], Tuple[float, float], np.ndarray, np.ndarray, np.ndarray, float]:
         """
         Get plasma parameters from the spectrometer object.
         
@@ -194,27 +218,25 @@ class PerformanceAnalyzer:
                 Energy range for primary neutrons in MeV
             
         Returns:
-            Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies)
+            Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies, energies_std, response, background)
         """
-        energies, energies_std = self._get_input_spectrum()
+        response, background, energies, energies_std = self._get_input_spectrum()
         
         # Calculate dsr
-        ds_count = np.sum((energies > dsr_energy_range[0]) & (energies < dsr_energy_range[1]))
-        primary_count = np.sum((energies > primary_energy_range[0]) & (energies < primary_energy_range[1]))
-        dsr = ds_count / primary_count
-        
-        # Bin the energies into bins
-        hist, edges = np.histogram(energies, bins=n_bins)
+        ds_idx = (energies > dsr_energy_range[0]) & (energies < dsr_energy_range[1])
+        primary_idx = (energies > primary_energy_range[0]) & (energies < primary_energy_range[1])
+        dsr = np.sum(response[ds_idx]) / np.sum(response[primary_idx])
+        # TODO: Add dsr uncertainty
         
         # Calculate plasma temperature
         # Find FWHM of 14.1 MeV peak
         # From J A Frenje 2020 Plasma Phys. Control. Fusion 62 023001
-        left_edge, right_edge = self._get_fwhm(hist, edges)
+        left_edge, right_edge = self._get_fwhm(response, energies)
         fwhm = (right_edge - left_edge)
         m_rat = 5.0 # sum of neutron plus alpha mass divided by neutron mass
         plasma_temperature = 9e-5 * m_rat / self.spectrometer.reference_energy * (fwhm * 1000)**2
         
-        return dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std
+        return dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std, response, background
 
     def _get_fwhm(self, hist, edges) -> Tuple[float, float]:
         """
@@ -240,21 +262,44 @@ class PerformanceAnalyzer:
         # Load comprehensive performance curve
         performance_curve_file = performance_curve_file or 'comprehensive_performance.csv'
         try:
-            performance_df = pd.read_csv(f'{self.spectrometer.figure_directory}/{performance_curve_file}')
+            performance_df = pd.read_csv(f'{self.spectrometer.data_directory}/{performance_curve_file}')
             return performance_df
         except:
             warnings.warn(f'Performance curve file {performance_curve_file} not found. May need to generate first.', RuntimeWarning)
             return
         
-    def _get_input_spectrum(self) -> Tuple[np.ndarray, np.ndarray]:
+    def _get_input_spectrum(
+        self,
+        dx: float = 0.5,
+        dy: float = 0.5,
+        foil_distance: Optional[float] = None,
+        particle_yield: Optional[float] = None
+    ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
         """
-        Get input particle mean energy based on the x position of the output beam.
+        Get input particle mean energy based on the binned response.
         
         Returns:
-            Input particle spectrum
+            response: np.ndarray of detector response values
+            background: float of total background contribution
+            input_energies: np.ndarray of input energies
+            input_energies_std: np.ndarray of input energy uncertainties
         """
-        # Convert the x positions to input particle energies based on the offset curve
-        x_positions = self.spectrometer.output_beam[:, 0]
+        recoil_density_map, response_map, X_mesh, Y_mesh = self.get_recoil_density_map(
+            dx, dy, foil_distance, particle_yield
+        )
+        
+        # Sum response map along y to get total response vs x
+        # In units of response/cm(-source)
+        response_values = np.sum(response_map, axis=0) * dy
+        x_positions = X_mesh[0, :] / 100  # Convert to meters
+        
+        # Total background is in response/cm^2-source
+        # Assume background is uniform across detector
+        total_background = self.spectrometer.hodoscope.get_total_background()
+        # Integrate background over y 
+        total_background *= X_mesh.shape[0] * dy
+        if particle_yield:
+            total_background *= particle_yield
         
         # Load comprehensive performance curve
         performance_df = self._load_performance_curve()
@@ -266,12 +311,27 @@ class PerformanceAnalyzer:
         gradient = performance_df['gradient [m/MeV]']
         
         # Interpolate to get the energies for the x positions
-        # TODO: interpolate with error
         energies = np.interp(x_positions, position_mean, input_energies)
         # Calculate energy uncertainty sigma_E = sigma_x / |dx/dE|
         energies_std = np.interp(x_positions, position_mean, position_std / np.abs(gradient))
         
-        return energies, energies_std
+        return response_values, total_background, energies, energies_std
+    
+    def _get_input_efficiency(self, energies: np.ndarray) -> np.ndarray:
+        """
+        Get the foil efficiency for a given set of input particle energies.
+        """
+        performance_df = self._load_performance_curve()
+        if performance_df is not None:
+            input_energies = performance_df['energy [MeV]']
+            total_efficiencies = performance_df['total efficiency']
+            
+            # Interpolate to get the efficiencies for the input energies
+            input_efficiencies = np.interp(energies, input_energies, total_efficiencies)
+        else:
+            input_efficiencies = np.ones(len(energies))
+        
+        return input_efficiencies
     
     def get_particle_density_map(
         self,
@@ -282,7 +342,7 @@ class PerformanceAnalyzer:
         input_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Calculate the density of recoil particle impact sites in the focal plane.
+        Calculate the density of recoil particle impact sites and detector response (if available) in the focal plane.
         
         Args:
             dx: X-direction resolution in cm
@@ -291,7 +351,7 @@ class PerformanceAnalyzer:
             input_yield, optional: Input particle yield
             
         Returns:
-            Tuple of (density_array, X_meshgrid, Y_meshgrid)
+            Tuple of (hydron_density_map, response_map, X_meshgrid, Y_meshgrid)
         """
         if len(self.spectrometer.output_beam) == 0:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
@@ -299,6 +359,7 @@ class PerformanceAnalyzer:
         x_positions = self.spectrometer.output_beam[:, 0] * 100
         y_positions = self.spectrometer.output_beam[:, 2] * 100
         input_energies = self.spectrometer.input_beam[:, 4]
+        output_energies = self.spectrometer.output_beam[:, 4]
         
         # Define grid boundaries
         x_min, x_max = np.min(x_positions), np.max(x_positions)
@@ -318,28 +379,16 @@ class PerformanceAnalyzer:
         cell_area_cm2 = dx*dy
         
         # Load performance curve to get foil efficiency and aperture solid angle
-        performance_df = self._load_performance_curve()
-        if performance_df is not None:
-            performance_energies = performance_df['energy [MeV]']
-            performance_efficiencies = performance_df['total efficiency']
-            
-            # Interpolate to get the efficiencies for the input energies
-            input_efficiencies = np.interp(input_energies, performance_energies, performance_efficiencies)
-        else:
-            input_efficiencies = np.ones(len(self.spectrometer.input_beam))
+        input_efficiencies = self._get_input_efficiency(input_energies)
             
         # If detector is used, calculate the sensitivity for the incident recoil particle
-        sensitivity_map = np.zeros_like(density_map)
-        if self.spectrometer.hodoscope.detector_used:
-            # Interpolate detector sensitivity for each particle
-            sensitivity = self.spectrometer.hodoscope.sensitivity[particle]
-            sensitivity_energies = sensitivity['energy']
-            sensitivity_yields = sensitivity['yields']
-            sensitivity_efficiencies = np.interp(input_energies, sensitivity_energies, sensitivity_yields)
-        else:
-            sensitivity_efficiencies = np.ones(len(self.spectrometer.input_beam))
+        response_map = np.zeros_like(density_map)
+        sensitivity_efficiencies = self.spectrometer.hodoscope.get_detector_response(
+            energies=output_energies,
+            particle=self.spectrometer.conversion_foil.particle
+        )
         
-        # Bin protons into grid cells
+        # Bin recoils into grid cells
         for i, (x_pos, y_pos) in enumerate(zip(x_positions, y_positions)):
             # Convert coordinates to grid indices
             x_idx = int((x_pos - x_min) / dx)
@@ -354,27 +403,59 @@ class PerformanceAnalyzer:
             
             # If detector is used, weight by sensitivity efficiency
             if self.spectrometer.hodoscope.detector_used:
-                sensitivity_map[y_idx, x_idx] += input_efficiencies[i] * sensitivity_efficiencies[i]
+                response_map[y_idx, x_idx] += input_efficiencies[i] * sensitivity_efficiencies[i]
         
-        # Convert to protons/cm^2/source_proton
-        total_protons = len(self.spectrometer.output_beam)
-        density_map /= (cell_area_cm2 * total_protons)
-        sensitivity_map /= (cell_area_cm2 * total_protons)
+        # Convert to recoils/cm^2/source_proton
+        total_recoils = len(self.spectrometer.output_beam)
+        density_map /= (cell_area_cm2 * total_recoils)
+        response_map /= (cell_area_cm2 * total_recoils)
         
         # Calculate foil solid angle fraction
         if foil_distance:
             foil_solid_angle_fraction = self.spectrometer.conversion_foil.foil_radius**2 / (4 * foil_distance**2)
             density_map *= foil_solid_angle_fraction
-            sensitivity_map *= foil_solid_angle_fraction
+            response_map *= foil_solid_angle_fraction
             
         # Add input yield
         if input_yield:
             density_map *= input_yield
-            sensitivity_map *= input_yield
+            response_map *= input_yield
         
         # Save the density map as csv
-        density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density_map.flatten(), sensitivity_map.flatten()))
+        density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density_map.flatten(), response_map.flatten()))
         density_df = pd.DataFrame(density_data, columns=['X', 'Y', 'Density', 'Sensitivity'])
-        density_df.to_csv(f'{self.spectrometer.figure_directory}/particle_density_map.csv', index=False)
+        density_df.to_csv(f'{self.spectrometer.figure_directory}/particle_density_map.csv', index=False)        
         
-        return density_map, sensitivity_map, X_mesh, Y_mesh
+        return density_map, response_map, X_mesh, Y_mesh
+    
+    def analyze_response(
+        self,
+        particle: Literal['proton', 'deuteron', 'electron'] = 'proton',
+        dx: float = 0.5, 
+        dy: float = 0.5,
+        foil_distance: Optional[float] = None,
+        particle_yield: Optional[float] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Analyze the detector response in the focal plane.
+        
+        Args:
+            particle: Particle type
+            dx: X-direction resolution in cm
+            dy: Y-direction resolution in cm
+            foil_distance, optional: Distance between foil and target in meters
+            particle_yield, optional: Particle yield
+            
+        Returns:
+            Tuple of x_positions, response_values
+        """
+        density_map, response_map, X_mesh, Y_mesh = self.get_particle_density_map(
+            particle, dx, dy, foil_distance, particle_yield
+        )
+        
+        # Sum response map along y to get total response vs x
+        response_values = np.sum(response_map, axis=0)
+        x_positions = X_mesh[0, :]
+        
+        return x_positions, response_values
+        

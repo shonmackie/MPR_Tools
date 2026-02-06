@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
@@ -139,10 +140,10 @@ class SpectrometerPlotter:
         fig.suptitle('Phase Space')
         
         # Color by recoil particle energy
-        x_pos = self.spectrometer.output_beam[:, 0] * 100
-        x_angle = self.spectrometer.output_beam[:, 1]
-        y_pos = self.spectrometer.output_beam[:, 2] * 100
-        y_angle = self.spectrometer.output_beam[:, 3]
+        x_pos = self.spectrometer.output_beam[:, 0] * 100  # Convert to cm
+        x_angle = self.spectrometer.output_beam[:, 1] * 1000  # Convert to mrad
+        y_pos = self.spectrometer.output_beam[:, 2] * 100 # Convert to cm
+        y_angle = self.spectrometer.output_beam[:, 3] * 1000  # Convert to mrad
         recoil_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         
         # X-Y position plot
@@ -157,7 +158,7 @@ class SpectrometerPlotter:
         
         # X position vs X angle
         scatter2 = axes[0, 1].scatter(
-            x_pos, x_angle * 1000, c=recoil_energies,
+            x_pos, x_angle, c=recoil_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[0, 1].set_xlabel('X Position [cm]')
@@ -177,7 +178,7 @@ class SpectrometerPlotter:
         
         # Y position vs Y angle
         scatter4 = axes[1, 1].scatter(
-            y_pos, y_angle * 1000, c=recoil_energies,
+            y_pos, y_angle, c=recoil_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[1, 1].set_xlabel('Y Position [cm]')
@@ -191,10 +192,10 @@ class SpectrometerPlotter:
         # Plot dual data if available
         if self.dual_data:
             spec2: MPRSpectrometer = self.dual_data['spectrometer']
-            x_pos2 = spec2.output_beam[:, 0]
-            x_angle2 = spec2.output_beam[:, 1]
-            y_pos2 = spec2.output_beam[:, 2]
-            y_angle2 = spec2.output_beam[:, 3]
+            x_pos2 = spec2.output_beam[:, 0] * 100 # Convert to cm
+            x_angle2 = spec2.output_beam[:, 1] * 1000 # Convert to mrad
+            y_pos2 = spec2.output_beam[:, 2] * 100 # Convert to cm
+            y_angle2 = spec2.output_beam[:, 3] * 1000 # Convert to mrad
             recoil_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
             
             # X-Y position plot
@@ -205,7 +206,7 @@ class SpectrometerPlotter:
             
             # X position vs X angle
             scatter2 = axes[0, 1].scatter(
-                x_pos2, x_angle2 * 1000, c=recoil_energies2,
+                x_pos2, x_angle2, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
@@ -217,7 +218,7 @@ class SpectrometerPlotter:
             
             # Y position vs Y angle
             scatter4 = axes[1, 1].scatter(
-                y_pos2, y_angle2 * 1000, c=recoil_energies2,
+                y_pos2, y_angle2, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
@@ -342,7 +343,7 @@ class SpectrometerPlotter:
         x_positions = self.spectrometer.output_beam[:, 0]*100 # cm
         x_range = (x_positions.min(), x_positions.max())
         
-        counts, bins, patches = ax.hist(
+        ax.hist(
             x_positions, 
             bins=np.linspace(x_range[0], x_range[1], num_bins),
             density=True,
@@ -358,7 +359,7 @@ class SpectrometerPlotter:
             x_positions2 = spec2.output_beam[:, 0]*100 # cm
             x_range2 = (x_positions2.min(), x_positions2.max())
             
-            counts2, bins2, patches2 = ax.hist(
+            ax.hist(
                 x_positions2, 
                 bins=np.linspace(x_range2[0], x_range2[1], num_bins),
                 density=True,
@@ -511,12 +512,13 @@ class SpectrometerPlotter:
             filename = f'{self.spectrometer.figure_directory}/particle_density_heatmap.png'
         
         particle = self.spectrometer.conversion_foil.particle
-        density, sensitivity, X_mesh, Y_mesh = self.performance_analyzer.get_particle_density_map(particle, dx, dy, foil_distance=6.0, input_yield=input_yield)
+        # TODO: make foil distance configurable
+        hydron_density, response, X_mesh, Y_mesh = self.performance_analyzer.get_particle_density_map(particle, dx, dy, foil_distance=6.0, input_yield=input_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(density), cmap=self.primary_cmap, shading='auto')
+        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(hydron_density), cmap=self.primary_cmap, shading='auto')
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
@@ -527,7 +529,7 @@ class SpectrometerPlotter:
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, sensitivity2, X_mesh2, Y_mesh2 = performance_analyzer2.get_particle_density_map(particle2, dx, dy)
+            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_particle_density_map(particle2, dx, dy, foil_distance=6.0, input_yield=input_yield)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
             units = f'[{particle2}/cm$^2$-source]' if input_yield == None else f'[{particle2}/cm$^2$]'
@@ -542,28 +544,28 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Particle density heatmap saved to {filename}')
         
-        # If detector is used, also plot sensitivity map
+        # If detector is used, also plot response map
         if self.spectrometer.hodoscope.detector_used:
             fig, ax = plt.subplots(figsize=(10, 8))
-            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(sensitivity), cmap=self.primary_cmap, shading='auto')
+            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(response), cmap=self.primary_cmap, shading='auto')
             cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-            units = f'[photons/cm$^2$-source]' if input_yield == None else f'[photons/cm$^2$]'
-            cbar.set_label(f'log$_{{10}}$(Detector Sensitivity {units})')
+            units = f'[response/cm$^2$-source]' if input_yield == None else f'[response/cm$^2$]'
+            cbar.set_label(f'log$_{{10}}$(Detector Response {units})')
             
             # Add dual data if available
             if self.dual_data:
-                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(sensitivity2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
+                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(response2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
                 cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-                units = f'[photons/cm$^2$-source]' if input_yield == None else f'[photons/cm$^2$]'
-                cbar2.set_label(f'log$_{{10}}$(Detector Sensitivity {units})')
+                units = f'[response/cm$^2$-source]' if input_yield == None else f'[response/cm$^2$]'
+                cbar2.set_label(f'log$_{{10}}$(Detector Response {units})')
             
             ax.set_xlabel('X Position [cm]')
             ax.set_ylabel('Y Position [cm]')
             ax.set_aspect('equal')
             fig.tight_layout()
-            sensitivity_filename = filename.replace('.png', '_sensitivity.png')
-            fig.savefig(sensitivity_filename, dpi=150, bbox_inches='tight')
-            print(f'Detector sensitivity heatmap saved to {sensitivity_filename}')
+            response_filename = filename.replace('.png', '_response.png')
+            fig.savefig(response_filename, dpi=150, bbox_inches='tight')
+            print(f'Detector response heatmap saved to {response_filename}')
             
             # Now plot the signal-to-background ratio map
             fig, ax = plt.subplots(figsize=(10, 8))
@@ -571,14 +573,14 @@ class SpectrometerPlotter:
             # Get signal-to-background ratio
             total_background = self.spectrometer.hodoscope.get_total_background()
             total_background *= input_yield if input_yield != None else 1.0
-            signal_to_background = sensitivity / total_background
+            signal_to_background = response / total_background
             
             im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(signal_to_background), cmap=self.primary_cmap, shading='auto')
             cbar = fig.colorbar(im, ax=ax, shrink=0.6)
             cbar.set_label('log$_{10}$(S/B)')
             
             if self.dual_data:
-                signal_to_background2 = sensitivity2 / total_background
+                signal_to_background2 = response2 / total_background
                 im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(signal_to_background2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
                 cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
                 cbar2.set_label('log$_{10}$(S/B)')
@@ -592,20 +594,21 @@ class SpectrometerPlotter:
             plt.close(fig)
             print(f'Signal-to-background ratio heatmap saved to {signal_to_background_filename}')
             
-            # Plot y-integrated S/B profile
+            # Plot y-integrated S/B profile            
             fig, ax = plt.subplots(figsize=(8, 4))
             # TODO: Actually integrate the signal. Only integrate over region where signal is non-zero
-            y_integrated_signal_to_background = np.sum(sensitivity, axis=0) / (total_background * Y_mesh.shape[0])
+            y_integrated_signal_to_background = np.sum(response, axis=0) / (total_background * Y_mesh.shape[0])
             # Take middle few rows
             middle_idx = int(Y_mesh.shape[0]/2)
-            y_integrated_signal_to_background = np.sum(sensitivity[middle_idx - 5:middle_idx + 5, :], axis=0) / (total_background * 10)
+            y_integrated_signal_to_background = np.sum(response[middle_idx - 5:middle_idx + 5, :], axis=0) / (total_background * 10)
             x_values = X_mesh[0, :]
             ax.plot(x_values, np.log10(y_integrated_signal_to_background), label='Signal-to-Background')
+            
             if self.dual_data:
-                y_integrated_signal_to_background2 = np.sum(sensitivity2, axis=0) / (total_background * Y_mesh2.shape[0])
+                y_integrated_signal_to_background2 = np.sum(response2, axis=0) / (total_background * Y_mesh2.shape[0])
                 # Take middle few rows
                 middle_idx2 = int(Y_mesh2.shape[0]/2)
-                y_integrated_signal_to_background2 = np.sum(sensitivity2[middle_idx2 - 5:middle_idx2 + 5, :], axis=0) / (total_background * 10)
+                y_integrated_signal_to_background2 = np.sum(response2[middle_idx2 - 5:middle_idx2 + 5, :], axis=0) / (total_background * 10)
                 x_values2 = X_mesh2[0, :]
                 ax.plot(x_values2, np.log10(y_integrated_signal_to_background2), label='Signal-to-Background (Dual)')
             
@@ -617,56 +620,82 @@ class SpectrometerPlotter:
             fig.savefig(y_integrated_filename, dpi=150, bbox_inches='tight')
             plt.close(fig)
             print(f'Y-integrated signal-to-background profile saved to {y_integrated_filename}')
+            
+            # Save data to csv
+            integrated_df = pd.DataFrame({
+                'X Position [cm]': x_values,
+                'log10(S/B)': np.log10(y_integrated_signal_to_background)
+            })
+            integrated_df.to_csv(y_integrated_filename.replace('.png', '.csv').replace(self.spectrometer.figure_directory, self.spectrometer.data_directory), index=False)
         
     def plot_synthetic_input_histogram(
         self,
-        n_bins = 200,
         filename: Optional[str] = None,
     ):
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/synthetic_{self.spectrometer.conversion_foil.input_particle}_histogram.png'
-        dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std = self.performance_analyzer.get_plasma_parameters(n_bins=n_bins)
+        dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std, response, background = self.performance_analyzer.get_plasma_parameters()
         fwhm = right_edge - left_edge
         
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         # Plot histogram
-        hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', linewidth=3, density=True)
-        # Add energy standard deviation
-        hist_std = self._get_histogram_std(bins, energies, energies_std)
-        ax.fill_between(
-            bins[1:], 
-            hist - hist_std, 
-            hist + hist_std,
-            color='tab:blue',
-            alpha=0.3,
-            step='pre'
+        ax.step(
+            energies,
+            response,
+            where='pre',
+            color=self.primary_color,
+            linewidth=3
         )
+        ax.fill_between(
+            energies,
+            response - background,
+            response + background,
+            step='pre',
+            color=self.primary_color,
+            alpha=0.3,
+        )
+        # hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', linewidth=3, density=True)
+        # Add energy standard deviation
+        # hist_std = self._get_histogram_std(bins, energies, energies_std)
+        # ax.fill_between(
+        #     bins[1:], 
+        #     hist - hist_std, 
+        #     hist + hist_std,
+        #     color='tab:blue',
+        #     alpha=0.3,
+        #     step='pre'
+        # )
         
         # Add dual data if available
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
-            dsr2, plasma_temperature2, left_edge2, right_edge2, dsr_energy_range2, primary_energy_range2, energies2, energies_std2 = performance_analyzer2.get_plasma_parameters(n_bins=n_bins)
+            dsr2, plasma_temperature2, left_edge2, right_edge2, dsr_energy_range2, primary_energy_range2, energies2, energies_std2, response2, background2 = performance_analyzer2.get_plasma_parameters()
             fwhm2 = right_edge2 - left_edge2
-            hist2, bins2, _ = ax.hist(energies2, bins=n_bins, histtype='step', color='tab:orange', linewidth=3, density=True)
-            # Add energy standard deviation for dual data
-            hist_std2 = self._get_histogram_std(bins2, energies2, energies_std2)
-            ax.fill_between(
-                bins2[1:], 
-                hist2 - hist_std2, 
-                hist2 + hist_std2,
-                color='tab:orange',
-                alpha=0.3,
-                step='pre'
+            ax.step(
+                energies2,
+                response2,
+                where='pre',
+                color=self.dual_data['secondary_color'],
+                linewidth=3
             )
+            ax.fill_between(
+                energies2,
+                response2 - background2,
+                response2 + background2,
+                step='pre',
+                color=self.dual_data['secondary_color'],
+                alpha=0.3,
+            )
+            
         
         # Highlight dsr and primary range
-        ax.axvspan(dsr_energy_range[0], dsr_energy_range[1], color='tab:red', alpha=0.2)
+        ax.axvspan(dsr_energy_range[0], dsr_energy_range[1], color='tab:orange', alpha=0.2)
         ax.axvspan(primary_energy_range[0], primary_energy_range[1], color='tab:green', alpha=0.2)
         
         # Add text to indicate dsr and primary range
         ax.text(
             dsr_energy_range[0] + (dsr_energy_range[1] - dsr_energy_range[0]) / 2,
-            max(hist) / 1000,
+            max(response) / 1000,
             'DSR',
             ha='center',
             va='top',
@@ -676,7 +705,7 @@ class SpectrometerPlotter:
         
         ax.text(
             primary_energy_range[0] + (primary_energy_range[1] - primary_energy_range[0]) / 2,
-            max(hist) / 1000,
+            max(response) / 1000,
             'Primary',
             ha='center',
             va='top',
@@ -685,7 +714,7 @@ class SpectrometerPlotter:
         )
         
         # Add double sided arrow to indicate fwhm
-        height = max(hist)
+        height = max(response)
         ax.annotate(
             f'FWHM = {int(fwhm*1000):3d} keV  \n$T_i$ = {plasma_temperature:.2f} keV   ',
             xy=(right_edge, height/2),
@@ -738,6 +767,11 @@ class SpectrometerPlotter:
         
         # Take square root to get standard deviation
         hist_std = np.sqrt(hist_std)
+        
+        # TODO: Add background contribution from neutrons and gammas
+        if self.spectrometer.hodoscope.detector_used:
+            background_std = self.spectrometer.hodoscope.get_total_background()
+            hist_std = np.sqrt(hist_std**2 + background_std**2)
         
         # Normalize if density is True
         if density:
@@ -803,80 +837,90 @@ class SpectrometerPlotter:
     
     def plot_performance(
         self,  
-        energies: np.ndarray, 
-        positions: np.ndarray, 
-        position_uncertainties: np.ndarray,
-        energy_resolutions: np.ndarray,
-        total_efficiencies: np.ndarray,
+        df: pd.DataFrame,
         filename: Optional[str] = None
     ) -> None:
         """Generate comprehensive performance plot with shared x-axis."""
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/comprehensive_performance.png'
+        else:
+            filename = f'{self.spectrometer.figure_directory}/{filename}'
         
         fig, ax1 = plt.subplots(1, 1, figsize=(8, 5))
         fig.suptitle('Comprehensive Performance')
         
         # Left y-axis: position
-        color_position = 'tab:blue'
-        ax1.set_xlabel(f'{self.spectrometer.input_particle.capitalize()} Energy [MeV]')
-        ax1.set_ylabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Position [cm]', color=color_position)
+        color_position = 'tab:orange'
+        ax1.set_xlabel(f'{self.spectrometer.conversion_foil.input_particle.capitalize()} Energy [MeV]')
+        ax1.set_ylabel(f'Position [cm]', color=color_position)
         
-        # Plot position curve
-        ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
-                 label=f'Position')
-        ax1.fill_between(energies, (positions - position_uncertainties) * 100, 
-                        (positions + position_uncertainties) * 100,
-                        alpha=0.3, color=color_position)
-        ax1.grid(True, alpha=0.3)
-        ax1.tick_params(axis='y', labelcolor=color_position)
-        
-        # Right y-axis: Resolution and Efficiency
+        # Right y-axis: resolution and efficiency
         ax2 = ax1.twinx()
-        
-        # Plot energy resolution
-        color_resolution = 'tab:red'
-        ax2.plot(energies, energy_resolutions, color=color_resolution, 
-                        linewidth=2, marker='o', markersize=4,
-                        label=f'Resolution')
+        color_resolution = 'tab:purple'
         ax2.set_ylabel('Energy Resolution [keV]', color=color_resolution)
         ax2.tick_params(axis='y', labelcolor=color_resolution)
         
-        # Detection Efficiency
         ax3 = ax1.twinx()
         # Offset the third axis to the right
         ax3.spines['right'].set_position(('outward', 60))
         color_efficiency = 'tab:green'
-        ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency, 
-                        linewidth=2, marker='s', markersize=4,
-                        label=f'Efficiency')
-        ax3.set_ylabel(r'Efficiency[$\times$1e-6]', color=color_efficiency)
+        ax3.set_ylabel(r'Total Efficiency ($\times$1e6)', color=color_efficiency)
         ax3.tick_params(axis='y', labelcolor=color_efficiency)
         
-        # Label lines on their respective axes
-        range = energies.max() - energies.min()
-        labelLines(ax1.get_lines(), xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
-        labelLines(ax2.get_lines(), xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
-        labelLines(ax3.get_lines(), xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
-        
+        # Loop over foils (either one or two)
+        for foil, grp in df.groupby('foil'):
+            # Extract data from DataFrame
+            energies = grp['energy [MeV]'].to_numpy()
+            positions = grp['position mean [m]'].to_numpy()
+            position_uncertainties = grp['position std [m]'].to_numpy()
+            energy_resolutions = grp['resolution [keV]'].to_numpy()
+            total_efficiencies = grp['total efficiency'].to_numpy()
+            
+            # Plot position curve
+            position_line = ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
+                    label=f'Position')
+            ax1.fill_between(energies, (positions - position_uncertainties) * 100, 
+                            (positions + position_uncertainties) * 100,
+                            alpha=0.3, color=color_position)
+            ax1.grid(True, alpha=0.3)
+            ax1.tick_params(axis='y', labelcolor=color_position)
+            
+            resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution, 
+                            linewidth=2, marker='o', markersize=4,
+                            label=f'Resolution')
+            
+            efficiency_line = ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency, 
+                            linewidth=2, marker='s', markersize=4,
+                            label=f'Efficiency')
+            
+            # Label lines on their respective axes
+            range = energies.max() - energies.min()
+            labelLines(position_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
+            labelLines(resolution_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
+            labelLines(efficiency_line, xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
+            
+            # Add shading and label to indicate foil energy regions
+            if self.dual_data:
+                color = self.primary_color if foil == 'CH2' else self.dual_data['secondary_color']
+                ax1.axvspan(energies.min(), energies.max(), facecolor=color, alpha=0.3)
+                ax1.text(
+                    energies.mean(),
+                    ax1.get_ylim()[1] * 0.9,
+                    f'{foil} Foil',
+                    ha='center',
+                    va='top',
+                    color=color,
+                    fontsize=12
+                )
+            
         # Make sure x-axis limits are consistent
-        x_min, x_max = energies.min(), energies.max()
+        x_min, x_max = df['energy [MeV]'].min(), df['energy [MeV]'].max()
         x_margin = (x_max - x_min) * 0.02
         ax1.set_xlim(x_min - x_margin, x_max + x_margin)
         
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        
-        # Print summary statistics
-        print(f'\nPerformance Summary:')
-        print(f'  Energy range: {energies.min():.2f} - {energies.max():.2f} MeV')
-        print(f'  Position range: {positions.min()*100:.2f} - {positions.max()*100:.2f} cm')
-        print(f'  Average resolution: {np.mean(energy_resolutions):.1f} keV')
-        print(f'  Average efficiency: {np.mean(total_efficiencies):.3e}')
-        print(f'  Best resolution: {np.min(energy_resolutions):.1f} keV at {energies[np.argmin(energy_resolutions)]:.2f} MeV')
-        print(f'  Best efficiency: {np.max(total_efficiencies):.1e} at {energies[np.argmax(total_efficiencies)]:.2f} MeV')
-        print(f'Comprehensive performance plot saved to {filename}')
         
     def plot_data(
         self,

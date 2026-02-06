@@ -84,7 +84,7 @@ class FoilSweeper:
             DataFrame with sweep results
         """
         if output_filename is None:
-            output_filename = (f'{self.spectrometer.figure_directory}/foil_sweep_En{input_energy:.1f}MeV.csv')
+            output_filename = (f'{self.spectrometer.data_directory}/foil_sweep_En{neutron_energy:.1f}MeV.csv')
         
         # Check if results exist and reset=False
         if not reset and Path(output_filename).exists():
@@ -244,7 +244,7 @@ class FoilSweeper:
         if storage_path is not None:
             self.storage_path = storage_path
         else:
-            self.storage_path = f'{self.spectrometer.figure_directory}/optuna.db'
+            self.storage_path = f'{self.spectrometer.data_directory}/optuna.db'
         
         print(f"Optimization configured:")
         if self.optimization_ranges:

@@ -1,5 +1,6 @@
 """Main MPR spectrometer system implementation."""
 
+import os
 from typing import Tuple, Optional, Literal, List
 import numpy as np
 import pandas as pd
@@ -27,7 +28,7 @@ class MPRSpectrometer:
         min_energy: float,
         max_energy: float,
         hodoscope: Hodoscope,
-        figure_directory: str = '.'
+        run_directory: str = '.'
     ):
         """
         Initialize complete MPR spectrometer system.
@@ -39,7 +40,7 @@ class MPRSpectrometer:
             min_energy: Minimum acceptance energy in MeV
             max_energy: Maximum acceptance energy in MeV
             hodoscope: Hodoscope detector system
-            figure_directory: Directory for saving figures
+            run_directory: Directory for saving run data and figures
         """
         print(f'Initializing Magnetic {conversion_foil.particle.capitalize()} Recoil Spectrometer...')
         
@@ -48,7 +49,14 @@ class MPRSpectrometer:
         self.min_energy = min_energy
         self.max_energy = max_energy
         self.hodoscope = hodoscope
-        self.figure_directory = figure_directory
+        self.figure_directory = f'{run_directory}/figures'
+        self.data_directory = f'{run_directory}/data'
+        
+        # Create directories if they don't exist
+        if not os.path.exists(self.figure_directory):
+            os.makedirs(self.figure_directory)
+        if not os.path.exists(self.data_directory):
+            os.makedirs(self.data_directory)
         
         # Load transfer map
         # TODO: add functionality to check if a calibration curve exists for this map. If not, generate one!
@@ -441,7 +449,7 @@ class MPRSpectrometer:
         
         # Find maximum number of digits
         max_digits = len(str(np.max(term_indices)))
-        mass_included = max_digits == 7 # Only 6 digits if mass is not included
+        mass_included = max_digits >= 7 # Only 6 digits if mass is not included
         
         # Convert to zero-padded strings
         term_indices_str = np.array([str(x).zfill(max_digits) for x in term_indices])
@@ -478,7 +486,7 @@ class MPRSpectrometer:
     def save_input_beam(self, filepath: Optional[str] = None) -> None:
         """Save input beam to CSV file."""
         if filepath is None:
-            filepath = f'{self.figure_directory}/input_beam.csv'
+            filepath = f'{self.data_directory}/input_beam.csv'
         
         df = pd.DataFrame({
             'x0': self.input_beam[:, 0],
@@ -494,7 +502,7 @@ class MPRSpectrometer:
     def save_output_beam(self, filepath: Optional[str] = None) -> None:
         """Save output beam to CSV file."""
         if filepath is None:
-            filepath = f'{self.figure_directory}/output_beam.csv'
+            filepath = f'{self.data_directory}/output_beam.csv'
         
         df = pd.DataFrame({
             'x0': self.output_beam[:, 0],
@@ -520,14 +528,14 @@ class MPRSpectrometer:
         """
         # Read input beam
         if input_beam_path == None:
-            input_beam_path = f'{self.figure_directory}/input_beam.csv'
+            input_beam_path = f'{self.data_directory}/input_beam.csv'
             
         input_beam_df = pd.read_csv(input_beam_path)
         self.input_beam = input_beam_df.to_numpy()
         
         # Read output beam
         if output_beam_path == None:
-            output_beam_path = f'{self.figure_directory}/output_beam.csv'
+            output_beam_path = f'{self.data_directory}/output_beam.csv'
             
         output_beam_df = pd.read_csv(output_beam_path)
         self.output_beam = output_beam_df.to_numpy()
