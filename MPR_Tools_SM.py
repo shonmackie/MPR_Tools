@@ -160,7 +160,7 @@ class acceptance:
         #mu = np.cos(theta)
         return 0.5+1.5*l1*mu+2.5*l2*0.5*(3*mu**2-1)+3.5*l3*0.5*(5*mu**3-3*mu)+4.5*l4*0.125*(35*mu**4-30*mu**2+3)+5.5*l5*0.125*(63*mu**5-70*mu**3+15*mu)+6.5*l6*0.0625*(231*mu**6-315*mu**4+105*mu**2-5)
         
-    def diff_xs_LAB(self, theta, E):
+    def diff_xs_LAB(self, E, theta):
         '''
         theta is in the LAB frame
         theta - rad, scattering angle to evaluate (0, pi/2)
