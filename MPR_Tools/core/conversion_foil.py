@@ -54,7 +54,7 @@ class ConversionFoil:
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
         """
-        print('Initializing convergence foil...')
+        print('Initializing conversion foil...')
         
         # Convert units and store geometry
         self.foil_radius = foil_radius * 1e-2  # cm to m
@@ -356,8 +356,9 @@ class ConversionFoil:
         Convert center of mass frame to lab frame
         From Dan Casey MIT Thesis (2012), Appendix A
         '''
-        # This is the angle and differential cross section for the recoil particle, NOT the scattered input particle
+        # This is the angle and differential cross section for the recoil hydron, NOT the scattered neutron
         cos_theta_lab_recoil = np.sqrt((1 - cos_theta_cm) / 2)
+        theta_cm = np.arccos(cos_theta_cm)
         sigma_lab = 4 * cos_theta_lab_recoil * sigma_cm
         
         # Create interpolation objects for fast lookups
@@ -379,7 +380,7 @@ class ConversionFoil:
         """
         # Convert to energy in eV and use interpolator
         energy_eV = energy_MeV * 1e6
-        diff_xs = self.diff_xs_recoil_interpolator(energy_eV, np.cos(theta_lab))
+        diff_xs = self.diff_xs_recoil_interpolator(energy_eV, np.cos(theta_lab))*np.sin(theta_lab)
         if diff_xs.shape[0] == 1:
             return diff_xs.flatten()
         else:
