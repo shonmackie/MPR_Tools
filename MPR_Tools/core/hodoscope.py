@@ -1,6 +1,6 @@
 """Hodoscope detector array implementation."""
 
-from typing import Optional
+from typing import Optional, Union
 import numpy as np
 import os
 
