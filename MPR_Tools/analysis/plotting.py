@@ -309,6 +309,8 @@ class SpectrometerPlotter:
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal')
         
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        
         # Print summary statistics
         print(f'Characteristic ray analysis complete:')
         print(f'  Total rays generated: {len(self.spectrometer.input_beam)}')
