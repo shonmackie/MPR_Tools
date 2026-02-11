@@ -16,7 +16,7 @@ class MPRSpectrometer:
     Complete Magnetic Proton Recoil (MPR) spectrometer system.
     
     Combines conversion foil, ion optics transfer map, and hodoscope detector
-    for neutron spectroscopy via hydron recoil.
+    for neutral particle spectroscopy via charged particle recoil.
     """
     
     def __init__(
@@ -41,7 +41,7 @@ class MPRSpectrometer:
             hodoscope: Hodoscope detector system
             figure_directory: Directory for saving figures
         """
-        print('Initializing Magnetic Proton Recoil Spectrometer...')
+        print(f'Initializing Magnetic {conversion_foil.particle.capitalize()} Recoil Spectrometer...')
         
         self.conversion_foil = conversion_foil
         self.reference_energy = reference_energy
@@ -55,11 +55,11 @@ class MPRSpectrometer:
         self.transfer_map = np.genfromtxt(transfer_map_path, unpack=True)
         print(f'Loaded COSY transfer map from {transfer_map_path}\n')
         
-        # Initialize hydron beam arrays
+        # Initialize recoil beam arrays
         self.input_beam: np.ndarray = np.zeros(0)
         self.output_beam: np.ndarray = np.zeros(0)
         
-        print('MPR spectrometer initialization complete.\n')
+        print(f'M{conversion_foil.particle[0].capitalize()}R spectrometer initialization complete.\n')
     
     def generate_characteristic_rays(
         self,
@@ -150,9 +150,9 @@ class MPRSpectrometer:
         
     def generate_monte_carlo_rays(
         self,
-        neutron_energies: np.ndarray,
+        input_energies: np.ndarray,
         energy_distribution: np.ndarray,
-        num_hydrons: int,
+        num_recoil_particles: int,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
@@ -161,12 +161,12 @@ class MPRSpectrometer:
         y_restriction: Optional[Literal['positive', 'negative']] = None
     ) -> None:
         """
-        Generate hydron rays from neutron energy distribution using Monte Carlo with multiprocessing.
+        Generate recoil rays from input particle energy distribution using Monte Carlo with multiprocessing.
         
         Args:
-            neutron_energies: Array of neutron energies in MeV
+            input_energies: Array of input particle energies in MeV
             energy_distribution: Relative probability distribution (normalized automatically)
-            num_hydrons: Number of hydrons to simulate
+            num_recoil_particles: Number of recoil particles to simulate
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             z_sampling: Depth sampling method ('exp' or 'uni')
@@ -176,22 +176,22 @@ class MPRSpectrometer:
         if max_workers is None:
             max_workers = mp.cpu_count()
         
-        print(f'Generating {num_hydrons} Monte Carlo hydron trajectories using {max_workers} processes...')
+        print(f'Generating {num_recoil_particles} Monte Carlo {self.conversion_foil.particle} trajectories using {max_workers} processes...')
         
-        # Calculate hydrons per process
-        hydrons_per_process = num_hydrons // max_workers
-        remaining_hydrons = num_hydrons % max_workers
+        # Calculate recoil events per process
+        particles_per_process = num_recoil_particles // max_workers
+        remaining_particles = num_recoil_particles % max_workers
         
         # Narrow energy distribution unless doing monoenergetic performance
-        if len(neutron_energies) > 1:
-            # Only use neutron energies within acceptance range
-            idx = (neutron_energies >= self.min_energy) & (neutron_energies <= self.max_energy)
-            neutron_energies = neutron_energies[idx]
+        if len(input_energies) > 1:
+            # Only use input energies within acceptance range
+            idx = (input_energies >= self.min_energy) & (input_energies <= self.max_energy)
+            input_energies = input_energies[idx]
             energy_distribution = energy_distribution[idx]
         
         # Weight energy distribution by n-h scattering cross section
-        weighted_distribution = (energy_distribution * 
-                            self.conversion_foil.get_nh_cross_section(neutron_energies))
+        weighted_distribution = (energy_distribution *
+                            self.conversion_foil.get_nh_cross_section(input_energies))
         weighted_distribution /= np.sum(weighted_distribution)
         
         # Create shared counter for progress tracking
@@ -200,7 +200,7 @@ class MPRSpectrometer:
         progress_lock = manager.Lock()
         
         # Initialize progress bar
-        pbar = tqdm(total=num_hydrons, desc='Generating Monte Carlo hydron trajectories')
+        pbar = tqdm(total=num_recoil_particles, desc=f'Generating Monte Carlo {self.conversion_foil.particle} trajectories')
         
         # Execute in parallel
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -208,13 +208,13 @@ class MPRSpectrometer:
             
             # Submit jobs
             for i in range(max_workers):
-                batch_size = hydrons_per_process + (1 if i < remaining_hydrons else 0)
+                batch_size = particles_per_process + (1 if i < remaining_particles else 0)
                 if batch_size > 0:  # Only submit if there's work to do
                     # Package all parameters for the worker
                     worker_args = (
                         batch_size,
                         12345 + i * 1000,  # seed_offset
-                        neutron_energies,
+                        input_energies,
                         weighted_distribution,
                         include_kinematics,
                         include_stopping_power_loss,
@@ -260,7 +260,7 @@ class MPRSpectrometer:
         self,
         batch_size: int,
         seed_offset: int,
-        neutron_energies: np.ndarray,
+        input_energies: np.ndarray,
         weighted_distribution: np.ndarray,
         include_kinematics: bool,
         include_stopping_power_loss: bool,
@@ -271,7 +271,7 @@ class MPRSpectrometer:
         progress_lock,
         y_restriction: Optional[Literal['positive', 'negative']] = None  # Add thi
     ) -> np.ndarray:
-        """Generate a batch of hydrons in a separate process."""
+        """Generate a batch of recoil particles in a separate process."""
         # Create independent random number generator
         rng = np.random.default_rng(seed_offset)
         
@@ -279,13 +279,13 @@ class MPRSpectrometer:
         
         while len(batch_results) < batch_size:
             try:                
-                # Sample neutron energy
-                neutron_energy = rng.choice(neutron_energies, p=weighted_distribution)
+                # Sample input particle energy
+                input_energy = rng.choice(input_energies, p=weighted_distribution)
                 
-                # Generate scattered hydron with the worker's RNG
-                # The hydrons generated are already accepted by the aperture
-                x0, y0, theta_s, phi_s, hydron_energy = conversion_foil.generate_scattered_hydron(
-                    neutron_energy, 
+                # Generate recoil particle with the worker's RNG
+                # The recoil particles generated are already accepted by the aperture
+                x0, y0, theta_s, phi_s, recoil_energy = conversion_foil.generate_recoil_particle(
+                    input_energy,
                     include_kinematics, 
                     include_stopping_power_loss, 
                     z_sampling=z_sampling,
@@ -300,9 +300,9 @@ class MPRSpectrometer:
                 angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
                 angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
                 
-                energy_relative = (hydron_energy - reference_energy) / reference_energy
+                energy_relative = (recoil_energy - reference_energy) / reference_energy
                 
-                batch_results = np.vstack((batch_results, np.array([x0, angle_x, y0, angle_y, energy_relative, neutron_energy])))
+                batch_results = np.vstack((batch_results, np.array([x0, angle_x, y0, angle_y, energy_relative, input_energy])))
                 
                 # Update progress counter thread-safely
                 with progress_lock:
@@ -310,7 +310,7 @@ class MPRSpectrometer:
                     
             except Exception as e:
                 print(e)
-                print('Failed to generate hydron')
+                print(f'Failed to generate {self.conversion_foil.particle}')
                 pass  # Skip failed generations
         
         return batch_results
@@ -322,7 +322,7 @@ class MPRSpectrometer:
         max_workers: Optional[int] = None
     ) -> None:
         """
-        Apply ion optical transfer map to transport hydrons through spectrometer using multiprocessing.
+        Apply ion optical transfer map to transport recoil particles through spectrometer using multiprocessing.
         
         Args:
             map_order: Order of transfer map to apply (1-5 typically)
@@ -332,19 +332,19 @@ class MPRSpectrometer:
         if max_workers is None:
             max_workers = mp.cpu_count()
         
-        num_hydrons = len(self.input_beam)
+        num_recoil_particles = len(self.input_beam)
         
-        if num_hydrons == 0:
+        if num_recoil_particles == 0:
             print("Warning: No input beam data available. Generate rays first.")
             return
         
-        print(f'Applying order {map_order} transfer map to {num_hydrons} hydrons using {max_workers} processes...')
+        print(f'Applying order {map_order} transfer map to {num_recoil_particles} {self.conversion_foil.particle}s using {max_workers} processes...')
         
-        self.output_beam = np.zeros((num_hydrons, 5))
+        self.output_beam = np.zeros((num_recoil_particles, 5))
         
-        # Calculate hydrons per process
-        hydrons_per_process = num_hydrons // max_workers
-        remaining_hydrons = num_hydrons % max_workers
+        # Calculate recoil particles per process
+        particles_per_process = num_recoil_particles // max_workers
+        remaining_particles = num_recoil_particles % max_workers
         
         # Create shared counter for progress tracking
         manager = mp.Manager()
@@ -352,7 +352,7 @@ class MPRSpectrometer:
         progress_lock = manager.Lock()
         
         # Initialize progress bar
-        pbar = tqdm(total=num_hydrons, desc=f'Applying order {map_order} transfer map')
+        pbar = tqdm(total=num_recoil_particles, desc=f'Applying order {map_order} transfer map')
         
         # Execute in parallel
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -361,7 +361,7 @@ class MPRSpectrometer:
             # Submit jobs
             start_idx = 0
             for i in range(max_workers):
-                batch_size = hydrons_per_process + (1 if i < remaining_hydrons else 0)
+                batch_size = particles_per_process + (1 if i < remaining_particles else 0)
                 if batch_size > 0:  # Only submit if there's work to do
                     end_idx = start_idx + batch_size
                     
@@ -416,12 +416,12 @@ class MPRSpectrometer:
         progress_lock
     ) -> np.ndarray:
         """
-        Worker method to apply transfer map to a batch of hydrons.
+        Worker method to apply transfer map to a batch of recoil particles.
         
         Args:
             input_batch: Batch of input rays [N x 6]
             transfer_map: Transfer map coefficients
-            relative_mass: Relative mass of hydron to proton, only used if mass is included in transfer map
+            relative_mass: Relative mass of recoil particle to proton, only used if mass is included in transfer map
             map_order: Order of transfer map to apply
             progress_counter: Shared counter for progress tracking
             progress_lock: Lock for thread-safe progress updates
@@ -446,7 +446,7 @@ class MPRSpectrometer:
         # Extract digits for each term
         term_powers_array = np.array([list(s) for s in term_indices_str], dtype=int)
         
-        ### Apply transfer map to each hydron ###
+        ### Apply transfer map to each recoil ray ###
         for i, input_ray in enumerate(input_batch):
             # Initialize output ray with input energy
             output_ray = np.array([0.0, 0.0, 0.0, 0.0, input_ray[4]])
@@ -483,7 +483,7 @@ class MPRSpectrometer:
             'y0': self.input_beam[:, 2],
             'angle_y': self.input_beam[:, 3],
             'energy_relative': self.input_beam[:, 4],
-            'neutron_energy': self.input_beam[:, 5]
+            'input_energy': self.input_beam[:, 5]
         })
         df.to_csv(filepath, index=False)
         print(f'Input beam saved to {filepath}')
@@ -533,7 +533,7 @@ class MPRSpectrometer:
     
     def bin_hodoscope_response(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Bin hydron hits into hodoscope channels.
+        Bin recoil particle hits into hodoscope channels.
         
         Returns:
             Tuple of (channel_numbers, counts_per_channel)
@@ -567,6 +567,6 @@ class MPRSpectrometer:
             'max_energy': self.max_energy,
             'hodoscope_channels': self.hodoscope.total_channels,
             'detector_width_cm': self.hodoscope.detector_width_cm,
-            'num_input_hydrons': len(self.input_beam),
-            'num_output_hydrons': len(self.output_beam)
+            'num_input_recoil_particles': len(self.input_beam),
+            'num_output_recoil_particles': len(self.output_beam)
         }

@@ -19,20 +19,20 @@ class PerformanceAnalyzer:
     
     def analyze_monoenergetic_performance(
         self,
-        neutron_energy: float,
+        input_energy: float,
         delta_energy: float = 0.05,
-        num_hydrons: int = 10000,
+        num_recoil_particles: int = 10000,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         verbose: bool = False
     ) -> Tuple[float, float, float, float, float]:
         """
-        Analyze spectrometer performance for monoenergetic neutrons.
+        Analyze spectrometer performance for monoenergetic input particles.
         
         Args:
-            neutron_energy: Neutron energy in MeV
+            input_energy: Incident input particle energy in MeV
             delta_energy: Percentage deviation from target energy for resolution calculation
-            num_hydrons: Number of hydrons to simulate
+            num_recoil_particles: Number of recoil particles to simulate
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             verbose: Print detailed results
@@ -40,14 +40,14 @@ class PerformanceAnalyzer:
         Returns:
             Tuple of (mean_position, std_deviation, fwhm, energy_resolution)
         """
-        print(f'\nAnalyzing performance for {neutron_energy:.3f} MeV monoenergetic neutrons...')
+        print(f'\nAnalyzing performance for {input_energy:.3f} MeV monoenergetic input particles...')
         
-        # Helper function for generating hydron positions mean and std
-        def _get_positions(energy: float, num_hydrons: int) -> Tuple[float, float]:
+        # Helper function for generating recoil positions mean and std
+        def _get_positions(energy: float, num_recoils: int) -> Tuple[float, float]:
             self.spectrometer.generate_monte_carlo_rays(
                 np.array([energy]), 
                 np.array([1.0]), 
-                num_hydrons, 
+                num_recoils,
                 include_kinematics, 
                 include_stopping_power_loss,
                 save_beam=False
@@ -58,18 +58,18 @@ class PerformanceAnalyzer:
             return mean_position, std_deviation
         
         # Analyze focal plane distribution of target energy +/- delta
-        E_low = neutron_energy * (1 - delta_energy)
-        E_high = neutron_energy * (1 + delta_energy)
-        # To save compute time, since we're only interested in the mean, use less hydrons
-        mean_position_low, std_deviation_low = _get_positions(E_low, num_hydrons // 10)
-        mean_position_high, std_deviation_high = _get_positions(E_high, num_hydrons // 10)
+        E_low = input_energy * (1 - delta_energy)
+        E_high = input_energy * (1 + delta_energy)
+        # To save compute time, since we're only interested in the mean, use less recoils
+        mean_position_low, std_deviation_low = _get_positions(E_low, num_recoil_particles // 10)
+        mean_position_high, std_deviation_high = _get_positions(E_high, num_recoil_particles // 10)
         
         # Analyze focal plane distribution of target energy beamlet
-        mean_position_0, std_deviation_0 = _get_positions(neutron_energy, num_hydrons)
+        mean_position_0, std_deviation_0 = _get_positions(input_energy, num_recoil_particles)
         fwhm_0 = 2 * np.sqrt(2 * np.log(2)) * std_deviation_0
 
         mean_positions = np.r_[mean_position_low, mean_position_0, mean_position_high]
-        energies = np.r_[E_low, neutron_energy, E_high]
+        energies = np.r_[E_low, input_energy, E_high]
 
         dispersion = np.gradient(mean_positions, energies)[1]
 
@@ -86,7 +86,7 @@ class PerformanceAnalyzer:
     def generate_performance_curve(
         self,
         num_energies: int = 40,
-        num_hydrons_per_energy: int = 10000,
+        num_recoils_per_energy: int = 10000,
         num_efficiency_samples: int = int(1e6),
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -98,7 +98,7 @@ class PerformanceAnalyzer:
         
         Args:
             num_energies: Number of energy points to simulate
-            num_hydrons_per_energy: Number of hydrons per energy point for location/resolution
+            num_recoils_per_energy: Number of recoil events per energy point for location/resolution
             num_efficiency_samples: Number of samples for efficiency calculation
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
@@ -130,7 +130,7 @@ class PerformanceAnalyzer:
                 # Calculate location and resolution from monoenergetic analysis
                 mean_pos, std_dev, fwhm, energy_res, gradient = self.analyze_monoenergetic_performance(
                     energy,
-                    num_hydrons=num_hydrons_per_energy, 
+                    num_recoil_particles=num_recoils_per_energy,
                     include_kinematics=include_kinematics, 
                     include_stopping_power_loss=include_stopping_power_loss,
                     verbose=False
@@ -196,7 +196,7 @@ class PerformanceAnalyzer:
         Returns:
             Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies)
         """
-        energies, energies_std = self._get_neutron_spectrum()
+        energies, energies_std = self._get_input_spectrum()
         
         # Calculate dsr
         ds_count = np.sum((energies > dsr_energy_range[0]) & (energies < dsr_energy_range[1]))
@@ -246,14 +246,14 @@ class PerformanceAnalyzer:
             warnings.warn(f'Performance curve file {performance_curve_file} not found. May need to generate first.', RuntimeWarning)
             return
         
-    def _get_neutron_spectrum(self) -> Tuple[np.ndarray, np.ndarray]:
+    def _get_input_spectrum(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Get neutron spectrum based on the x position of the output beam.
+        Get input particle mean energy based on the x position of the output beam.
         
         Returns:
-            Neutron spectrum
+            Input particle spectrum
         """
-        # Convert the x positions to neutron energies based on the offset curve
+        # Convert the x positions to input particle energies based on the offset curve
         x_positions = self.spectrometer.output_beam[:, 0]
         
         # Load comprehensive performance curve
@@ -273,22 +273,22 @@ class PerformanceAnalyzer:
         
         return energies, energies_std
     
-    def get_hydron_density_map(
+    def get_particle_density_map(
         self,
-        particle: Literal['proton', 'deuteron'] = 'proton',
+        particle: Literal['proton', 'deuteron', 'electron'] = 'proton',
         dx: float = 0.5, 
         dy: float = 0.5,
         foil_distance: Optional[float] = None,
-        neutron_yield: Optional[float] = None
+        input_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Calculate the density of proton impact sites in the focal plane.
+        Calculate the density of recoil particle impact sites in the focal plane.
         
         Args:
             dx: X-direction resolution in cm
             dy: Y-direction resolution in cm
             foil_distance, optional: Distance between foil and target in meters
-            neutron_yield, optional: Neutron yield
+            input_yield, optional: Input particle yield
             
         Returns:
             Tuple of (density_array, X_meshgrid, Y_meshgrid)
@@ -328,7 +328,7 @@ class PerformanceAnalyzer:
         else:
             input_efficiencies = np.ones(len(self.spectrometer.input_beam))
             
-        # If detector is used, calculate the sensitivity for the incident hydron
+        # If detector is used, calculate the sensitivity for the incident recoil particle
         sensitivity_map = np.zeros_like(density_map)
         if self.spectrometer.hodoscope.detector_used:
             # Interpolate detector sensitivity for each particle
@@ -367,14 +367,14 @@ class PerformanceAnalyzer:
             density_map *= foil_solid_angle_fraction
             sensitivity_map *= foil_solid_angle_fraction
             
-        # Add neutron yield
-        if neutron_yield:
-            density_map *= neutron_yield
-            sensitivity_map *= neutron_yield
+        # Add input yield
+        if input_yield:
+            density_map *= input_yield
+            sensitivity_map *= input_yield
         
         # Save the density map as csv
         density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density_map.flatten(), sensitivity_map.flatten()))
         density_df = pd.DataFrame(density_data, columns=['X', 'Y', 'Density', 'Sensitivity'])
-        density_df.to_csv(f'{self.spectrometer.figure_directory}/hydron_density_map.csv', index=False)        
+        density_df.to_csv(f'{self.spectrometer.figure_directory}/particle_density_map.csv', index=False)
         
         return density_map, sensitivity_map, X_mesh, Y_mesh

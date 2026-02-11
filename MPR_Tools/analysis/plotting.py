@@ -60,7 +60,7 @@ class SpectrometerPlotter:
         point_size: float = 1.0
     ) -> None:
         """
-        Plot hydron distribution in the focal plane.
+        Plot recoil particle distribution in the focal plane.
         
         Args:
             filename: Output filename
@@ -89,12 +89,12 @@ class SpectrometerPlotter:
             ax.plot(x, y, color='black', linewidth=1.0)
             ax.plot(x, -y, color='black', linewidth=1.0)
 
-        # Scatter plot of hydron positions
-        hydron_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        # Scatter plot of recoil particle positions
+        recoil_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         scatter = ax.scatter(
             self.spectrometer.output_beam[:, 0]*100, 
             self.spectrometer.output_beam[:, 2]*100,
-            c=hydron_energies,
+            c=recoil_energies,
             s=point_size,
             cmap=self.primary_cmap,
             alpha=0.7
@@ -108,11 +108,11 @@ class SpectrometerPlotter:
         
         if self.dual_data:
             spec2: MPRSpectrometer = self.dual_data['spectrometer']
-            hydron_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
+            recoil_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
             scatter2 = ax.scatter(
                 spec2.output_beam[:, 0]*100, 
                 spec2.output_beam[:, 2]*100,
-                c=hydron_energies2,
+                c=recoil_energies2,
                 s=point_size,
                 cmap=self.dual_data['secondary_cmap'],
                 alpha=0.7,
@@ -138,16 +138,16 @@ class SpectrometerPlotter:
         fig, axes = plt.subplots(2, 2, figsize=(8, 6), layout='constrained')
         fig.suptitle('Phase Space')
         
-        # Color by hydron energy
+        # Color by recoil particle energy
         x_pos = self.spectrometer.output_beam[:, 0] * 100
         x_angle = self.spectrometer.output_beam[:, 1]
         y_pos = self.spectrometer.output_beam[:, 2] * 100
         y_angle = self.spectrometer.output_beam[:, 3]
-        hydron_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        recoil_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         
         # X-Y position plot
         scatter1 = axes[0, 0].scatter(
-            x_pos, y_pos, c=hydron_energies,
+            x_pos, y_pos, c=recoil_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[0, 0].set_xlabel('X Position [cm]')
@@ -157,7 +157,7 @@ class SpectrometerPlotter:
         
         # X position vs X angle
         scatter2 = axes[0, 1].scatter(
-            x_pos, x_angle * 1000, c=hydron_energies, 
+            x_pos, x_angle * 1000, c=recoil_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[0, 1].set_xlabel('X Position [cm]')
@@ -167,17 +167,17 @@ class SpectrometerPlotter:
         
         # X position vs energy
         scatter3 = axes[1, 0].scatter(
-            x_pos, hydron_energies, c=hydron_energies,
+            x_pos, recoil_energies, c=recoil_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[1, 0].set_xlabel('X Position [cm]')
-        axes[1, 0].set_ylabel('E$_{hydron}$ [MeV]')
+        axes[1, 0].set_ylabel(f'E$_{{{self.spectrometer.conversion_foil.particle}}}$ [MeV]')
         axes[1, 0].set_title('X Position-Energy')
         axes[1, 0].grid(True, alpha=0.3)
         
         # Y position vs Y angle
         scatter4 = axes[1, 1].scatter(
-            y_pos, y_angle * 1000, c=hydron_energies,
+            y_pos, y_angle * 1000, c=recoil_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[1, 1].set_xlabel('Y Position [cm]')
@@ -195,29 +195,29 @@ class SpectrometerPlotter:
             x_angle2 = spec2.output_beam[:, 1]
             y_pos2 = spec2.output_beam[:, 2]
             y_angle2 = spec2.output_beam[:, 3]
-            hydron_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
+            recoil_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
             
             # X-Y position plot
             scatter1 = axes[0, 0].scatter(
-                x_pos2, y_pos2, c=hydron_energies2,
+                x_pos2, y_pos2, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
             # X position vs X angle
             scatter2 = axes[0, 1].scatter(
-                x_pos2, x_angle2 * 1000, c=hydron_energies2,
+                x_pos2, x_angle2 * 1000, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
             # X position vs energy
             scatter3 = axes[1, 0].scatter(
-                x_pos2, hydron_energies2, c=hydron_energies2,
+                x_pos2, recoil_energies2, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
             # Y position vs Y angle
             scatter4 = axes[1, 1].scatter(
-                y_pos2, y_angle2 * 1000, c=hydron_energies2,
+                y_pos2, y_angle2 * 1000, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
@@ -301,7 +301,7 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(scatter, ax=ax)
-        cbar.set_label('Hydron Energy [MeV]')
+        cbar.set_label(f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
         
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
@@ -323,7 +323,7 @@ class SpectrometerPlotter:
         num_bins: int = 40
     ) -> None:
         """
-        Plot a simple histogram of hydron counts vs horizontal position.
+        Plot a simple histogram of recoil ray counts vs horizontal position.
         
         Args:
             filename: Output filename for the plot
@@ -370,7 +370,7 @@ class SpectrometerPlotter:
         
         ax.set_xlabel('Horizontal Position [cm]')
         ax.set_ylabel('Counts')
-        ax.set_title('Hydron Counts vs Position')
+        ax.set_title('Particle Counts vs Position')
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
         
@@ -490,15 +490,15 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Input ray geometry plot saved to {filename}')
 
-    def plot_hydron_density_heatmap(
+    def plot_particle_density_heatmap(
         self, 
         filename: Optional[str] = None,
         dx: float = 0.5, 
         dy: float = 0.5,
-        neutron_yield: Optional[float] = None
+        input_yield: Optional[float] = None
     ) -> None:
         """
-        Plot a heatmap of hydron density in the focal plane.
+        Plot a heatmap of recoil particle density in the focal plane.
         
         Args:
             filename: Output filename for the plot
@@ -506,10 +506,10 @@ class SpectrometerPlotter:
             dy: Y-direction resolution in cm
         """
         if filename == None:
-            filename = f'{self.spectrometer.figure_directory}/hydron_density_heatmap.png'
+            filename = f'{self.spectrometer.figure_directory}/particle_density_heatmap.png'
         
         particle = self.spectrometer.conversion_foil.particle
-        density, sensitivity, X_mesh, Y_mesh = self.performance_analyzer.get_hydron_density_map(particle, dx, dy, foil_distance=6.0, neutron_yield=neutron_yield)
+        density, sensitivity, X_mesh, Y_mesh = self.performance_analyzer.get_particle_density_map(particle, dx, dy, foil_distance=6.0, input_yield=input_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
         
@@ -518,17 +518,17 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        units = f'[{particle}/cm$^2$-source]' if neutron_yield == None else f'[{particle}/cm$^2$]'
+        units = f'[{particle}/cm$^2$-source]' if input_yield == None else f'[{particle}/cm$^2$]'
         cbar.set_label(f'log$_{{10}}$(Fluence {units})')
         
         # Add dual data if available
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, sensitivity2, X_mesh2, Y_mesh2 = performance_analyzer2.get_hydron_density_map(particle2, dx, dy)
+            density2, sensitivity2, X_mesh2, Y_mesh2 = performance_analyzer2.get_particle_density_map(particle2, dx, dy)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-            units = f'[{particle2}/cm$^2$-source]' if neutron_yield == None else f'[{particle2}/cm$^2$]'
+            units = f'[{particle2}/cm$^2$-source]' if input_yield == None else f'[{particle2}/cm$^2$]'
             cbar2.set_label(f'log$_{{10}}$(Fluence {units})')
         
         ax.set_xlabel('X Position [cm]')
@@ -538,21 +538,21 @@ class SpectrometerPlotter:
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f'Hydron density heatmap saved to {filename}')
+        print(f'Particle density heatmap saved to {filename}')
         
         # If detector is used, also plot sensitivity map
         if self.spectrometer.hodoscope.detector_used:
             fig, ax = plt.subplots(figsize=(10, 8))
             im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(sensitivity), cmap=self.primary_cmap, shading='auto')
             cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-            units = f'[photons/cm$^2$-source]' if neutron_yield == None else f'[photons/cm$^2$]'
+            units = f'[photons/cm$^2$-source]' if input_yield == None else f'[photons/cm$^2$]'
             cbar.set_label(f'log$_{{10}}$(Detector Sensitivity {units})')
             
             # Add dual data if available
             if self.dual_data:
                 im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(sensitivity2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
                 cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-                units = f'[photons/cm$^2$-source]' if neutron_yield == None else f'[photons/cm$^2$]'
+                units = f'[photons/cm$^2$-source]' if input_yield == None else f'[photons/cm$^2$]'
                 cbar2.set_label(f'log$_{{10}}$(Detector Sensitivity {units})')
             
             ax.set_xlabel('X Position [cm]')
@@ -568,7 +568,7 @@ class SpectrometerPlotter:
             
             # Get signal-to-background ratio
             total_background = self.spectrometer.hodoscope.get_total_background()
-            total_background *= neutron_yield if neutron_yield != None else 1.0
+            total_background *= input_yield if input_yield != None else 1.0
             signal_to_background = sensitivity / total_background
             
             im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(signal_to_background), cmap=self.primary_cmap, shading='auto')
@@ -616,13 +616,13 @@ class SpectrometerPlotter:
             plt.close(fig)
             print(f'Y-integrated signal-to-background profile saved to {y_integrated_filename}')
         
-    def plot_synthetic_neutron_histogram(
+    def plot_synthetic_input_histogram(
         self,
         n_bins = 200,
         filename: Optional[str] = None,
     ):
         if filename == None:
-            filename = f'{self.spectrometer.figure_directory}/synthetic_neutron_histogram.png'
+            filename = f'{self.spectrometer.figure_directory}/synthetic_{self.spectrometer.conversion_foil.input_particle}_histogram.png'
         dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std = self.performance_analyzer.get_plasma_parameters(n_bins=n_bins)
         fwhm = right_edge - left_edge
         
@@ -711,7 +711,7 @@ class SpectrometerPlotter:
             fontsize=12
         )
         
-        ax.set_xlabel('Neutron Energy [MeV]')
+        ax.set_xlabel(f'{self.spectrometer.conversion_foil.input_particle.capitalize()} Energy [MeV]')
         ax.set_ylabel('PDF')
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
@@ -719,7 +719,7 @@ class SpectrometerPlotter:
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f'Synthetic neutron histogram saved to {filename}')
+        print(f'Synthetic {self.spectrometer.conversion_foil.input_particle} histogram saved to {filename}')
         
     def _get_histogram_std(self, bins, energies, energies_std, density=True):
         """Helper function to compute histogram standard deviation."""
@@ -746,7 +746,7 @@ class SpectrometerPlotter:
     
     def plot_monoenergetic_analysis(
         self,  
-        neutron_energy: float, 
+        input_energy: float,
         mean_pos: float, 
         std_dev: float,
         filename: Optional[str] = None,
@@ -755,7 +755,7 @@ class SpectrometerPlotter:
         if filename == None:
             filename = (
                 f'{self.spectrometer.figure_directory}/' 
-                f'Monoenergetic_En{neutron_energy:.1f}MeV_'
+                f'Monoenergetic_En{input_energy:.1f}MeV_'
                 f'T{self.spectrometer.conversion_foil.thickness_um:.0f}um_'
                 f'E0{self.spectrometer.reference_energy:.1f}MeV.png'
             )
@@ -773,16 +773,16 @@ class SpectrometerPlotter:
         
         axes[0].set_xlabel('X Position [cm]')
         axes[0].set_ylabel('Probability Density')
-        axes[0].set_title(f'X-Position Distribution\n{neutron_energy:.1f} MeV Neutrons')
+        axes[0].set_title(f'X-Position Distribution\n{input_energy:.1f} MeV {self.spectrometer.conversion_foil.input_particle.capitalize()}s')
         axes[0].grid(True, alpha=0.3)
         axes[0].legend()
         
         # Scatter plot
-        hydron_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        recoil_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         scatter = axes[1].scatter(
             self.spectrometer.output_beam[:, 0]*100,
             self.spectrometer.output_beam[:, 2]*100,
-            c=hydron_energies,
+            c=recoil_energies,
             s=1.0,
             cmap=self.primary_cmap,
             alpha=0.6
@@ -791,7 +791,7 @@ class SpectrometerPlotter:
         fig.colorbar(scatter, ax=axes[1], label=f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
         axes[1].set_xlabel('X Position [cm]')
         axes[1].set_ylabel('Y Position [cm]')
-        axes[1].set_title(f'Focal Plane Distribution\n{neutron_energy:.1f} MeV Neutrons')
+        axes[1].set_title(f'Focal Plane Distribution\n{input_energy:.1f} MeV {self.spectrometer.conversion_foil.input_particle.capitalize()}s')
         axes[1].grid(True, alpha=0.3)
         
         fig.tight_layout()
@@ -817,7 +817,7 @@ class SpectrometerPlotter:
         
         # Left y-axis: position
         color_position = 'tab:blue'
-        ax1.set_xlabel('Neutron Energy [MeV]')
+        ax1.set_xlabel(f'{self.spectrometer.input_particle.capitalize()} Energy [MeV]')
         ax1.set_ylabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Position [cm]', color=color_position)
         
         # Plot position curve
@@ -950,7 +950,7 @@ class SpectrometerPlotter:
         
         axs[2].plot(srim_energies_MeV, srim_stopping_power, 'tab:blue', linewidth=2)
         
-        axs[2].set_xlabel(f'Hydron Energy [MeV]')
+        axs[2].set_xlabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
         axs[2].set_ylabel('Stopping Power [MeV/mm]')
         axs[2].grid(True, alpha=0.3)
         axs[2].set_xscale('log')

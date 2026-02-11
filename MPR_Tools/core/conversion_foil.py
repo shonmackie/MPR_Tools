@@ -1,4 +1,4 @@
-"""Conversion foil implementation for neutron-hydron scattering."""
+"""Conversion foil implementation for neutral-charged particle scattering."""
 
 from typing import Tuple, Optional, Literal
 import numpy as np
@@ -17,9 +17,9 @@ from ..config.constants import AVOGADRO, NEUTRON_MASS, FOIL_MATERIALS, DEFAULT_D
 
 class ConversionFoil:
     """
-    Represents a conversion foil and aperture system for neutron-hydron scattering.
+    Represents a conversion foil and aperture system for generating recoil particles.
     
-    The foil is where neutrons impinge and scatter hydrons, while the aperture
+    The foil is where input particles impinge and scatter recoil particles, while the aperture
     defines the ion optical acceptance.
     """    
     def __init__(
@@ -71,17 +71,18 @@ class ConversionFoil:
         
         # Calculate particle densities in CH2
         self.foil_material = foil_material
+        self.input_particle = FOIL_MATERIALS[foil_material]['input_particle']
         self.particle = FOIL_MATERIALS[foil_material]['particle']
         foil_density = FOIL_MATERIALS[foil_material]['density'] # g/cm^3
         molecular_weight = FOIL_MATERIALS[foil_material]['molecular_weight'] # g/mol
-        self.hydron_mass = FOIL_MATERIALS[foil_material]['hydron_mass'] # amu
+        self.particle_mass = FOIL_MATERIALS[foil_material]['particle_mass'] # amu
         
         # Calculate relative mass, either 0 for protons or ~1 for deuterons
-        self.relative_mass = (self.hydron_mass - FOIL_MATERIALS['CH2']['hydron_mass']) / FOIL_MATERIALS['CH2']['hydron_mass']
+        self.relative_mass = (self.particle_mass - FOIL_MATERIALS['CH2']['particle_mass']) / FOIL_MATERIALS['CH2']['particle_mass']
         
         density_factor = foil_density * AVOGADRO * 1e6
         self.carbon_density = density_factor / molecular_weight # carbon/m^3
-        self.hydron_density = self.carbon_density * 2 # hydrons/m^3
+        self.particle_density = self.carbon_density * 2 # particles/m^3
         
         # Load cross section and stopping power data
         module_dir = Path(__file__).parent
@@ -204,11 +205,11 @@ class ConversionFoil:
         Neglects straggling (valid for thin foils, less accurate at low energies).
         
         Args:
-            initial_energy: Initial hydron energy in MeV
+            initial_energy: Initial recoil particle energy in MeV
             path_length: Distance traveled through material in m
             
         Returns:
-            Final hydron energy in MeV
+            Final recoil particle energy in MeV
         """
         # check to make sure we're within the data bounds
         if initial_energy > self.integrated_srim_data[0][-1]:
@@ -231,11 +232,11 @@ class ConversionFoil:
         Calculate initial energy by reversing energy loss calculation.
         
         Args:
-            final_energy: Final hydron energy in MeV
+            final_energy: Final recoil particle energy in MeV
             path_length: Distance traveled through material in m
             
         Returns:
-            Initial hydron energy in MeV
+            Initial recoil paricle energy in MeV
         """
         final_x = np.interp(
             final_energy, self.integrated_srim_data[0], self.integrated_srim_data[1])
@@ -255,13 +256,13 @@ class ConversionFoil:
         convert dE/dx vs. E table into a range vs. E table, so that we can do slowing calculations with a single lookup
 
         Args:
-            energy: Array of hydron energies at which stopping has been calculated, in MeV
+            energy: Array of charged particle energies at which stopping has been calculated, in MeV
             electronic_stopping: the stopping rate due to interactions with electrons, in MeV/mm
             nuclear_stopping: the stopping rate due to interactions with nuclei, in MeV/mm
 
         Returns:
-            Array of hydron energies at which range has been calculated, in MeV
-            Distance a hydron at the given energy can travel in solid matter before stopping, in m
+            Array of charged particle energies at which range has been calculated, in MeV
+            Distance a charged at the given energy can travel in solid matter before stopping, in m
         """
         # add an infinity to the bottom of the stopping table so that behavior is defined down to E=0
         E = np.concatenate([[0], energy])  # MeV
@@ -276,10 +277,10 @@ class ConversionFoil:
     
     def get_nh_cross_section(self, energy_MeV: float) -> float:
         """
-        Get n-h elastic scattering cross section.
+        Get neutral-recoil elastic scattering cross section.
         
         Args:
-            energy_MeV: Incident neutron energy in MeV
+            energy_MeV: Incident input particle energy in MeV
             
         Returns:
             Cross section in m^2
@@ -296,7 +297,7 @@ class ConversionFoil:
         Get n-C12 elastic scattering cross section.
         
         Args:
-            energy_MeV: Incident neutron energy in MeV
+            energy_MeV: Incident input particle energy in MeV
             
         Returns:
             Cross section in m^2
@@ -355,13 +356,13 @@ class ConversionFoil:
         Convert center of mass frame to lab frame
         From Dan Casey MIT Thesis (2012), Appendix A
         '''
-        # This is the angle and differential cross section for the recoil hydron, NOT the scattered neutron
-        cos_theta_lab_hydron = np.sqrt((1 - cos_theta_cm) / 2)
-        sigma_lab = 4 * cos_theta_lab_hydron * sigma_cm
+        # This is the angle and differential cross section for the recoil particle, NOT the scattered input particle
+        cos_theta_lab_recoil = np.sqrt((1 - cos_theta_cm) / 2)
+        sigma_lab = 4 * cos_theta_lab_recoil * sigma_cm
         
         # Create interpolation objects for fast lookups
-        self.diff_xs_hydron_interpolator = RectBivariateSpline(
-            energies, cos_theta_lab_hydron, sigma_lab,
+        self.diff_xs_recoil_interpolator = RectBivariateSpline(
+            energies, cos_theta_lab_recoil, sigma_lab,
             kx=1, ky=1, s=0  # Linear interpolation, no smoothing
         )
     
@@ -371,14 +372,14 @@ class ConversionFoil:
         
         Args:
             theta_lab: Lab-frame scattering angle in radians
-            energy_MeV: Incident neutron energy in MeV
+            energy_MeV: Incident input particle energy in MeV
             
         Returns:
             Lab-frame differential cross section
         """
         # Convert to energy in eV and use interpolator
         energy_eV = energy_MeV * 1e6
-        diff_xs = self.diff_xs_hydron_interpolator(energy_eV, np.cos(theta_lab))
+        diff_xs = self.diff_xs_recoil_interpolator(energy_eV, np.cos(theta_lab))
         if diff_xs.shape[0] == 1:
             return diff_xs.flatten()
         else:
@@ -400,7 +401,7 @@ class ConversionFoil:
             rng: Random number generator
             scatter_angles: Array of possible scattering angles
             diff_xs: Differential cross section weights (normalized)
-            attenuation: neutron fluence falloff rate for z-sampling, in 1/m
+            attenuation: incident input fluence falloff rate for z-sampling, in 1/m
                          (0 for uniform sampling; -inf for front-surface-only sampling)
             y_restriction: Restrict y to positive or negative half (None for full foil)
         """
@@ -440,9 +441,9 @@ class ConversionFoil:
         return x0, y0, z0, theta_scatter, phi_scatter
 
     
-    def generate_scattered_hydron(
+    def generate_recoil_particle(
         self, 
-        neutron_energy: float, 
+        input_energy: float,
         include_kinematics: bool = False,
         include_stopping_power_loss: bool = False,
         num_angle_samples: int = 10000,
@@ -451,10 +452,10 @@ class ConversionFoil:
         y_restriction: Optional[Literal['positive', 'negative']] = None
     ) -> Tuple[float, float, float, float, float]:
         """
-        Generate a scattered hydron from neutron interaction.
+        Generate a scattered charged particle from input particle interaction.
         
         Args:
-            neutron_energy: Incident neutron energy in MeV
+            input_energy: Incident input particle energy in MeV
             include_kinematics: Include energy loss from non-perpendicular scattering
             include_stopping_power_loss: Include SRIM energy loss calculation
             num_angle_samples: Number of scattering angle samples
@@ -473,13 +474,13 @@ class ConversionFoil:
         scatter_angles = np.linspace(max_angle, 0, num_angle_samples)
         
         # Calculate differential cross section weights
-        diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
+        diff_xs = self.calculate_differential_xs_lab(scatter_angles, input_energy)
         diff_xs /= np.sum(diff_xs)  # Normalize
         
         # Set up z-sampling probability
         if z_sampling == 'exp':
-            attenuation = (self.get_nh_cross_section(neutron_energy) * self.hydron_density +
-                           self.get_nc12_cross_section(neutron_energy) * self.carbon_density)
+            attenuation = (self.get_nh_cross_section(input_energy) * self.particle_density +
+                           self.get_nc12_cross_section(input_energy) * self.carbon_density)
         else:  # uniform
             attenuation = 0
         
@@ -492,30 +493,30 @@ class ConversionFoil:
                 rng, scatter_angles, diff_xs, attenuation, y_restriction
             )
 
-            # Check if hydron passes through aperture
+            # Check if particle passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
-                # Initialize hydron energy
-                hydron_energy = neutron_energy
+                # Initialize recoil energy
+                recoil_energy = input_energy
                 
                 # Apply kinematic energy loss
                 if include_kinematics:
                     # Calculate energy loss from (382) of https://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node52.html
-                    gamma = NEUTRON_MASS / self.hydron_mass
-                    hydron_energy *= 4 * gamma / (1 + gamma)**2 * np.cos(theta_scatter)**2
+                    gamma = NEUTRON_MASS / self.particle_mass
+                    recoil_energy *= 4 * gamma / (1 + gamma)**2 * np.cos(theta_scatter)**2
                 
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
-                    hydron_energy = self.calculate_stopping_power_loss(hydron_energy, path_length)
+                    recoil_energy = self.calculate_stopping_power_loss(recoil_energy, path_length)
                 
                 accepted = True
             else:
                 rejected += 1
                 
         if not accepted:
-            raise ValueError("Unable to generate a hydron that passes through the aperture.")
+            raise ValueError("Unable to generate a recoil particle that passes through the aperture.")
                 
-        return x0, y0, theta_scatter, phi_scatter, hydron_energy
+        return x0, y0, theta_scatter, phi_scatter, recoil_energy
     
     def _check_aperture_acceptance(
         self, 
@@ -525,14 +526,14 @@ class ConversionFoil:
         phi_scatter: float
     ) -> bool:
         """
-        Check if a scattered hydron passes through the aperture.
+        Check if a scattered recoil particle passes through the aperture.
         
         Args:
             x0, y0: Initial position in foil
             theta_scatter, phi_scatter: Scattering angles
             
         Returns:
-            True if hydron passes through aperture
+            True if recoil particle passes through aperture
         """
         # Calculate position at aperture
         x_aperture = x0 + self.aperture_distance * np.tan(theta_scatter) * np.cos(phi_scatter)
@@ -548,39 +549,39 @@ class ConversionFoil:
     
     def calculate_efficiency(
         self, 
-        neutron_energy: float, 
+        input_energy: float,
         num_samples: int = int(1e6),
         num_angle_samples: int = 10000,
         max_workers: Optional[int] = None
     ) -> Tuple[float, float, float]:
         """
-        Estimate intrinsic efficiency (hydrons/neutron) of the spectrometer using parallel processing.
+        Estimate intrinsic efficiency (recoils/incident) of the spectrometer using parallel processing.
         
         Args:
-            neutron_energy: Incident neutron energy in MeV
+            input_energy: Incident input particle energy in MeV
             num_samples: Number of particles to simulate
             num_angle_samples: Angular discretization steps
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of scattering, geometric, and total efficiency as fraction of incident neutrons
+            Tuple of scattering, geometric, and total efficiency as fraction of incident input particles
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
         
-        print(f'\nEstimating intrinsic efficiency for {neutron_energy:.3f} MeV neutrons using {max_workers} processes...')
+        print(f'\nEstimating intrinsic efficiency for {input_energy:.3f} MeV particles using {max_workers} processes...')
         
         # Calculate scattering probability in foil (non-parallelizable part)
-        nh_xs = self.get_nh_cross_section(neutron_energy)
-        nc12_xs = self.get_nc12_cross_section(neutron_energy)
-        total_xs = nh_xs * self.hydron_density + nc12_xs * self.carbon_density
+        nh_xs = self.get_nh_cross_section(input_energy)
+        nc12_xs = self.get_nc12_cross_section(input_energy)
+        total_xs = nh_xs * self.particle_density + nc12_xs * self.carbon_density
         
-        scattering_efficiency = (self.hydron_density * nh_xs * 
+        scattering_efficiency = (self.particle_density * nh_xs *
                             (1 - np.exp(-total_xs * self.thickness)) / total_xs)
         
         # Prepare angular distributions
         scatter_angles = np.linspace(np.pi/2, 0, num_angle_samples)
-        diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
+        diff_xs = self.calculate_differential_xs_lab(scatter_angles, input_energy)
         diff_xs /= np.sum(diff_xs)  # Normalize
         
         # Calculate samples per process
@@ -718,16 +719,16 @@ class ConversionFoil:
     
     def get_proton_energy_distribution(
         self, 
-        neutron_energies: np.ndarray, 
+        input_energies: np.ndarray,
         energy_distribution: np.ndarray, 
         num_protons: int = int(1e2)
     ) -> np.ndarray:
         """
-        Calculate the proton energy distribution at foil exit for a given neutron energy distribution.
+        Calculate the proton energy distribution at foil exit for a given input particle energy distribution.
         
         Args:
-            neutron_energies: Array of neutron energies in MeV
-            energy_distribution: Distribution of neutron energies (will be normalized)
+            input_energies: Array of input particle energies in MeV
+            energy_distribution: Distribution of input particle energies (will be normalized)
             num_protons: Number of protons to simulate
             
         Returns:
@@ -736,16 +737,16 @@ class ConversionFoil:
         proton_energies = np.zeros(num_protons)
         
         # Weight distribution by n-p scattering cross section and normalize
-        weighted_distribution = energy_distribution * self.get_nh_cross_section(neutron_energies)
+        weighted_distribution = energy_distribution * self.get_nh_cross_section(input_energies)
         weighted_distribution = weighted_distribution / np.sum(weighted_distribution)
         
         for i in tqdm(range(num_protons), desc='Calculating proton energy distribution...'):
-            # Sample neutron energy from weighted distribution
-            neutron_energy = np.random.choice(neutron_energies, p=weighted_distribution)
+            # Sample input particle energy from weighted distribution
+            input_energy = np.random.choice(input_energies, p=weighted_distribution)
             
             # Generate scattered proton and extract final energy
-            _, _, _, _, proton_energy = self.generate_scattered_hydron(
-                neutron_energy, 
+            _, _, _, _, proton_energy = self.generate_recoil_particle(
+                input_energy,
                 include_kinematics=True, 
                 include_stopping_power_loss=True
             )

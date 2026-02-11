@@ -19,7 +19,7 @@ class FoilSweeper:
     Parameter sweep analysis for conversion foil optimization.
     
     Sweeps over foil parameters (radius, thickness, aperture distance, aperture radius)
-    and evaluates performance metrics for a given neutron energy.
+    and evaluates performance metrics for a given input particle energy.
     """
     
     def __init__(self, spectrometer: MPRSpectrometer) -> None:
@@ -64,9 +64,9 @@ class FoilSweeper:
     
     def run_sweep(
         self,
-        neutron_energy: float,
-        num_hydrons: int = 10000,
-        num_neutrons: int = 100000,
+        input_energy: float,
+        num_recoil_particles: int = 10000,
+        num_input_particles: int = 100000,
         output_filename: Optional[str] = None,
         reset: bool = True
     ) -> pd.DataFrame:
@@ -74,9 +74,9 @@ class FoilSweeper:
         Run parameter sweep analysis in serial (since Monte Carlo generation is already parallelized).
         
         Args:
-            neutron_energy: Neutron energy to analyze in MeV
-            num_hydrons: Number of hydrons for performance analysis
-            num_neutrons: Number of neutrons for efficiency calculation
+            input_energy: Incident input particle energy to analyze in MeV
+            num_recoil_particles: Number of scattered particles for performance analysis
+            num_input_particles: Number of input particles for efficiency calculation
             output_filename: Output CSV filename
             reset: Whether to recalculate or load existing results
             
@@ -84,7 +84,7 @@ class FoilSweeper:
             DataFrame with sweep results
         """
         if output_filename is None:
-            output_filename = (f'{self.spectrometer.figure_directory}/foil_sweep_En{neutron_energy:.1f}MeV.csv')
+            output_filename = (f'{self.spectrometer.figure_directory}/foil_sweep_En{input_energy:.1f}MeV.csv')
         
         # Check if results exist and reset=False
         if not reset and Path(output_filename).exists():
@@ -98,7 +98,7 @@ class FoilSweeper:
         # Run sweep serially with progress bar
         for i, (_, params) in enumerate(tqdm(self.combinations.iterrows(), desc='Parameter sweep progress')):
             
-            result = self._evaluate_parameter_combination(params.to_dict(), neutron_energy, num_hydrons, num_neutrons)
+            result = self._evaluate_parameter_combination(params.to_dict(), input_energy, num_recoil_particles, num_input_particles)
             
             if result is not None:
                 all_results[i] = result
@@ -117,18 +117,18 @@ class FoilSweeper:
     def _evaluate_parameter_combination(
         self,
         params: Dict[str, float],
-        neutron_energy: float,
-        num_hydrons: int,
-        num_neutrons: int
+        input_energy: float,
+        num_recoil_particles: int,
+        num_input_particles: int
     ) -> Optional[Dict[str, Any]]:
         """
         Evaluate a single parameter combination.
         
         Args:
             params: Dictionary of parameter values
-            neutron_energy: Neutron energy in MeV
-            num_hydrons: Number of hydrons for performance analysis
-            num_neutrons: Number of neutrons for efficiency calculation
+            input_energy: Incident input particle energy in MeV
+            num_recoil_particles: Number of scattered particles for performance analysis
+            num_input_particles: Number of input particles for efficiency calculation
             
         Returns:
             Dictionary with results or None if calculation failed
@@ -152,14 +152,14 @@ class FoilSweeper:
             
             # Calculate efficiency
             scattering_eff, geometric_eff, total_eff = new_foil.calculate_efficiency(
-                neutron_energy, 
-                num_samples=num_neutrons
+                input_energy,
+                num_samples=num_input_particles
             )
             
             # Calculate performance metrics using spectrometer's parallelized methods
             mean_pos, std_pos, fwhm, energy_res, gradient = self.performance_analyzer.analyze_monoenergetic_performance(
-                neutron_energy,
-                num_hydrons=num_hydrons,
+                input_energy,
+                num_recoil_particles=num_recoil_particles,
                 include_kinematics=True,
                 include_stopping_power_loss=True,
                 verbose=False
@@ -258,20 +258,20 @@ class FoilSweeper:
     
     def run_optimization(
         self,
-        neutron_energy: float,
+        input_energy: float,
         n_trials: int = 100,
-        num_hydrons: int = 10000,
-        num_neutrons: int = 100000,
+        num_recoil_particles: int = 10000,
+        num_input_particles: int = 100000,
         load_if_exists: bool = True
     ) -> optuna.Study:
         """
         Run multi-objective optimization using Optuna.
         
         Args:
-            neutron_energy: Neutron energy to analyze in MeV
+            input_energy: Incident input particle energy to analyze in MeV
             n_trials: Number of optimization trials to run
-            num_hydrons: Number of hydrons for performance analysis
-            num_neutrons: Number of neutrons for efficiency calculation
+            num_recoil_particles: Number of recoil particles for performance analysis
+            num_input_particles: Number of input particles for efficiency calculation
             load_if_exists: If True, load existing study if it exists
             
         Returns:
@@ -292,7 +292,7 @@ class FoilSweeper:
         
         # Create objective function with bound parameters
         def objective(trial: optuna.Trial) -> Tuple[float, float]:
-            return self._optimization_objective(trial, neutron_energy, num_hydrons, num_neutrons)
+            return self._optimization_objective(trial, input_energy, num_recoil_particles, num_input_particles)
         
         print(f"Starting optimization with {n_trials} trials...")
         self.study.optimize(objective, n_trials=n_trials)
@@ -303,18 +303,18 @@ class FoilSweeper:
     def _optimization_objective(
         self,
         trial: optuna.Trial,
-        neutron_energy: float,
-        num_hydrons: int,
-        num_neutrons: int
+        input_energy: float,
+        num_recoil_particles: int,
+        num_input_particles: int
     ) -> Tuple[float, float]:
         """
         Objective function for Optuna optimization.
         
         Args:
             trial: Optuna trial object
-            neutron_energy: Neutron energy in MeV
-            num_hydrons: Number of hydrons for performance analysis
-            num_neutrons: Number of neutrons for efficiency calculation
+            input_energy: Incident input particle energy in MeV
+            num_recoil_particles: Number of scattered particles for performance analysis
+            num_input_particles: Number of input particles for efficiency calculation
             
         Returns:
             Tuple of (energy_resolution, log10_efficiency)
@@ -328,7 +328,7 @@ class FoilSweeper:
         params.update(self.fixed_parameters)
         
         # Evaluate configuration
-        result = self._evaluate_parameter_combination(params, neutron_energy, num_hydrons, num_neutrons)
+        result = self._evaluate_parameter_combination(params, input_energy, num_recoil_particles, num_input_particles)
         
         if result is None:
             raise ValueError(f"Optimization failed for parameters: {params}")

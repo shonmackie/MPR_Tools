@@ -38,7 +38,7 @@ def test_whole_workflow():
     # do the math
     nspc.generate_monte_carlo_rays(
         energies, birth_spectrum,
-        num_hydrons=100,
+        num_recoil_particles=100,
     )
     nspc.apply_transfer_map()
     nspc.read_beams()

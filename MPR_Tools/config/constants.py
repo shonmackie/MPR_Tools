@@ -7,16 +7,18 @@ NEUTRON_MASS = 1.00867  # amu
 # Material properties
 FOIL_MATERIALS = {
     'CH2': {
+        'input_particle': 'neutron',
         'particle': 'proton',
         'density': 0.98,  # g/cm^3
         'molecular_weight': 14.0266,  # g/mol
-        'hydron_mass': 1.00728  # amu
+        'particle_mass': 1.00728  # amu
     },
     'CD2': {
-        'particle': 'deuteron', 
+        'input_particle': 'neutron',
+        'particle': 'deuteron',
         'density': 1.131,  # g/cm^3
         'molecular_weight': 16.0395,  # g/mol
-        'hydron_mass': 2.0136  # amu
+        'particle_mass': 2.0136  # amu
     }
 }
 

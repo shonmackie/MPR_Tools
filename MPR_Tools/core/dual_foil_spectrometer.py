@@ -128,9 +128,9 @@ class DualFoilSpectrometer:
     
     def generate_monte_carlo_rays(
         self,
-        neutron_energies: np.ndarray,
+        input_energies: np.ndarray,
         energy_distribution: np.ndarray,
-        num_hydrons: int,
+        num_recoil_particles: int,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
@@ -138,31 +138,31 @@ class DualFoilSpectrometer:
         max_workers: Optional[int] = None
     ) -> None:
         """
-        Generate hydron rays for both foils with y-restrictions.
+        Generate recoil rays for both foils with y-restrictions.
         
         Args:
-            neutron_energies: Array of neutron energies in MeV
+            input_energies: Array of input particle energies in MeV
             energy_distribution: Relative probability distribution
-            num_hydrons: Total number of hydrons to simulate
+            num_recoil_particles: Total number of recoil particles to simulate
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include SRIM energy loss
             z_sampling: Depth sampling method ('exp' or 'uni')
             save_beam: Whether to save beams to CSV
             max_workers: Maximum number of worker processes
         """
-        # Split hydrons between foils based on energy_distribution
-        ch2_idx = (neutron_energies >= self.ch2_min_energy) & (neutron_energies <= self.ch2_max_energy)
-        cd2_idx = (neutron_energies >= self.cd2_min_energy) & (neutron_energies <= self.cd2_max_energy)
+        # Split recoil events between foils based on energy_distribution
+        ch2_idx = (input_energies >= self.ch2_min_energy) & (input_energies <= self.ch2_max_energy)
+        cd2_idx = (input_energies >= self.cd2_min_energy) & (input_energies <= self.cd2_max_energy)
         ch2_fraction = np.sum(energy_distribution[ch2_idx]) / (np.sum(energy_distribution[ch2_idx]) + np.sum(energy_distribution[cd2_idx]))
-        num_ch2 = int(num_hydrons * ch2_fraction)
-        num_cd2 = num_hydrons - num_ch2
+        num_ch2 = int(num_recoil_particles * ch2_fraction)
+        num_cd2 = num_recoil_particles - num_ch2
         
         
         print(f'\nGenerating {num_ch2} CH2 (proton) rays with positive y restriction...')
         self.spec_ch2.generate_monte_carlo_rays(
-            neutron_energies=neutron_energies,
+            input_energies=input_energies,
             energy_distribution=energy_distribution,
-            num_hydrons=num_ch2,
+            num_recoil_particles=num_ch2,
             include_kinematics=include_kinematics,
             include_stopping_power_loss=include_stopping_power_loss,
             z_sampling=z_sampling,
@@ -173,9 +173,9 @@ class DualFoilSpectrometer:
         
         print(f'\nGenerating {num_cd2} CD2 (deuteron) rays with negative y restriction...')
         self.spec_cd2.generate_monte_carlo_rays(
-            neutron_energies=neutron_energies,
+            input_energies=input_energies,
             energy_distribution=energy_distribution,
-            num_hydrons=num_cd2,
+            num_recoil_particles=num_cd2,
             include_kinematics=include_kinematics,
             include_stopping_power_loss=include_stopping_power_loss,
             z_sampling=z_sampling,
@@ -261,7 +261,7 @@ class DualFoilSpectrometer:
         """
         Calculate the physical separation statistics for the dual-foil system.
         
-        Analyzes how many hydrons from each foil half end up crossing the y=0 line
+        Analyzes how many recoil particles from each foil half end up crossing the y=0 line
         at the detector plane.
         
         Returns:
@@ -303,7 +303,7 @@ class DualFoilSpectrometer:
             'deuterons_crossed_to_positive': deuterons_crossed,
             'deuteron_separation_percentage': deuteron_separation_pct,
             
-            'total_hydrons': protons_total + deuterons_total,
+            'total_recoils': protons_total + deuterons_total,
             'total_stayed_separated': protons_stayed + deuterons_stayed,
             'total_crossed': protons_crossed + deuterons_crossed,
             'overall_separation_percentage': overall_separation_pct
@@ -322,7 +322,7 @@ class DualFoilSpectrometer:
             'y0': self.combined_input_beam[:, 2],
             'angle_y': self.combined_input_beam[:, 3],
             'energy_relative': self.combined_input_beam[:, 4],
-            'neutron_energy': self.combined_input_beam[:, 5],
+            'input_energy': self.combined_input_beam[:, 5],
             'particle_type': self.combined_input_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)
