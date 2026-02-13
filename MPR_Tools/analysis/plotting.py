@@ -912,51 +912,40 @@ class SpectrometerPlotter:
         angles_rad = np.linspace(angle_range[1], angle_range[0], num_angles)
         angles_deg = np.degrees(angles_rad)
         
-        diff_xs_lab = foil.calculate_differential_xs_lab(angles_rad, energy_MeV)
-        
-        axs[0].plot(angles_deg, diff_xs_lab * 1e28, 'tab:blue', linewidth=2)
+        for interaction in foil.interactions:
+            interaction.calculate_angular_distribution(energy_MeV)
+            if hasattr(interaction, 'angle_distribution'):
+                diff_xs_lab = interaction.angle_distribution.pdf(angles_rad)
+                axs[0].plot(angles_deg, diff_xs_lab, 'tab:blue', linewidth=2)
+                
         axs[0].set_xlabel('Angle [deg]')
-        axs[0].set_ylabel('d$\\sigma$/d$\\Omega$ [barns/sr]')
+        axs[0].set_ylabel('Angle probability density')
         axs[0].grid(True, alpha=0.3)
         
         # ========== Plot 2: Cross Sections vs Energy ==========
-        # Use raw data from files (no interpolation)
-        # n-hydron cross section data
-        nh_energies_eV = foil.nh_cross_section_data[0]
-        nh_energies_MeV = nh_energies_eV * 1e-6  # Convert eV to MeV
-        nh_xs_barns = foil.nh_cross_section_data[1]  # Already in barns
-        
-        # n-C12 cross section data
-        nc12_energies_eV = foil.nc12_cross_section_data[0]
-        nc12_idx = (nc12_energies_eV >= np.min(nh_energies_eV)) & (nc12_energies_eV <= np.max(nh_energies_eV))
-        nc12_energies_MeV = nc12_energies_eV[nc12_idx] * 1e-6  # Convert eV to MeV
-        nc12_xs_barns = foil.nc12_cross_section_data[1, nc12_idx]  # Already in barns
-        
-        axs[1].plot(nh_energies_MeV, nh_xs_barns, 'tab:blue', linewidth=2, 
-                label=f'n-{foil.particle[0]} elastic')
-        axs[1].plot(nc12_energies_MeV, nc12_xs_barns, 'g-', linewidth=2, 
-                label='n-C12 elastic')
+        energies_MeV = np.linspace(1, 20, 1901)
+        for interaction in foil.interactions:
+            xs_inv_m = interaction.get_cross_section(energies_MeV)
+            axs[1].plot(energies_MeV, xs_inv_m, 'tab:blue', linewidth=2,
+                    label=interaction.name)
         axs[1].axvline(energy_MeV, color='k', linestyle='--', alpha=0.7, 
                     label=f'Current energy: {energy_MeV:.1f} MeV')
         
         axs[1].set_xlabel('Neutron Energy [MeV]')
-        axs[1].set_ylabel('Cross Section [barns]')
+        axs[1].set_ylabel('Macroscopic Cross Section [m^-1]')
         axs[1].grid(True, alpha=0.3)
         axs[1].set_yscale('log')
         axs[1].set_xscale('log')
         
-        # ========== Plot 3: Stopping Power vs Energy ==========
-        # Use raw SRIM data (no interpolation)
-        srim_energies_MeV = foil.srim_data[0]  # Already in MeV
-        srim_stopping_power = foil.srim_data[1] + foil.srim_data[2]  # Electronic + nuclear stopping
+        # ========== Plot 3: CSDA Range vs Energy ==========
+        srim_energies_MeV, srim_range_m = foil.integrated_stopping_data
+        srim_range_mm = srim_range_m/1e-3
         
-        axs[2].plot(srim_energies_MeV, srim_stopping_power, 'tab:blue', linewidth=2)
+        axs[2].plot(srim_energies_MeV, srim_range_mm, 'tab:blue', linewidth=2)
         
         axs[2].set_xlabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
-        axs[2].set_ylabel('Stopping Power [MeV/mm]')
+        axs[2].set_ylabel('Range in Foil Material [mm]')
         axs[2].grid(True, alpha=0.3)
-        axs[2].set_xscale('log')
-        axs[2].set_yscale('log')
         
         # Add dual data if available
         if self.dual_data:
@@ -964,24 +953,23 @@ class SpectrometerPlotter:
             foil2 = spec2.conversion_foil
             title = f'{foil.particle} and {foil2.particle} at {energy_MeV:.2f} MeV'
             
-            # differential cross section data
-            diff_xs_lab2 = foil2.calculate_differential_xs_lab(angles_rad, energy_MeV)
-            
-            axs[0].plot(angles_deg, diff_xs_lab2 * 1e28, 'darkorange', linewidth=2)
+            for interaction in foil2.interactions:
+                interaction.calculate_angular_distribution(energy_MeV)
+                if hasattr(interaction, 'angle_distribution'):
+                    diff_xs_lab2 = interaction.angle_distribution.pdf(angles_rad)
+                    axs[0].plot(angles_deg, diff_xs_lab2, 'darkorange', linewidth=2)
             
             # n-hydron cross section data
-            nh_energies_eV2 = foil2.nh_cross_section_data[0]
-            nh_energies_MeV2 = nh_energies_eV2 * 1e-6  # Convert eV to MeV
-            nh_xs_barns2 = foil2.nh_cross_section_data[1]  # Already in barns
-            
-            axs[1].plot(nh_energies_MeV2, nh_xs_barns2, 'darkorange', linewidth=2, 
-                    label=f'n-{foil2.particle[0]} elastic')
+            for interaction in foil2.interactions:
+                xs_inv_m2 = interaction.get_cross_section(energies_MeV)
+                axs[1].plot(energies_MeV, xs_inv_m2, 'darkorange', linewidth=2,
+                            label=interaction.name)
             
             # Stopping power for dual data
-            srim_energies_MeV2 = foil2.srim_data[0]  # Already in MeV
-            srim_stopping_power2 = foil2.srim_data[1] + foil2.srim_data[2]  # Electronic + nuclear stopping
+            srim_energies_MeV2, srim_range_m2 = foil2.integrated_stopping_data
+            srim_range_mm2 = srim_range_m2/1e-3
             
-            axs[2].plot(srim_energies_MeV2, srim_stopping_power2, 'darkorange', linewidth=2)
+            axs[2].plot(srim_energies_MeV2, srim_range_mm2, 'darkorange', linewidth=2)
         
         fig.legend()
         filename = f'{filename_prefix}_E{energy_MeV:.1f}MeV_data.png'

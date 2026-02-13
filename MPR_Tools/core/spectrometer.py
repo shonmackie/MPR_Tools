@@ -189,9 +189,12 @@ class MPRSpectrometer:
             input_energies = input_energies[idx]
             energy_distribution = energy_distribution[idx]
         
-        # Weight energy distribution by n-h scattering cross section
-        weighted_distribution = (energy_distribution *
-                            self.conversion_foil.get_nh_cross_section(input_energies))
+        # Weight energy distribution by scattering cross section
+        interaction_probability = np.zeros_like(energy_distribution)
+        for interaction in self.conversion_foil.interactions:
+            interaction_probability += (interaction.get_cross_section(input_energies) *
+                                        interaction.get_recoil_probability())
+        weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution /= np.sum(weighted_distribution)
         
         # Create shared counter for progress tracking
