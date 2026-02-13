@@ -93,10 +93,10 @@ FOIL_MATERIALS = {
 
 # Data file paths (relative to data/ folder)
 DATA_PATHS = {
-    'CH2_proton_stopping': 'CH2srimdata.txt',
+    'CH2_ion_stopping': 'CH2srimdata.txt',
     'np_cross_section': 'np_crosssection.txt',
     'np_diff_cross_section': 'np_diffxs.txt',
-    'CD2_proton_stopping': 'CD2srimdata.txt',
+    'CD2_ion_stopping': 'CD2srimdata.txt',
     'nd_cross_section': 'nd_crosssection.txt',
     'nd_diff_cross_section': 'nd_diffxs.txt',
     'nc12_cross_section': 'nC12_crosssection.txt',

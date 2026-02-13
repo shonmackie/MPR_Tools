@@ -89,7 +89,7 @@ class ConversionFoil:
             self.integrated_stopping_data = ConversionFoil._preintegrate_stopping_data(energy, stopping_power)
             print(f'Loaded ESTAR data from {estar_data_path}')
         else:
-            srim_data_path = data_dir / DATA_PATHS[f'{self.foil_material}_proton_stopping']
+            srim_data_path = data_dir / DATA_PATHS[f'{self.foil_material}_ion_stopping']
             energy, electronic_stopping_power, nuclear_stopping_power = np.genfromtxt(srim_data_path, skip_header=2, unpack=True)
             stopping_power = (electronic_stopping_power + nuclear_stopping_power) / 1e-3  # MeV/m
             self.integrated_stopping_data = ConversionFoil._preintegrate_stopping_data(energy, stopping_power)
