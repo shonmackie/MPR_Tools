@@ -13,3 +13,6 @@ This will automatically add MPR_Tools as an importable package.
 
 There are also tests meant to be run using Pytest.
 Run them with `python -m pytest` from the root project directory.
+If something is wrong with the code, they'll raise an error.
+It also saves a bunch of plots to `tests/output/`.  Check those out to make sure they look okay and normal.
+Except `characteristic_rays.png`; that one never looks normal and I don't know why.
