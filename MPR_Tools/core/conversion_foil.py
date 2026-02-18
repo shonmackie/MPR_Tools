@@ -11,7 +11,7 @@ import time
 from tqdm import tqdm
 
 from .matter_interactions import GenericInteraction, ElasticScattering, ComptonScattering, Interaction
-from ..config.constants import AVOGADRO, FOIL_MATERIALS, DATA_PATHS
+from ..config.constants import AVOGADRO, FOIL_MATERIALS
 
 
 class ConversionFoil:
@@ -67,6 +67,7 @@ class ConversionFoil:
         self.foil_density = FOIL_MATERIALS[foil_material]['density'] # g/cm^3
         self.molecular_weight = FOIL_MATERIALS[foil_material]['molecular_weight'] # g/mol
         self.particle_mass = FOIL_MATERIALS[foil_material]['particle_mass'] # amu
+        self.stopping_data_path = FOIL_MATERIALS[foil_material]['stopping_power']
         self.interaction_info = FOIL_MATERIALS[self.foil_material]['interactions']
     
         # Calculate relative mass, either 0 for protons or ~1 for deuterons
@@ -83,17 +84,15 @@ class ConversionFoil:
     
         # load cross section data
         if self.particle == "electron":
-            estar_data_path = data_dir / DATA_PATHS[f'{self.foil_material}_electron_stopping']
-            energy, mass_stopping_power = np.genfromtxt(estar_data_path, skip_header=8, unpack=True)
+            energy, mass_stopping_power = np.genfromtxt(data_dir / self.stopping_data_path, skip_header=8, unpack=True)
             stopping_power = mass_stopping_power * self.foil_density / 1e-2  # MeV/m
             self.integrated_stopping_data = ConversionFoil._preintegrate_stopping_data(energy, stopping_power)
-            print(f'Loaded ESTAR data from {estar_data_path}')
+            print(f'Loaded ESTAR data from {self.stopping_data_path}')
         else:
-            srim_data_path = data_dir / DATA_PATHS[f'{self.foil_material}_ion_stopping']
-            energy, electronic_stopping_power, nuclear_stopping_power = np.genfromtxt(srim_data_path, skip_header=2, unpack=True)
+            energy, electronic_stopping_power, nuclear_stopping_power = np.genfromtxt(data_dir / self.stopping_data_path, skip_header=2, unpack=True)
             stopping_power = (electronic_stopping_power + nuclear_stopping_power) / 1e-3  # MeV/m
             self.integrated_stopping_data = ConversionFoil._preintegrate_stopping_data(energy, stopping_power)
-            print(f'Loaded SRIM data from {srim_data_path}')
+            print(f'Loaded SRIM data from {self.stopping_data_path}')
 
         # Load cross section data
         self.interactions: list[Interaction] = []

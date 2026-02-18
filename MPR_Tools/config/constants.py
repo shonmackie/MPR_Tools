@@ -14,6 +14,7 @@ FOIL_MATERIALS = {
         'density': 0.98,  # g/cm^3
         'molecular_weight': 14.0266,  # g/mol
         'particle_mass': 1.00728,  # amu
+        'stopping_power': 'CH2srimdata.txt',
         'interactions': [
             {
                 'type': 'elastic_scattering',
@@ -35,6 +36,7 @@ FOIL_MATERIALS = {
         'density': 1.131,  # g/cm^3
         'molecular_weight': 16.0395,  # g/mol
         'particle_mass': 2.0136,  # amu
+        'stopping_power': 'CD2srimdata.txt',
         'interactions': [
             {
                 'type': 'elastic_scattering',
@@ -56,6 +58,7 @@ FOIL_MATERIALS = {
         'density': 0.78,  # g/cm^3
         'molecular_weight': 7.95,  # g/mol
         'particle_mass': 5.4858e-4,  # amu
+        'stopping_power': 'LiH_estar.txt',
         'interactions': [
             {
                 'type': 'compton_scattering',
@@ -69,6 +72,7 @@ FOIL_MATERIALS = {
         'density': 1.845,  # g/cm^3
         'molecular_weight': 9.0122,  # g/mol
         'particle_mass': 5.4858e-4,  # amu
+        'stopping_power': 'Be_estar.txt',
         'interactions': [
             {
                 'type': 'compton_scattering',
@@ -82,6 +86,7 @@ FOIL_MATERIALS = {
         'density': 2.35,  # g/cm^3
         'molecular_weight': 10.81,  # g/mol
         'particle_mass': 5.4858e-4,  # amu
+        'stopping_power': 'B_estar.txt',
         'interactions': [
             {
                 'type': 'compton_scattering',
@@ -89,18 +94,4 @@ FOIL_MATERIALS = {
             },
         ]
     },
-}
-
-# Data file paths (relative to data/ folder)
-DATA_PATHS = {
-    'CH2_ion_stopping': 'CH2srimdata.txt',
-    'np_cross_section': 'np_crosssection.txt',
-    'np_diff_cross_section': 'np_diffxs.txt',
-    'CD2_ion_stopping': 'CD2srimdata.txt',
-    'nd_cross_section': 'nd_crosssection.txt',
-    'nd_diff_cross_section': 'nd_diffxs.txt',
-    'nc12_cross_section': 'nC12_crosssection.txt',
-    'LiH_electron_stopping': 'Li_estar.txt',
-    'Be_electron_stopping': 'Be_estar.txt',
-    'B_electron_stopping': 'B_estar.txt',
 }
