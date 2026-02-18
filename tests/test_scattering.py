@@ -5,7 +5,7 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 from numpy import random, pi, inf, isclose, empty, degrees, array, mean, sqrt, std, linspace
 
-from core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
+from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
     ProbabilityDistribution
 
 

@@ -5,7 +5,7 @@ import pandas as pd
 from numpy.polynomial.legendre import legval
 from scipy.interpolate import CubicSpline, make_interp_spline
 
-from config.constants import ELECTRON_REST_ENERGY, NEUTRON_MASS, CLASSICAL_ELECTRON_RADIUS
+from ..config.constants import ELECTRON_REST_ENERGY, NEUTRON_MASS, CLASSICAL_ELECTRON_RADIUS
 
 
 class GenericInteraction:
