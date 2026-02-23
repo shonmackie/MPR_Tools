@@ -6,22 +6,22 @@ from matplotlib import pyplot as plt
 from numpy import random, pi, inf, isclose, empty, degrees, array, mean, sqrt, std, linspace
 
 from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
-    ProbabilityDistribution
+    PairProduction, ProbabilityDistribution
 
 
-def test_nC12_cross_section():
+def test_nC12_scatter():
     carbon_scatter = GenericInteraction(
         name='(n,C12)',
         target_density=1,
         cross_section_path=Path('MPR_Tools/data/nC12_crosssection.txt'),
     )
     
-    assert isclose(carbon_scatter.get_cross_section(14.0), 0.819214e-28)
+    assert isclose(carbon_scatter.get_cross_section(14.0), 0.819214e-28, rtol=1e-9, atol=0)
     
-    assert carbon_scatter.recoil_probability == 0
+    assert carbon_scatter.get_recoil_probability() == 0
 
 
-def test_np_cross_section():
+def test_np_scatter():
     proton_scatter = ElasticScattering(
         name='(n,p)',
         target_density=1,
@@ -30,13 +30,13 @@ def test_np_cross_section():
         differential_xs_path=Path('MPR_Tools/data/np_diffxs.txt'),
     )
     
-    assert isclose(proton_scatter.get_cross_section(14.0), 0.687562e-28)
+    assert isclose(proton_scatter.get_cross_section(14.0), 0.687562e-28, rtol=1e-9, atol=0)
     
     angles, energies = generate_recoil_particles(proton_scatter, 14.0)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 14))
     
-    assert proton_scatter.recoil_probability == 1
+    assert proton_scatter.get_recoil_probability() == 1
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -48,7 +48,7 @@ def test_np_cross_section():
     plt.close()
 
 
-def test_nd_cross_section():
+def test_nd_scatter():
     deuteron_scatter = ElasticScattering(
         name='(n,d)',
         target_density=1,
@@ -57,13 +57,13 @@ def test_nd_cross_section():
         differential_xs_path=Path('MPR_Tools/data/nd_diffxs.txt'),
     )
     
-    assert isclose(deuteron_scatter.get_cross_section(14.0), 0.687562e-28)
+    assert isclose(deuteron_scatter.get_cross_section(14.0), 0.6435662e-28, rtol=1e-9, atol=0)
     
     angles, energies = generate_recoil_particles(deuteron_scatter, 14.0)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 12.5))
     
-    assert deuteron_scatter.recoil_probability == 1
+    assert deuteron_scatter.get_recoil_probability() == 1
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -75,18 +75,18 @@ def test_nd_cross_section():
     plt.close()
 
 
-def test_compton_cross_section():
+def test_compton_scatter():
     compton_scatter = ComptonScattering(
         target_density=1,
     )
     
-    assert isclose(compton_scatter.get_macroscopic_cross_section(16.7), 0.0348e-28, rtol=1e-2)
+    assert isclose(compton_scatter.get_cross_section(16.7), 0.0348e-28, rtol=0.05, atol=0)  # 3.5 mb is from the exact Klein-Nishina formula
     
     angles, energies = generate_recoil_particles(compton_scatter, 16.7)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 16.45))
     
-    assert compton_scatter.recoil_probability == 1
+    assert compton_scatter.get_recoil_probability() == 1
     
     plt.figure()
     plt.hist(degrees(angles), density=True, bins=100)
@@ -95,6 +95,30 @@ def test_compton_cross_section():
     plt.title(f"{compton_scatter.name} electron distribution from 16.7 MeV photons")
     plt.tight_layout()
     plt.savefig("tests/output/test_compton_cross_section.png")
+    plt.close()
+
+
+def test_pair_production():
+    pair_production = PairProduction(
+        target_density=1,
+        charge=5,
+    )
+    
+    assert isclose(pair_production.get_cross_section(16.7), 0.07438e-28, rtol=0.05, atol=0)  # 74 mb is from NIST's XCOM database
+    
+    angles, energies = generate_recoil_particles(pair_production, 16.7)
+    assert all((angles >= 0) & (angles <= pi))
+    assert all((energies >= 0) & (energies <= 15.7))
+    
+    assert pair_production.get_recoil_probability() == 1
+    
+    plt.figure()
+    plt.hist(energies, density=True, bins=50)
+    plt.xlabel("Electron energy (MeV)")
+    plt.ylabel("Electron spectrum (MeV^-1)")
+    plt.title(f"{pair_production.name} electron spectrum from 16.7 MeV photons")
+    plt.tight_layout()
+    plt.savefig("tests/output/test_pair_production_cross_section.png")
     plt.close()
 
 
