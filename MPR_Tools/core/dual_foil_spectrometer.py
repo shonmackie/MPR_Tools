@@ -318,9 +318,9 @@ class DualFoilSpectrometer:
         
         df = pd.DataFrame({
             'x0': self.combined_input_beam[:, 0],
-            'angle_x': self.combined_input_beam[:, 1],
+            'p_x_relative': self.combined_input_beam[:, 1],
             'y0': self.combined_input_beam[:, 2],
-            'angle_y': self.combined_input_beam[:, 3],
+            'p_y_relative': self.combined_input_beam[:, 3],
             'energy_relative': self.combined_input_beam[:, 4],
             'input_energy': self.combined_input_beam[:, 5],
             'particle_type': self.combined_input_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
@@ -335,9 +335,9 @@ class DualFoilSpectrometer:
         
         df = pd.DataFrame({
             'x0': self.combined_output_beam[:, 0],
-            'angle_x': self.combined_output_beam[:, 1],
+            'p_x_relative': self.combined_output_beam[:, 1],
             'y0': self.combined_output_beam[:, 2],
-            'angle_y': self.combined_output_beam[:, 3],
+            'p_y_relative': self.combined_output_beam[:, 3],
             'energy_relative': self.combined_output_beam[:, 4],
             'particle_type': self.combined_output_beam[:, 5].astype(int)  # 1=proton, 2=deuteron
         })

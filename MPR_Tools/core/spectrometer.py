@@ -96,6 +96,8 @@ class MPRSpectrometer:
         )
         energy_offset_values = energy_values - self.reference_energy
         
+        reference_gamma = 1 + self.reference_energy/(self.conversion_foil.particle_mass*931.494)
+
         self.input_beam = np.zeros((num_rays, 6))
         print(f'Characteristic ray energy range: {min_energy:.3f}-{max_energy:.3f} MeV')
         
@@ -131,8 +133,14 @@ class MPRSpectrometer:
                                 angle_x = np.arctan((x_aperture - x_foil) / self.conversion_foil.aperture_distance)
                                 angle_y = np.arctan((y_aperture - y_foil) / self.conversion_foil.aperture_distance)
                                 
+                                # Calculate relative transverse momenta since that's what COSY uses instead of angle fsr
+                                gamma = 1 + energy/(self.conversion_foil.particle_mass*931.494)
+                                p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
+                                p_x_relative = p_relative * np.sin(angle_x)
+                                p_y_relative = p_relative * np.sin(angle_y)
+
                                 # Check for duplicates
-                                ray = [x_foil, -angle_x, y_foil, -angle_y, energy_offset, energy]
+                                ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, energy_offset, energy]
                                 is_duplicate = False
                                 
                                 for prev_idx in range(ray_index):
@@ -278,6 +286,8 @@ class MPRSpectrometer:
         # Create independent random number generator
         rng = np.random.default_rng(seed_offset)
         
+        reference_gamma = 1 + reference_energy/(conversion_foil.particle_mass*931.494)
+        
         batch_results = np.empty((0, 6), dtype=float)
         
         while len(batch_results) < batch_size:
@@ -303,9 +313,14 @@ class MPRSpectrometer:
                 angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
                 angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
                 
+                gamma = 1 + recoil_energy/(conversion_foil.particle_mass*931.494)
+                p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
+                p_x_relative = p_relative * np.sin(angle_x)
+                p_y_relative = p_relative * np.sin(angle_y)
+                
                 energy_relative = (recoil_energy - reference_energy) / reference_energy
                 
-                batch_results = np.vstack((batch_results, np.array([x0, angle_x, y0, angle_y, energy_relative, input_energy])))
+                batch_results = np.vstack((batch_results, np.array([x0, p_x_relative, y0, p_y_relative, energy_relative, input_energy])))
                 
                 # Update progress counter thread-safely
                 with progress_lock:
@@ -464,7 +479,7 @@ class MPRSpectrometer:
                         monomial *= relative_mass**term_powers[6]
                     
                     # Add contributions to each coordinate
-                    for coord in range(4):  # x, angle_x, y, angle_y
+                    for coord in range(4):  # x, p_x, y, p_y
                         output_ray[coord] += transfer_map[coord, j] * monomial
             
             output_batch[i] = output_ray
@@ -482,9 +497,9 @@ class MPRSpectrometer:
         
         df = pd.DataFrame({
             'x0': self.input_beam[:, 0],
-            'angle_x': self.input_beam[:, 1],
+            'p_x_relative': self.input_beam[:, 1],
             'y0': self.input_beam[:, 2],
-            'angle_y': self.input_beam[:, 3],
+            'p_y_relative': self.input_beam[:, 3],
             'energy_relative': self.input_beam[:, 4],
             'input_energy': self.input_beam[:, 5]
         })
@@ -498,9 +513,9 @@ class MPRSpectrometer:
         
         df = pd.DataFrame({
             'x0': self.output_beam[:, 0],
-            'angle_x': self.output_beam[:, 1],
+            'p_x_relative': self.output_beam[:, 1],
             'y0': self.output_beam[:, 2],
-            'angle_y': self.output_beam[:, 3],
+            'p_y_relative': self.output_beam[:, 3],
             'energy_relative': self.output_beam[:, 4]
         })
         df.to_csv(filepath, index=False)
