@@ -38,7 +38,7 @@ class PerformanceAnalyzer:
             verbose: Print detailed results
             
         Returns:
-            Tuple of (mean_position, std_deviation, fwhm, energy_resolution)
+            Tuple of (mean_position in m, std_deviation in m, fwhm in m, energy_resolution in keV)
         """
         print(f'\nAnalyzing performance for {input_energy:.3f} MeV monoenergetic input particles...')
         
@@ -80,7 +80,7 @@ class PerformanceAnalyzer:
             print(f'  Mean position [cm]: {mean_position_0 * 100:.3f}')
             print(f'  Standard deviation [cm]: {std_deviation_0 * 100:.3f}')
             print(f'  FWHM [cm]: {fwhm_0 * 100:.3f}')
-            print(f'  Energy resolution [keV]: {energy_resolution * 1000:.2f}')
+            print(f'  Energy resolution [keV]: {energy_resolution:.2f}')
         
         return mean_position_0, std_deviation_0, fwhm_0, energy_resolution, dispersion
     def generate_performance_curve(
@@ -103,10 +103,10 @@ class PerformanceAnalyzer:
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
-            reset: Whether to regenerate the dataset or load an existing one
+            reset: Whether to regenerate the dataset rather than loading an existing one
             
         Returns:
-            Tuple of (energies, positions_mean, positions_std, energy_resolutions, total_efficiencies)
+            Tuple of (energies in MeV, positions_mean in m, positions_std in m, energy_resolutions in keV, total_efficiencies)
         """
         print('\nGenerating comprehensive performance analysis...')
         
@@ -155,7 +155,7 @@ class PerformanceAnalyzer:
                 'position mean [m]': positions_mean,
                 'position std [m]': positions_std,
                 'gradient [m/MeV]': gradients,
-                'resolution [MeV]': energy_resolutions,
+                'resolution [keV]': energy_resolutions,
                 'scattering efficiency': scattering_efficiencies,
                 'geometric efficiency': geometric_efficiencies,
                 'total efficiency': total_efficiencies
@@ -169,7 +169,7 @@ class PerformanceAnalyzer:
             energies = df['energy [MeV]'].to_numpy()
             positions_mean = df['position mean [m]'].to_numpy()
             positions_std = df['position std [m]'].to_numpy()
-            energy_resolutions = df['resolution [MeV]'].to_numpy()
+            energy_resolutions = df['resolution [keV]'].to_numpy()
             scattering_efficiencies = df['scattering efficiency'].to_numpy()
             geometric_efficiencies = df['geometric efficiency'].to_numpy()
             total_efficiencies = df['total efficiency'].to_numpy()
