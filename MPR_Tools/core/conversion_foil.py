@@ -10,7 +10,7 @@ import multiprocessing as mp
 import time
 from tqdm import tqdm
 
-from .matter_interactions import GenericInteraction, ElasticScattering, ComptonScattering, Interaction
+from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction
 from ..config.constants import AVOGADRO, FOIL_MATERIALS
 
 
@@ -112,6 +112,8 @@ class ConversionFoil:
                     self.particle_mass))
             elif interaction_info['type'] == 'compton_scattering':
                 self.interactions.append(ComptonScattering(target_density))
+            elif interaction_info['type'] == 'pair_production':
+                self.interactions.append(PairProduction(target_density, interaction_info['target_charge']))
             else:
                 raise ValueError(f"I don't know the interaction type {interaction_info['type']!r}.")
     

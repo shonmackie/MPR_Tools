@@ -65,6 +65,16 @@ FOIL_MATERIALS = {
                 'type': 'compton_scattering',
                 'target_abundance': 4,
             },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 1,
+            },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 3,
+            },
         ]
     },
     'Be': {
@@ -79,6 +89,11 @@ FOIL_MATERIALS = {
                 'type': 'compton_scattering',
                 'target_abundance': 4,
             },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 4,
+            },
         ]
     },
     'B': {
@@ -92,6 +107,11 @@ FOIL_MATERIALS = {
             {
                 'type': 'compton_scattering',
                 'target_abundance': 5,
+            },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 5,
             },
         ]
     },
