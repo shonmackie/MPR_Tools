@@ -420,7 +420,7 @@ class ConversionFoil:
     def calculate_efficiency(
         self, 
         input_energy: float,
-        num_samples: int = int(1e6),
+        num_samples: int = 10000,
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None
     ) -> Tuple[float, float, float]:
@@ -441,6 +441,9 @@ class ConversionFoil:
         
         print(f'\nEstimating intrinsic efficiency for {input_energy:.3f} MeV particles using {max_workers} processes...')
         
+        # Limit scattering angles for computational efficiency
+        max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
+        
         # Calculate scattering probability in foil (non-parallelizable part)
         total_xs = 0
         effective_xs = 0
@@ -452,7 +455,8 @@ class ConversionFoil:
                              interaction.get_recoil_probability())
             interaction_weights.append(
                 interaction.get_cross_section(input_energy) *
-                interaction.get_recoil_probability())
+                interaction.get_recoil_probability(max_angle))
+        angular_factor = effective_xs/sum(interaction_weights)  # the factor by which our sampling density is increased because we're using max_angle
         interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
         
         scattering_efficiency = effective_xs * (1 - np.exp(-total_xs * self.thickness)) / total_xs
@@ -472,6 +476,7 @@ class ConversionFoil:
                     12345 + i * 1000,  # seed_offset
                     self.interactions,
                     interaction_weights,
+                    max_angle,
                     self.foil_radius,
                 ))
                 
@@ -480,7 +485,7 @@ class ConversionFoil:
             progress_counter_total=num_samples,
             task_title='Calculating geometric acceptance',
         )
-            
+        
         # Collect results
         total_accepted = 0
         total_processed = 0
@@ -490,7 +495,7 @@ class ConversionFoil:
             total_processed += processed_count
         
         # Calculate final efficiencies
-        geometric_efficiency = total_accepted / total_processed if total_processed > 0 else 0.0
+        geometric_efficiency = total_accepted / total_processed / angular_factor if total_processed > 0 else 0.0
         total_efficiency = scattering_efficiency * geometric_efficiency
         
         print(f'Processed {total_processed} samples using {max_workers} processes')
@@ -506,6 +511,7 @@ class ConversionFoil:
         seed_offset: int,
         interactions: list[Interaction],
         interaction_weights: np.ndarray,
+        max_angle: float,
         foil_radius: float,
         progress_counter,
         progress_lock
@@ -518,6 +524,7 @@ class ConversionFoil:
             seed_offset: Random seed offset for this worker
             interactions: Processes by which recoil particles are generated
             interaction_weights: Relative probability of each interaction process
+            max_angle: The maximum scattering angle to sample
             foil_radius: Foil radius in meters
             progress_counter: Shared counter for progress tracking
             progress_lock: Lock for thread-safe progress updates
@@ -539,7 +546,7 @@ class ConversionFoil:
                 # Sample scattered ray using helper method (no z-sampling for efficiency calculation)
                 interaction = rng.choice(interactions, p=interaction_weights)
                 x0, y0, _, theta_scatter, phi_scatter, _ = self._sample_scattered_ray(
-                    rng, interaction, include_kinematics=False, max_angle=np.pi, attenuation=-np.inf
+                    rng, interaction, include_kinematics=False, max_angle=max_angle, attenuation=-np.inf
                 )
                 
                 # N.B. We do not consider the very small displacement due to foil thickness here

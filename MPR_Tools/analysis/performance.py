@@ -96,7 +96,7 @@ class PerformanceAnalyzer:
         self,
         num_energies: int = 40,
         num_recoils_per_energy: int = 10000,
-        num_efficiency_samples: int = int(1e6),
+        num_efficiency_samples: int = 10000,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         output_filename: Optional[str] = None,
