@@ -5,12 +5,12 @@ import numpy as np
 from pathlib import Path
 
 from scipy import integrate
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import Executor
 import multiprocessing as mp
-import time
 from tqdm import tqdm
 
 from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction
+from .parallelization import run_concurrently
 from ..config.constants import AVOGADRO, FOIL_MATERIALS
 
 
@@ -421,6 +421,7 @@ class ConversionFoil:
         self, 
         input_energy: float,
         num_samples: int = int(1e6),
+        executor: Optional[Executor] = None,
         max_workers: Optional[int] = None
     ) -> Tuple[float, float, float]:
         """
@@ -429,6 +430,7 @@ class ConversionFoil:
         Args:
             input_energy: Incident input particle energy in MeV
             num_samples: Number of particles to simulate
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
@@ -459,59 +461,33 @@ class ConversionFoil:
         samples_per_process = num_samples // max_workers
         remaining_samples = num_samples % max_workers
         
-        # Create shared counter for progress tracking
-        manager = mp.Manager()
-        progress_counter = manager.Value('i', 0)
-        progress_lock = manager.Lock()
-        
-        # Initialize progress bar
-        pbar = tqdm(total=num_samples, desc='Calculating geometric acceptance')
-        
         # Execute in parallel
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
+        worker_args = []
+        for i in range(max_workers):
+            batch_size = samples_per_process + (1 if i < remaining_samples else 0)
+            if batch_size > 0:  # Only submit if there's work to do
+                # Package all parameters for the worker
+                worker_args.append((
+                    batch_size,
+                    12345 + i * 1000,  # seed_offset
+                    self.interactions,
+                    interaction_weights,
+                    self.foil_radius,
+                ))
+                
+        results = run_concurrently(
+            self._calculate_efficiency_batch_worker, worker_args, executor,
+            progress_counter_total=num_samples,
+            task_title='Calculating geometric acceptance',
+        )
             
-            # Submit jobs
-            for i in range(max_workers):
-                batch_size = samples_per_process + (1 if i < remaining_samples else 0)
-                if batch_size > 0:  # Only submit if there's work to do
-                    # Package all parameters for the worker
-                    worker_args = (
-                        batch_size,
-                        12345 + i * 1000,  # seed_offset
-                        self.interactions,
-                        interaction_weights,
-                        self.foil_radius,
-                        progress_counter,
-                        progress_lock
-                    )
-                    future = executor.submit(self._calculate_efficiency_batch_worker, *worker_args)
-                    futures.append(future)
-            
-            # Monitor progress while processes run
-            last_count = 0
-            while any(not future.done() for future in futures):
-                current_count = progress_counter.value
-                if current_count > last_count:
-                    pbar.update(current_count - last_count)
-                    last_count = current_count
-                time.sleep(0.5)  # Check every 500ms
-            
-            # Final update for any remaining progress
-            final_count = progress_counter.value
-            if final_count > last_count:
-                pbar.update(final_count - last_count)
-            
-            # Collect results
-            total_accepted = 0
-            total_processed = 0
-            
-            for future in as_completed(futures):
-                accepted_count, processed_count = future.result()
-                total_accepted += accepted_count
-                total_processed += processed_count
+        # Collect results
+        total_accepted = 0
+        total_processed = 0
         
-        pbar.close()
+        for accepted_count, processed_count in results:
+            total_accepted += accepted_count
+            total_processed += processed_count
         
         # Calculate final efficiencies
         geometric_efficiency = total_accepted / total_processed if total_processed > 0 else 0.0

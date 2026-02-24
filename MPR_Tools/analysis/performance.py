@@ -1,6 +1,8 @@
 """Performance analysis methods for MPR spectrometer."""
 
 from __future__ import annotations
+
+from concurrent.futures import Executor
 from typing import Tuple, Optional, Union, Literal, TYPE_CHECKING
 import warnings
 import numpy as np
@@ -24,7 +26,9 @@ class PerformanceAnalyzer:
         num_recoil_particles: int = 10000,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
-        verbose: bool = False
+        verbose: bool = False,
+        executor: Optional[Executor] = None,
+        max_workers: Optional[int] = None,
     ) -> Tuple[float, float, float, float, float]:
         """
         Analyze spectrometer performance for monoenergetic input particles.
@@ -36,6 +40,8 @@ class PerformanceAnalyzer:
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             verbose: Print detailed results
+            executor: Pool of workers to use (if None, we will make our own)
+            max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
             Tuple of (mean_position in m, std_deviation in m, fwhm in m, energy_resolution in keV)
@@ -50,9 +56,12 @@ class PerformanceAnalyzer:
                 num_recoils,
                 include_kinematics, 
                 include_stopping_power_loss,
-                save_beam=False
+                save_beam=False,
+                executor=executor,
+                max_workers=max_workers,
             )
-            self.spectrometer.apply_transfer_map(map_order=5, save_beam=False)
+            self.spectrometer.apply_transfer_map(
+                map_order=5, save_beam=False, executor=executor, max_workers=max_workers)
             x_positions = self.spectrometer.output_beam[:, 0]
             mean_position, std_deviation = norm.fit(x_positions)
             return mean_position, std_deviation
@@ -91,7 +100,9 @@ class PerformanceAnalyzer:
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         output_filename: Optional[str] = None,
-        reset: bool = True
+        reset: bool = True,
+        executor: Optional[Executor] = None,
+        max_workers: Optional[int] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Generate comprehensive performance analysis including location, resolution, and efficiency.
@@ -104,6 +115,8 @@ class PerformanceAnalyzer:
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
             reset: Whether to regenerate the dataset rather than loading an existing one
+            executor: Pool of workers to use (if None, we will make our own)
+            max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
             Tuple of (energies in MeV, positions_mean in m, positions_std in m, energy_resolutions in keV, total_efficiencies)
@@ -133,7 +146,9 @@ class PerformanceAnalyzer:
                     num_recoil_particles=num_recoils_per_energy,
                     include_kinematics=include_kinematics, 
                     include_stopping_power_loss=include_stopping_power_loss,
-                    verbose=False
+                    verbose=False,
+                    executor=executor,
+                    max_workers=max_workers,
                 )
                 positions_mean[i] = mean_pos
                 positions_std[i] = std_dev
@@ -143,7 +158,9 @@ class PerformanceAnalyzer:
                 # Calculate efficiency for this energy
                 scattering_efficiency, geometric_efficiency, total_efficiency = self.spectrometer.conversion_foil.calculate_efficiency(
                     energy, 
-                    num_samples=num_efficiency_samples
+                    num_samples=num_efficiency_samples,
+                    executor=executor,
+                    max_workers=max_workers,
                 )
                 scattering_efficiencies[i] = scattering_efficiency
                 geometric_efficiencies[i] = geometric_efficiency

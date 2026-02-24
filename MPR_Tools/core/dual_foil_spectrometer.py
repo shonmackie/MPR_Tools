@@ -1,3 +1,4 @@
+from concurrent.futures import Executor
 from typing import Optional, Literal
 import numpy as np
 import pandas as pd
@@ -135,6 +136,7 @@ class DualFoilSpectrometer:
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         save_beam: bool = True,
+        executor: Optional[Executor] = None,
         max_workers: Optional[int] = None
     ) -> None:
         """
@@ -148,6 +150,7 @@ class DualFoilSpectrometer:
             include_stopping_power_loss: Include SRIM energy loss
             z_sampling: Depth sampling method ('exp' or 'uni')
             save_beam: Whether to save beams to CSV
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes
         """
         # Split recoil events between foils based on energy_distribution
@@ -167,6 +170,7 @@ class DualFoilSpectrometer:
             include_stopping_power_loss=include_stopping_power_loss,
             z_sampling=z_sampling,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers,
             y_restriction='positive'
         )
@@ -180,6 +184,7 @@ class DualFoilSpectrometer:
             include_stopping_power_loss=include_stopping_power_loss,
             z_sampling=z_sampling,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers,
             y_restriction='negative',
         )
@@ -194,6 +199,7 @@ class DualFoilSpectrometer:
         self,
         map_order: int = 5,
         save_beam: bool = True,
+        executor: Optional[Executor] = None,
         max_workers: Optional[int] = None
     ) -> None:
         """
@@ -202,12 +208,14 @@ class DualFoilSpectrometer:
         Args:
             map_order: Order of transfer map to apply
             save_beam: Whether to save output beams to CSV
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes
         """
         print('\nApplying transfer map to CH2 (proton) beam...')
         self.spec_ch2.apply_transfer_map(
             map_order=map_order,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers
         )
         
@@ -215,6 +223,7 @@ class DualFoilSpectrometer:
         self.spec_cd2.apply_transfer_map(
             map_order=map_order,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers
         )
         

@@ -1,15 +1,16 @@
 """Main MPR spectrometer system implementation."""
 
-from typing import Tuple, Optional, Literal, List
+from typing import Tuple, Optional, Literal
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import Executor
 import multiprocessing as mp
-import time
 
 from .conversion_foil import ConversionFoil
 from .hodoscope import Hodoscope
+from .parallelization import run_concurrently
+
 
 class MPRSpectrometer:
     """
@@ -165,6 +166,7 @@ class MPRSpectrometer:
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         save_beam: bool = True,
+        executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None
     ) -> None:
@@ -179,8 +181,9 @@ class MPRSpectrometer:
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             z_sampling: Depth sampling method ('exp' or 'uni')
             save_beam: Whether or not to save input beam to csv
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
-        """        
+        """
         if max_workers is None:
             max_workers = mp.cpu_count()
         
@@ -205,62 +208,33 @@ class MPRSpectrometer:
         weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution /= np.sum(weighted_distribution)
         
-        # Create shared counter for progress tracking
-        manager = mp.Manager()
-        progress_counter = manager.Value('i', 0)
-        progress_lock = manager.Lock()
-        
-        # Initialize progress bar
-        pbar = tqdm(total=num_recoil_particles, desc=f'Generating Monte Carlo {self.conversion_foil.particle} trajectories')
-        
         # Execute in parallel
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            
-            # Submit jobs
-            for i in range(max_workers):
-                batch_size = particles_per_process + (1 if i < remaining_particles else 0)
-                if batch_size > 0:  # Only submit if there's work to do
-                    # Package all parameters for the worker
-                    worker_args = (
-                        batch_size,
-                        12345 + i * 1000,  # seed_offset
-                        input_energies,
-                        weighted_distribution,
-                        include_kinematics,
-                        include_stopping_power_loss,
-                        z_sampling,
-                        self.conversion_foil,
-                        self.reference_energy,
-                        progress_counter,
-                        progress_lock,
-                        y_restriction
-                    )
-                    future = executor.submit(self._generate_batch_worker, *worker_args)
-                    futures.append(future)
-            
-            # Monitor progress while processes run
-            last_count = 0
-            while any(not future.done() for future in futures):
-                current_count = progress_counter.value
-                if current_count > last_count:
-                    pbar.update(current_count - last_count)
-                    last_count = current_count
-                time.sleep(0.5)  # Check every x ms
-            
-            # Final update for any remaining progress
-            final_count = progress_counter.value
-            if final_count > last_count:
-                pbar.update(final_count - last_count)
-            
-            # Collect results
-            self.input_beam = np.empty((0, 6), dtype=float)
-            
-            for i, future in enumerate(as_completed(futures)):
-                batch_results = future.result()
-                self.input_beam = np.vstack((self.input_beam, batch_results))
+        worker_args = []
+        for i in range(max_workers):
+            batch_size = particles_per_process + (1 if i < remaining_particles else 0)
+            if batch_size > 0:  # Only submit if there's work to do
+                # Package all parameters for the worker
+                worker_args.append((
+                    batch_size,
+                    12345 + i * 1000,  # seed_offset
+                    input_energies,
+                    weighted_distribution,
+                    include_kinematics,
+                    include_stopping_power_loss,
+                    z_sampling,
+                    self.conversion_foil,
+                    self.reference_energy,
+                    y_restriction
+                ))
         
-        pbar.close()
+        output_batches = run_concurrently(
+            self._generate_batch_worker, worker_args, executor,
+            progress_counter_total=num_recoil_particles,
+            task_title=f'Generating Monte Carlo {self.conversion_foil.particle} trajectories',
+        )
+        
+        # Collect results
+        self.input_beam = np.concatenate(output_batches)
         
         # Save input beam to file
         if save_beam:
@@ -278,9 +252,9 @@ class MPRSpectrometer:
         z_sampling: str,
         conversion_foil: ConversionFoil,
         reference_energy: float,
+        y_restriction: Optional[Literal['positive', 'negative']],
         progress_counter,
         progress_lock,
-        y_restriction: Optional[Literal['positive', 'negative']] = None  # Add thi
     ) -> np.ndarray:
         """Generate a batch of recoil particles in a separate process."""
         # Create independent random number generator
@@ -337,7 +311,8 @@ class MPRSpectrometer:
         self,
         map_order: int = 5,
         save_beam: bool = True,
-        max_workers: Optional[int] = None
+        executor: Optional[Executor] = None,
+        max_workers: Optional[int] = None,
     ) -> None:
         """
         Apply ion optical transfer map to transport recoil particles through spectrometer using multiprocessing.
@@ -345,8 +320,9 @@ class MPRSpectrometer:
         Args:
             map_order: Order of transfer map to apply (1-5 typically)
             save_beam: Whether or not to save output beam to csv
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
-        """        
+        """
         if max_workers is None:
             max_workers = mp.cpu_count()
         
@@ -358,65 +334,35 @@ class MPRSpectrometer:
         
         print(f'Applying order {map_order} transfer map to {num_recoil_particles} {self.conversion_foil.particle}s using {max_workers} processes...')
         
-        self.output_beam = np.zeros((num_recoil_particles, 5))
-        
         # Calculate recoil particles per process
         particles_per_process = num_recoil_particles // max_workers
         remaining_particles = num_recoil_particles % max_workers
         
-        # Create shared counter for progress tracking
-        manager = mp.Manager()
-        progress_counter = manager.Value('i', 0)
-        progress_lock = manager.Lock()
-        
-        # Initialize progress bar
-        pbar = tqdm(total=num_recoil_particles, desc=f'Applying order {map_order} transfer map')
-        
         # Execute in parallel
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            
-            # Submit jobs
-            start_idx = 0
-            for i in range(max_workers):
-                batch_size = particles_per_process + (1 if i < remaining_particles else 0)
-                if batch_size > 0:  # Only submit if there's work to do
-                    end_idx = start_idx + batch_size
-                    
-                    # Package parameters for worker
-                    worker_args = (
-                        self.input_beam[start_idx:end_idx],
-                        self.transfer_map,
-                        self.conversion_foil.relative_mass,
-                        map_order,
-                        progress_counter,
-                        progress_lock
-                    )
-                    
-                    future = executor.submit(self._apply_transfer_map_worker, *worker_args)
-                    futures.append((future, start_idx, end_idx))
-                    start_idx = end_idx
-            
-            # Monitor progress while processes run
-            last_count = 0
-            while any(not future[0].done() for future in futures):
-                current_count = progress_counter.value
-                if current_count > last_count:
-                    pbar.update(current_count - last_count)
-                    last_count = current_count
-                time.sleep(0.5)  # Check every x ms
-            
-            # Final update for any remaining progress
-            final_count = progress_counter.value
-            if final_count > last_count:
-                pbar.update(final_count - last_count)
-            
-            # Collect results and place them in the correct positions
-            for future, start_idx, end_idx in futures:
-                batch_output = future.result()
-                self.output_beam[start_idx:end_idx] = batch_output
+        worker_args = []
+        start_idx = 0
+        for i in range(max_workers):
+            batch_size = particles_per_process + (1 if i < remaining_particles else 0)
+            if batch_size > 0:  # Only submit if there's work to do
+                end_idx = start_idx + batch_size
+                
+                # Package parameters for worker
+                worker_args.append((
+                    self.input_beam[start_idx:end_idx],
+                    self.transfer_map,
+                    self.conversion_foil.relative_mass,
+                    map_order,
+                ))
+                
+                start_idx = end_idx
         
-        pbar.close()
+        output_batches = run_concurrently(
+            self._apply_transfer_map_worker, worker_args, executor,
+            progress_counter_total=num_recoil_particles,
+            task_title=f'Applying order {map_order} transfer map',
+        )
+        
+        self.output_beam = np.concatenate(output_batches)
         
         print('Transfer map applied successfully!')
         
