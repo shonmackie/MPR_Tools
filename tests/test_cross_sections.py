@@ -3,8 +3,10 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
-from numpy import random, pi, inf, isclose, empty, degrees, array, mean, sqrt, std, linspace
+from numpy import random, pi, inf, isclose, empty, degrees, array, mean, sqrt, std, linspace, log, exp, hypot, median, \
+    tan, cos, sin
 
+from MPR_Tools import ConversionFoil
 from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
     PairProduction, ProbabilityDistribution
 
@@ -119,6 +121,59 @@ def test_pair_production():
     plt.title(f"{pair_production.name} electron spectrum from 16.7 MeV photons")
     plt.tight_layout()
     plt.savefig("tests/output/test_pair_production_cross_section.png")
+    plt.close()
+
+
+def test_z_sampling():
+    foil = ConversionFoil(
+        foil_radius=1.5,
+        thickness=50,
+        aperture_distance=50,
+        aperture_radius=1.5,
+        foil_material='B',
+    )
+    
+    scattering_process = ComptonScattering(1)
+    scattering_process.calculate_angular_distribution(16.7)
+    
+    rng = random.default_rng(0)
+    N = 10000
+    x, y, z0, theta, phi = empty(N), empty(N), empty(N), empty(N), empty(N)
+    for i in range(N):
+        x[i], y[i], z0[i], theta[i], phi[i], _ = foil._sample_scattered_ray(
+            rng,
+            scattering_process,
+            attenuation=1/20e-6,
+            include_kinematics=False,
+            max_angle=pi/2,
+        )
+        
+    # correct x and y so that it's birth location, not pass-thru-the-z-plane location
+    x0 = x - z0*tan(theta)*cos(phi)
+    y0 = y - z0*tan(theta)*sin(phi)
+    
+    theoretical_median = -50e-6 - 20e-6*log(0.5 + 0.5*exp(-50/20))
+    assert all(hypot(x0, y0) <= 1.5e-2)
+    assert all((z0 >= -50e-6) & (z0 <= 0e-6))
+    assert isclose(median(z0), theoretical_median, atol=3*0.2e-6, rtol=0)  # the std is about 20 um, so random error is about 0.2 um
+    
+    plt.figure()
+    plt.hist2d(x/1e-2, y/1e-2, bins=20)
+    plt.axis("square")
+    plt.xlabel("x (cm)")
+    plt.ylabel("y (cm)")
+    plt.title("Recoil spacial distribution")
+    plt.tight_layout()
+    plt.savefig("tests/output/test_foil_xy_distribution.png")
+    plt.close()
+    
+    plt.figure()
+    plt.hist(z0/1e-6, density=True, bins=50)
+    plt.xlabel("z (um)")
+    plt.ylabel("Distribution (um^-1)")
+    plt.title("Recoil spacial distribution")
+    plt.tight_layout()
+    plt.savefig("tests/output/test_foil_z_distribution.png")
     plt.close()
 
 

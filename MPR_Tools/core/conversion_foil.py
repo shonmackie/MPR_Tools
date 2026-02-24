@@ -297,12 +297,12 @@ class ConversionFoil:
             z0 = 0.0  # Sample at exit surface
         elif attenuation == np.inf:
             z0 = -self.thickness  # Sample at entrance surface
-        elif abs(self.thickness*attenuation) < 1e-9:
+        elif abs(self.thickness*attenuation) == 0:
             z0 = rng.uniform(-self.thickness, 0)  # Uniform distribution
         else:
-            front_bound = 1
-            back_bound = np.exp(self.thickness*attenuation)
-            z0 = -np.log(rng.uniform(front_bound, back_bound))/attenuation  # Truncated exponential distribution
+            front_bound = 0
+            back_bound = np.expm1(self.thickness*attenuation)
+            z0 = -np.log1p(rng.uniform(front_bound, back_bound))/attenuation  # Truncated exponential distribution
         
         # Sample scattering angles
         phi_scatter = 2 * np.pi * rng.random()
