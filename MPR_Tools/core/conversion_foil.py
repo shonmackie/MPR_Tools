@@ -1,25 +1,24 @@
-"""Conversion foil implementation for neutron-hydron scattering."""
+"""Conversion foil implementation for neutral-charged particle scattering."""
 
 from typing import Tuple, Optional, Literal
 import numpy as np
-from numpy.polynomial.legendre import legval
 from pathlib import Path
 
 from scipy import integrate
-from scipy.interpolate import RectBivariateSpline
-import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 import time
 from tqdm import tqdm
 
-from ..config.constants import AVOGADRO, NEUTRON_MASS, FOIL_MATERIALS, DEFAULT_DATA_PATHS
+from .matter_interactions import GenericInteraction, ElasticScattering, ComptonScattering, Interaction
+from ..config.constants import AVOGADRO, FOIL_MATERIALS
+
 
 class ConversionFoil:
     """
-    Represents a conversion foil and aperture system for neutron-hydron scattering.
+    Represents a conversion foil and aperture system for generating recoil particles.
     
-    The foil is where neutrons impinge and scatter hydrons, while the aperture
+    The foil is where input particles impinge and scatter recoil particles, while the aperture
     defines the ion optical acceptance.
     """    
     def __init__(
@@ -30,11 +29,7 @@ class ConversionFoil:
         aperture_radius: float,
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
-        srim_data_path: Optional[str] = None,
-        nh_cross_section_path: Optional[str] = None,
-        nc12_cross_section_path: Optional[str] = None,
-        differential_xs_path: Optional[str] = None,
-        foil_material: Literal['CH2', 'CD2'] = 'CH2',
+        foil_material: Literal['CH2', 'CD2', 'LiH', 'Be', 'B'] = 'CH2',
         aperture_type: Literal['circ', 'rect'] = 'circ'
     ):
         """
@@ -47,10 +42,6 @@ class ConversionFoil:
             aperture_radius: Aperture radius in cm
             aperture_width: Aperture width (in dispersion direction [x]) in cm (for rectangular apertures)
             aperture_height: Aperture height (in non-dispersion direction [y]) in cm (for rectangular apertures)
-            srim_data_path: Path to SRIM stopping power data
-            nh_cross_section_path: Path to n-hydron elastic scattering cross sections (either protons or deuterons)
-            nc12_cross_section_path: Path to n-C12 elastic scattering cross sections
-            differential_xs_path: Path to differential cross section data
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
         """
@@ -71,63 +62,58 @@ class ConversionFoil:
         
         # Calculate particle densities in CH2
         self.foil_material = foil_material
+        self.input_particle = FOIL_MATERIALS[foil_material]['input_particle']
         self.particle = FOIL_MATERIALS[foil_material]['particle']
-        foil_density = FOIL_MATERIALS[foil_material]['density'] # g/cm^3
-        molecular_weight = FOIL_MATERIALS[foil_material]['molecular_weight'] # g/mol
-        self.hydron_mass = FOIL_MATERIALS[foil_material]['hydron_mass'] # amu
-        
+        self.foil_density = FOIL_MATERIALS[foil_material]['density'] # g/cm^3
+        self.molecular_weight = FOIL_MATERIALS[foil_material]['molecular_weight'] # g/mol
+        self.particle_mass = FOIL_MATERIALS[foil_material]['particle_mass'] # amu
+        self.stopping_data_path = FOIL_MATERIALS[foil_material]['stopping_power']
+        self.interaction_info = FOIL_MATERIALS[self.foil_material]['interactions']
+    
         # Calculate relative mass, either 0 for protons or ~1 for deuterons
-        self.relative_mass = (self.hydron_mass - FOIL_MATERIALS['CH2']['hydron_mass']) / FOIL_MATERIALS['CH2']['hydron_mass']
-        
-        density_factor = foil_density * AVOGADRO * 1e6
-        self.carbon_density = density_factor / molecular_weight # carbon/m^3
-        self.hydron_density = self.carbon_density * 2 # hydrons/m^3
+        self.relative_mass = (self.particle_mass - FOIL_MATERIALS['CH2']['particle_mass']) / FOIL_MATERIALS['CH2']['particle_mass']
         
         # Load cross section and stopping power data
-        module_dir = Path(__file__).parent
-        if srim_data_path is None:
-            self.srim_data_path = module_dir / DEFAULT_DATA_PATHS[foil_material]['srim']
-        else:
-            self.srim_data_path = srim_data_path
-            
-        if nh_cross_section_path is None:
-            self.nh_cross_section_path = module_dir / DEFAULT_DATA_PATHS[foil_material]['cross_section']
-        else:
-            self.nh_cross_section_path = nh_cross_section_path
-            
-        if nc12_cross_section_path is None:
-            self.nc12_cross_section_path = module_dir / DEFAULT_DATA_PATHS['nc12_cross_section']
-        else:
-            self.nc12_cross_section_path = nc12_cross_section_path
-            
-        if differential_xs_path is None:
-            self.differential_xs_path = module_dir / DEFAULT_DATA_PATHS[foil_material]['differential_xs']
-        else:
-            self.differential_xs_path = differential_xs_path
         self._load_data_files()
-        
-        # Build interpolator for differential cross section data
-        self._build_differential_xs_interpolator()
         
         print('Conversion foil initialization complete.\n')
     
     def _load_data_files(self) -> None:
         """Load all required data files."""
-        self.srim_data = np.genfromtxt(self.srim_data_path, skip_header=2, unpack=True)
-        self.integrated_srim_data = ConversionFoil._preintegrate_srim_data(*self.srim_data)
-        print(f'Loaded SRIM data from {self.srim_data_path}')
-        
-        self.nh_cross_section_data = np.genfromtxt(self.nh_cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
-        print(f'Loaded n-{self.particle} elastic scattering cross sections from {self.nh_cross_section_path}')
-        
-        self.nc12_cross_section_data = np.genfromtxt(self.nc12_cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
-        print(f'Loaded n-C12 elastic scattering cross sections from {self.nc12_cross_section_path}')
-        
-        # Need to read as a pandas df and convert to numpy because some 
-        # differential cross sections have different number of Legendre 
-        # coefficients for each energy
-        self.differential_xs_data = pd.read_csv(self.differential_xs_path, sep=r'\s+', comment='#').to_numpy(dtype=np.float64).T
-        print(f'Loaded differential scattering data from {self.differential_xs_path}')
+        data_dir = Path(__file__).parent.parent / "data"
+    
+        # load cross section data
+        if self.particle == "electron":
+            energy, mass_stopping_power = np.genfromtxt(data_dir / self.stopping_data_path, skip_header=8, unpack=True)
+            stopping_power = mass_stopping_power * self.foil_density / 1e-2  # MeV/m
+            self.integrated_stopping_data = ConversionFoil._preintegrate_stopping_data(energy, stopping_power)
+            print(f'Loaded ESTAR data from {self.stopping_data_path}')
+        else:
+            energy, electronic_stopping_power, nuclear_stopping_power = np.genfromtxt(data_dir / self.stopping_data_path, skip_header=2, unpack=True)
+            stopping_power = (electronic_stopping_power + nuclear_stopping_power) / 1e-3  # MeV/m
+            self.integrated_stopping_data = ConversionFoil._preintegrate_stopping_data(energy, stopping_power)
+            print(f'Loaded SRIM data from {self.stopping_data_path}')
+
+        # Load cross section data
+        self.interactions: list[Interaction] = []
+        for interaction_info in self.interaction_info:
+            molecular_density = self.foil_density / self.molecular_weight * AVOGADRO * 1e6  # molecules/m^3
+            target_density = interaction_info['target_abundance'] * molecular_density  # targets/m^3
+            if interaction_info['type'] == 'generic':
+                self.interactions.append(GenericInteraction(
+                    interaction_info['name'],
+                    target_density, data_dir / interaction_info['total_cross_section']))
+            elif interaction_info['type'] == 'elastic_scattering':
+                self.interactions.append(ElasticScattering(
+                    f'(n,{self.particle[0]}) elastic',
+                    target_density,
+                    data_dir / interaction_info['total_cross_section'],
+                    data_dir / interaction_info['diff_cross_section'],
+                    self.particle_mass))
+            elif interaction_info['type'] == 'compton_scattering':
+                self.interactions.append(ComptonScattering(target_density))
+            else:
+                raise ValueError(f"I don't know the interaction type {interaction_info['type']!r}.")
     
     @property
     def foil_radius_cm(self) -> float:
@@ -204,22 +190,22 @@ class ConversionFoil:
         Neglects straggling (valid for thin foils, less accurate at low energies).
         
         Args:
-            initial_energy: Initial hydron energy in MeV
+            initial_energy: Initial recoil particle energy in MeV
             path_length: Distance traveled through material in m
             
         Returns:
-            Final hydron energy in MeV
+            Final recoil particle energy in MeV
         """
         # check to make sure we're within the data bounds
-        if initial_energy > self.integrated_srim_data[0][-1]:
+        if initial_energy > self.integrated_stopping_data[0][-1]:
             raise ValueError(
                 f"We can't slow a {initial_energy} MeV particle because the SRIM data "
                 f"doesn't go up that high.")
         initial_x = np.interp(
-            initial_energy, self.integrated_srim_data[0], self.integrated_srim_data[1])
+            initial_energy, self.integrated_stopping_data[0], self.integrated_stopping_data[1])
         final_x = initial_x - path_length
         final_energy = np.interp(
-            final_x, self.integrated_srim_data[1], self.integrated_srim_data[0])
+            final_x, self.integrated_stopping_data[1], self.integrated_stopping_data[0])
         return final_energy
     
     def calculate_initial_energy(
@@ -231,177 +217,63 @@ class ConversionFoil:
         Calculate initial energy by reversing energy loss calculation.
         
         Args:
-            final_energy: Final hydron energy in MeV
+            final_energy: Final recoil particle energy in MeV
             path_length: Distance traveled through material in m
             
         Returns:
-            Initial hydron energy in MeV
+            Initial recoil paricle energy in MeV
         """
         final_x = np.interp(
-            final_energy, self.integrated_srim_data[0], self.integrated_srim_data[1])
+            final_energy, self.integrated_stopping_data[0], self.integrated_stopping_data[1])
         initial_x = final_x + path_length
         initial_energy = np.interp(
-            initial_x, self.integrated_srim_data[1], self.integrated_srim_data[0])
+            initial_x, self.integrated_stopping_data[1], self.integrated_stopping_data[0])
         # check to make sure we didn't hit the data bound
-        if initial_energy == self.integrated_srim_data[0][-1]:
+        if initial_energy == self.integrated_stopping_data[0][-1]:
             raise ValueError(
                 f"Calculating the initial energy of this particle failed because we hit "
                 f"the upper limit of the SRIM data, {initial_energy} MeV.")
         return initial_energy
 
     @staticmethod
-    def _preintegrate_srim_data(energy, electronic_stopping, nuclear_stopping) -> Tuple[np.ndarray, np.ndarray]:
+    def _preintegrate_stopping_data(energy, stopping_power) -> Tuple[np.ndarray, np.ndarray]:
         """
-        convert dE/dx vs. E table into a range vs. E table, so that we can do slowing calculations with a single lookup
+        convert dE/dx vs. E table into a range vs. E table, so that we can do slowing calculations with just lookups
 
         Args:
-            energy: Array of hydron energies at which stopping has been calculated, in MeV
-            electronic_stopping: the stopping rate due to interactions with electrons, in MeV/mm
-            nuclear_stopping: the stopping rate due to interactions with nuclei, in MeV/mm
+            energy: Array of charged particle energies at which stopping has been calculated, in MeV
+            stopping_power: the total stopping rate, in MeV/m
 
         Returns:
-            Array of hydron energies at which range has been calculated, in MeV
-            Distance a hydron at the given energy can travel in solid matter before stopping, in m
+            Array of charged particle energies at which range has been calculated, in MeV
+            Distance a charged at the given energy can travel in solid matter before stopping, in m
         """
         # add an infinity to the bottom of the stopping table so that behavior is defined down to E=0
         E = np.concatenate([[0], energy])  # MeV
-        dE_dx = np.concatenate([[np.inf], electronic_stopping + nuclear_stopping])  # MeV/mm
+        dE_dx = np.concatenate([[np.inf], stopping_power])  # MeV/m
 
         # do the integral
-        dx_dE = 1 / dE_dx  # mm/MeV
-        x = integrate.cumulative_trapezoid(x=E, y=dx_dE, initial=0)  # mm
+        dx_dE = 1 / dE_dx  # m/MeV
+        x = integrate.cumulative_trapezoid(x=E, y=dx_dE, initial=0)  # m
 
-        # convert x to m when you return
-        return E, x * 1e-3
-    
-    def get_nh_cross_section(self, energy_MeV: float) -> float:
-        """
-        Get n-h elastic scattering cross section.
-        
-        Args:
-            energy_MeV: Incident neutron energy in MeV
-            
-        Returns:
-            Cross section in m^2
-        """
-        energy_eV = energy_MeV * 1e6
-        cross_section_barns = np.interp(
-            energy_eV,
-            self.nh_cross_section_data[0], 
-            self.nh_cross_section_data[1])
-        return cross_section_barns * 1e-28  # barns to m^2
-    
-    def get_nc12_cross_section(self, energy_MeV: float) -> float:
-        """
-        Get n-C12 elastic scattering cross section.
-        
-        Args:
-            energy_MeV: Incident neutron energy in MeV
-            
-        Returns:
-            Cross section in m^2
-        """
-        energy_eV = energy_MeV * 1e6
-        cross_section_barns = np.interp(
-            energy_eV,
-            self.nc12_cross_section_data[0],
-            self.nc12_cross_section_data[1])
-        return cross_section_barns * 1e-28  # barns to m^2
-    
-    def _build_differential_xs_interpolator(self):
-        """
-            Build interpolator for differential cross section data.
-            Formulae are from section 4.1 of ENDF Manual: https://www.oecd-nea.org/dbdata/data/endf102.htm#LinkTarget_12655
-        """
-        # Extract energy grid
-        energies = self.differential_xs_data[0]
-        # Cosine grid
-        cos_theta_cm = np.linspace(1, -1, 100)
-        
-        # Initialize lookup table
-        sigma_cm = np.zeros((len(energies), len(cos_theta_cm)))
-        
-        # Helper function to evaluate Legendre expansion
-        def _evaluate_legendre(coefficients, cos_theta):
-            # Build coefficient array for legval
-            legendre_coeffs = np.zeros(len(coefficients))
-            
-            for l in range(len(legendre_coeffs)):
-                # Weight factor is (2l+1)/2 for the expansion
-                weight = (2*l + 1) / 2
-                legendre_coeffs[l] = weight * coefficients[l]
-            
-            # Evaluate at cos_theta
-            return legval(cos_theta, legendre_coeffs)
-        
-        # Fill lookup table
-        for i, energy in enumerate(energies):
-            # Extract coefficients for this energy
-            # a0 term is always 1
-            coefficients = np.append(np.array([1.0]), self.differential_xs_data[1:, i])
-            
-            # Remove nan values
-            coefficients = coefficients[(~np.isnan(coefficients)) & (coefficients != 0)]
-            
-            # Get energy cross section
-            sigma_E = self.get_nh_cross_section(energy/1e6)
-            
-            # Evaluate for all cosine theta values
-            for j, cos_theta in enumerate(cos_theta_cm):
-                legendre_coefficient = _evaluate_legendre(coefficients, cos_theta)
-                sigma_cm[i, j] = sigma_E / (2 * np.pi) * legendre_coefficient
-                
-        '''
-        Convert center of mass frame to lab frame
-        From Dan Casey MIT Thesis (2012), Appendix A
-        '''
-        # This is the angle and differential cross section for the recoil hydron, NOT the scattered neutron
-        cos_theta_lab_hydron = np.sqrt((1 - cos_theta_cm) / 2)
-        theta_cm = np.arccos(cos_theta_cm)
-        sigma_lab = 4 * cos_theta_lab_hydron * sigma_cm
-        
-        # Create interpolation objects for fast lookups
-        self.diff_xs_hydron_interpolator = RectBivariateSpline(
-            energies, cos_theta_lab_hydron, sigma_lab,
-            kx=1, ky=1, s=0  # Linear interpolation, no smoothing
-        )
-    
-    def calculate_differential_xs_lab(self, theta_lab: float | np.ndarray, energy_MeV: float) -> np.ndarray:
-        """
-        Calculate lab-frame differential scattering cross section
-        
-        Args:
-            theta_lab: Lab-frame scattering angle in radians
-            energy_MeV: Incident neutron energy in MeV
-            
-        Returns:
-            Lab-frame differential cross section
-        """
-        # Convert to energy in eV and use interpolator
-        energy_eV = energy_MeV * 1e6
-        diff_xs = self.diff_xs_hydron_interpolator(energy_eV, np.cos(theta_lab))*np.sin(theta_lab)
-        if diff_xs.shape[0] == 1:
-            return diff_xs.flatten()
-        else:
-            return diff_xs
-    
+        return E, x
     
     def _sample_scattered_ray(
         self,
         rng: np.random.Generator,
-        scatter_angles: np.ndarray,
-        diff_xs: np.ndarray,
+        interaction: Interaction,
         attenuation: float,
+        include_kinematics: bool,
+        max_angle: float,
         y_restriction: Optional[Literal['positive', 'negative']] = None
-    ) -> Tuple[float, float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float, float]:
         """
         Sample a scattered ray from the foil.
         
         Args:
             rng: Random number generator
-            scatter_angles: Array of possible scattering angles
-            diff_xs: Differential cross section weights (normalized)
-            attenuation: neutron fluence falloff rate for z-sampling, in 1/m
+            interaction: The process by which to generated rays, pre-calculated at the relevant energy.
+            attenuation: incident input fluence falloff rate for z-sampling, in 1/m
                          (0 for uniform sampling; -inf for front-surface-only sampling)
             y_restriction: Restrict y to positive or negative half (None for full foil)
         """
@@ -432,33 +304,32 @@ class ConversionFoil:
         
         # Sample scattering angles
         phi_scatter = 2 * np.pi * rng.random()
-        theta_scatter = rng.choice(scatter_angles, p=diff_xs)
+        theta_scatter, recoil_energy = interaction.generate_recoil_particle(
+            rng, include_kinematics, max_angle)
         
         # Adjust initial coordinates for transport through foil
         x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
         y0 += z0 * np.tan(theta_scatter) * np.sin(phi_scatter)
         
-        return x0, y0, z0, theta_scatter, phi_scatter
+        return x0, y0, z0, theta_scatter, phi_scatter, recoil_energy
 
     
-    def generate_scattered_hydron(
+    def generate_recoil_particle(
         self, 
-        neutron_energy: float, 
+        input_energy: float,
         include_kinematics: bool = False,
         include_stopping_power_loss: bool = False,
-        num_angle_samples: int = 10000,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None
     ) -> Tuple[float, float, float, float, float]:
         """
-        Generate a scattered hydron from neutron interaction.
+        Generate a scattered charged particle from input particle interaction.
         
         Args:
-            neutron_energy: Incident neutron energy in MeV
+            input_energy: Incident input particle energy in MeV
             include_kinematics: Include energy loss from non-perpendicular scattering
             include_stopping_power_loss: Include SRIM energy loss calculation
-            num_angle_samples: Number of scattering angle samples
             z_sampling: Depth sampling method ('exp' or 'uni')
             rng: Random number generator to use (for thread safety)
             
@@ -471,16 +342,21 @@ class ConversionFoil:
             
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        scatter_angles = np.linspace(max_angle, 0, num_angle_samples)
         
-        # Calculate differential cross section weights
-        diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
-        diff_xs /= np.sum(diff_xs)  # Normalize
+        # do the cross section calculations
+        interaction_weights = []
+        for interaction in self.interactions:
+            interaction.calculate_angular_distribution(input_energy)
+            weight = (interaction.get_cross_section(input_energy) *
+                      interaction.get_recoil_probability(max_angle))
+            interaction_weights.append(weight)
+        interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
         
         # Set up z-sampling probability
         if z_sampling == 'exp':
-            attenuation = (self.get_nh_cross_section(neutron_energy) * self.hydron_density +
-                           self.get_nc12_cross_section(neutron_energy) * self.carbon_density)
+            attenuation = 0
+            for interaction in self.interactions:
+                attenuation += interaction.get_cross_section(input_energy)
         else:  # uniform
             attenuation = 0
         
@@ -489,34 +365,26 @@ class ConversionFoil:
         # Limit number of rejections to avoid infinite loops
         rejected = 0
         while not accepted and rejected < 100:
-            x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
-                rng, scatter_angles, diff_xs, attenuation, y_restriction
+            interaction = rng.choice(self.interactions, p=interaction_weights)
+            x0, y0, z0, theta_scatter, phi_scatter, recoil_energy = self._sample_scattered_ray(
+                rng, interaction, attenuation, include_kinematics, max_angle, y_restriction,
             )
 
-            # Check if hydron passes through aperture
+            # Check if particle passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
-                # Initialize hydron energy
-                hydron_energy = neutron_energy
-                
-                # Apply kinematic energy loss
-                if include_kinematics:
-                    # Calculate energy loss from (382) of https://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node52.html
-                    gamma = NEUTRON_MASS / self.hydron_mass
-                    hydron_energy *= 4 * gamma / (1 + gamma)**2 * np.cos(theta_scatter)**2
-                
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
-                    hydron_energy = self.calculate_stopping_power_loss(hydron_energy, path_length)
+                    recoil_energy = self.calculate_stopping_power_loss(recoil_energy, path_length)
                 
                 accepted = True
             else:
                 rejected += 1
                 
         if not accepted:
-            raise ValueError("Unable to generate a hydron that passes through the aperture.")
+            raise ValueError("Unable to generate a recoil particle that passes through the aperture.")
                 
-        return x0, y0, theta_scatter, phi_scatter, hydron_energy
+        return x0, y0, theta_scatter, phi_scatter, recoil_energy
     
     def _check_aperture_acceptance(
         self, 
@@ -526,14 +394,14 @@ class ConversionFoil:
         phi_scatter: float
     ) -> bool:
         """
-        Check if a scattered hydron passes through the aperture.
+        Check if a scattered recoil particle passes through the aperture.
         
         Args:
             x0, y0: Initial position in foil
             theta_scatter, phi_scatter: Scattering angles
             
         Returns:
-            True if hydron passes through aperture
+            True if recoil particle passes through aperture
         """
         # Calculate position at aperture
         x_aperture = x0 + self.aperture_distance * np.tan(theta_scatter) * np.cos(phi_scatter)
@@ -549,40 +417,41 @@ class ConversionFoil:
     
     def calculate_efficiency(
         self, 
-        neutron_energy: float, 
+        input_energy: float,
         num_samples: int = int(1e6),
-        num_angle_samples: int = 10000,
         max_workers: Optional[int] = None
     ) -> Tuple[float, float, float]:
         """
-        Estimate intrinsic efficiency (hydrons/neutron) of the spectrometer using parallel processing.
+        Estimate intrinsic efficiency (recoils/incident) of the spectrometer using parallel processing.
         
         Args:
-            neutron_energy: Incident neutron energy in MeV
+            input_energy: Incident input particle energy in MeV
             num_samples: Number of particles to simulate
-            num_angle_samples: Angular discretization steps
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of scattering, geometric, and total efficiency as fraction of incident neutrons
+            Tuple of scattering, geometric, and total efficiency as fraction of incident input particles
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
         
-        print(f'\nEstimating intrinsic efficiency for {neutron_energy:.3f} MeV neutrons using {max_workers} processes...')
+        print(f'\nEstimating intrinsic efficiency for {input_energy:.3f} MeV particles using {max_workers} processes...')
         
         # Calculate scattering probability in foil (non-parallelizable part)
-        nh_xs = self.get_nh_cross_section(neutron_energy)
-        nc12_xs = self.get_nc12_cross_section(neutron_energy)
-        total_xs = nh_xs * self.hydron_density + nc12_xs * self.carbon_density
+        total_xs = 0
+        effective_xs = 0
+        interaction_weights = []
+        for interaction in self.interactions:
+            interaction.calculate_angular_distribution(input_energy)
+            total_xs += interaction.get_cross_section(input_energy)
+            effective_xs += (interaction.get_cross_section(input_energy) *
+                             interaction.get_recoil_probability())
+            interaction_weights.append(
+                interaction.get_cross_section(input_energy) *
+                interaction.get_recoil_probability())
+        interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
         
-        scattering_efficiency = (self.hydron_density * nh_xs * 
-                            (1 - np.exp(-total_xs * self.thickness)) / total_xs)
-        
-        # Prepare angular distributions
-        scatter_angles = np.linspace(np.pi/2, 0, num_angle_samples)
-        diff_xs = self.calculate_differential_xs_lab(scatter_angles, neutron_energy)
-        diff_xs /= np.sum(diff_xs)  # Normalize
+        scattering_efficiency = effective_xs * (1 - np.exp(-total_xs * self.thickness)) / total_xs
         
         # Calculate samples per process
         samples_per_process = num_samples // max_workers
@@ -608,8 +477,8 @@ class ConversionFoil:
                     worker_args = (
                         batch_size,
                         12345 + i * 1000,  # seed_offset
-                        scatter_angles,
-                        diff_xs,
+                        self.interactions,
+                        interaction_weights,
                         self.foil_radius,
                         progress_counter,
                         progress_lock
@@ -657,8 +526,8 @@ class ConversionFoil:
         self,
         batch_size: int,
         seed_offset: int,
-        scatter_angles: np.ndarray,
-        diff_xs: np.ndarray,
+        interactions: list[Interaction],
+        interaction_weights: np.ndarray,
         foil_radius: float,
         progress_counter,
         progress_lock
@@ -669,8 +538,8 @@ class ConversionFoil:
         Args:
             batch_size: Number of samples to process in this batch
             seed_offset: Random seed offset for this worker
-            scatter_angles: Array of scatter angles
-            diff_xs: Differential cross section weights (normalized)
+            interactions: Processes by which recoil particles are generated
+            interaction_weights: Relative probability of each interaction process
             foil_radius: Foil radius in meters
             progress_counter: Shared counter for progress tracking
             progress_lock: Lock for thread-safe progress updates
@@ -690,8 +559,9 @@ class ConversionFoil:
                 processed_count += 1
                 
                 # Sample scattered ray using helper method (no z-sampling for efficiency calculation)
-                x0, y0, _, theta_scatter, phi_scatter = self._sample_scattered_ray(
-                    rng, scatter_angles, diff_xs, attenuation=-np.inf
+                interaction = rng.choice(interactions, p=interaction_weights)
+                x0, y0, _, theta_scatter, phi_scatter, _ = self._sample_scattered_ray(
+                    rng, interaction, include_kinematics=False, max_angle=np.pi, attenuation=-np.inf
                 )
                 
                 # N.B. We do not consider the very small displacement due to foil thickness here
@@ -717,40 +587,44 @@ class ConversionFoil:
         
         return accepted_count, processed_count
     
-    def get_proton_energy_distribution(
+    def get_recoil_energy_distribution(
         self, 
-        neutron_energies: np.ndarray, 
+        input_energies: np.ndarray,
         energy_distribution: np.ndarray, 
-        num_protons: int = int(1e2)
+        num_recoil_particles: int = int(1e2)
     ) -> np.ndarray:
         """
-        Calculate the proton energy distribution at foil exit for a given neutron energy distribution.
+        Calculate the recoil particle energy distribution at foil exit for a given input particle energy distribution.
         
         Args:
-            neutron_energies: Array of neutron energies in MeV
-            energy_distribution: Distribution of neutron energies (will be normalized)
-            num_protons: Number of protons to simulate
+            input_energies: Array of input particle energies in MeV
+            energy_distribution: Distribution of input particle energies (will be normalized)
+            num_recoil_particles: Number of recoil events to simulate
             
         Returns:
             Array of proton energies at foil exit
         """
-        proton_energies = np.zeros(num_protons)
+        recoil_energies = np.zeros(num_recoil_particles)
         
-        # Weight distribution by n-p scattering cross section and normalize
-        weighted_distribution = energy_distribution * self.get_nh_cross_section(neutron_energies)
+        # Weight distribution by scattering cross section and normalize
+        interaction_probability = np.zeros_like(energy_distribution)
+        for interaction in self.interactions:
+            interaction_probability += (interaction.get_cross_section(input_energies) *
+                                        interaction.get_recoil_probability())
+        weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution = weighted_distribution / np.sum(weighted_distribution)
         
-        for i in tqdm(range(num_protons), desc='Calculating proton energy distribution...'):
-            # Sample neutron energy from weighted distribution
-            neutron_energy = np.random.choice(neutron_energies, p=weighted_distribution)
+        for i in tqdm(range(num_recoil_particles), desc='Calculating proton energy distribution...'):
+            # Sample input particle energy from weighted distribution
+            input_energy = np.random.choice(input_energies, p=weighted_distribution)
             
             # Generate scattered proton and extract final energy
-            _, _, _, _, proton_energy = self.generate_scattered_hydron(
-                neutron_energy, 
+            _, _, _, _, proton_energy = self.generate_recoil_particle(
+                input_energy,
                 include_kinematics=True, 
                 include_stopping_power_loss=True
             )
             
-            proton_energies[i] = proton_energy
+            recoil_energies[i] = proton_energy
             
-        return proton_energies
+        return recoil_energies

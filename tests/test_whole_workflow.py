@@ -38,7 +38,7 @@ def test_whole_workflow():
     # do the math
     nspc.generate_monte_carlo_rays(
         energies, birth_spectrum,
-        num_hydrons=100,
+        num_recoil_particles=100,
     )
     nspc.apply_transfer_map()
     nspc.read_beams()
@@ -47,7 +47,7 @@ def test_whole_workflow():
     plotter = SpectrometerPlotter(nspc)
     plotter.plot_focal_plane_distribution(include_hodoscope=True)
     plotter.plot_phase_space()
-    plotter.plot_characteristic_rays()
+    plotter.plot_characteristic_rays(radial_points=1, angular_points=8, aperture_radial_points=1, aperture_angular_points=8)
     plotter.plot_simple_position_histogram()
     plotter.plot_monoenergetic_analysis(2.4, 2.4, 0.2)
     plotter.plot_data(2.4)
