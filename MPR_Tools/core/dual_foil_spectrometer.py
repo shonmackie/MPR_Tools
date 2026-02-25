@@ -113,12 +113,10 @@ class DualFoilSpectrometer:
             **shared_foil_kwargs
         )
         
-        # Adjust reference energy for deuterons based on mass ratio
-        deuteron_reference_energy = reference_energy / foil_cd2.hydron_mass * foil_ch2.hydron_mass
         self.spec_cd2 = MPRSpectrometer(
             conversion_foil=foil_cd2,
             transfer_map_path=deuteron_transfer_map_path,
-            reference_energy=deuteron_reference_energy,
+            reference_energy=reference_energy,
             min_energy=cd2_min_energy,
             max_energy=cd2_max_energy,
             hodoscope=hodoscope,

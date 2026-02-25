@@ -325,8 +325,8 @@ class ConversionFoil:
     def generate_recoil_particle(
         self, 
         input_energy: float,
-        include_kinematics: bool = False,
-        include_stopping_power_loss: bool = False,
+        include_kinematics: bool = True,
+        include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None
@@ -378,8 +378,8 @@ class ConversionFoil:
                 rng, interaction, attenuation, include_kinematics, max_angle, y_restriction,
             )
 
-            # Check if particle passes through aperture
-            if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
+            # Check if hydron passes through aperture
+            if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):                
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
@@ -626,13 +626,13 @@ class ConversionFoil:
             # Sample input particle energy from weighted distribution
             input_energy = np.random.choice(input_energies, p=weighted_distribution)
             
-            # Generate scattered proton and extract final energy
-            _, _, _, _, proton_energy = self.generate_recoil_particle(
+            # Generate scattered recoil particle and extract final energy
+            _, _, _, _, recoil_energy = self.generate_recoil_particle(
                 input_energy,
                 include_kinematics=True, 
                 include_stopping_power_loss=True
             )
             
-            recoil_energies[i] = proton_energy
+            recoil_energies[i] = recoil_energy
             
         return recoil_energies
