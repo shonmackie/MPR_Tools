@@ -27,7 +27,7 @@ def test_whole_workflow():
             detector_width=100,
             detector_height=10,
         ),
-        figure_directory="tests/output"
+        run_directory="tests/output"
     )
 
     # use a Dirac delta function input spectrum

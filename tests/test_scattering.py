@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import matplotlib
@@ -7,6 +8,9 @@ from numpy import random, pi, inf, isclose, empty, degrees, array, mean, sqrt, s
 
 from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
     ProbabilityDistribution
+
+
+os.makedirs('tests/output/figures', exist_ok=True)
 
 
 def test_nC12_cross_section():
@@ -44,7 +48,7 @@ def test_np_cross_section():
     plt.ylabel("Proton spectrum (MeV^-1)")
     plt.title(f"Knock-on proton spectrum from 14 MeV neutrons")
     plt.tight_layout()
-    plt.savefig("tests/output/test_np_cross_section.png")
+    plt.savefig("tests/output/figures/test_np_cross_section.png")
     plt.close()
 
 
@@ -71,7 +75,7 @@ def test_nd_cross_section():
     plt.ylabel("Deuteron spectrum (MeV^-1)")
     plt.title(f"Knock-on deuteron spectrum from 14 MeV neutrons")
     plt.tight_layout()
-    plt.savefig("tests/output/test_nd_cross_section.png")
+    plt.savefig("tests/output/figures/test_nd_cross_section.png")
     plt.close()
 
 
@@ -94,7 +98,7 @@ def test_compton_cross_section():
     plt.ylabel("Electron distribution (degrees^-1)")
     plt.title(f"{compton_scatter.name} electron distribution from 16.7 MeV photons")
     plt.tight_layout()
-    plt.savefig("tests/output/test_compton_cross_section.png")
+    plt.savefig("tests/output/figures/test_compton_cross_section.png")
     plt.close()
 
 
@@ -120,7 +124,7 @@ def test_probability_distribution():
     plt.plot(x, .075 + .00075*(x - 20)**2, '--')
     plt.title("Parabolic probability distribution")
     plt.tight_layout()
-    plt.savefig("tests/output/test_probability_distribution.png")
+    plt.savefig("tests/output/figures/test_probability_distribution.png")
     plt.close()
 
 
