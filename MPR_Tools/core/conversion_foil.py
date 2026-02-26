@@ -378,7 +378,7 @@ class ConversionFoil:
                 rng, interaction, attenuation, include_kinematics, max_angle, y_restriction,
             )
 
-            # Check if hydron passes through aperture
+            # Check if recoil particle passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):                
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:

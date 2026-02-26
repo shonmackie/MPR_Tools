@@ -84,7 +84,7 @@ class FoilSweeper:
             DataFrame with sweep results
         """
         if output_filename is None:
-            output_filename = (f'{self.spectrometer.data_directory}/foil_sweep_En{neutron_energy:.1f}MeV.csv')
+            output_filename = (f'{self.spectrometer.data_directory}/foil_sweep_En{input_energy:.1f}MeV.csv')
         
         # Check if results exist and reset=False
         if not reset and Path(output_filename).exists():

@@ -513,12 +513,12 @@ class SpectrometerPlotter:
         
         particle = self.spectrometer.conversion_foil.particle
         # TODO: make foil distance configurable
-        hydron_density, response, X_mesh, Y_mesh = self.performance_analyzer.get_particle_density_map(particle, dx, dy, foil_distance=6.0, input_yield=input_yield)
+        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_particle_density_map(particle, dx, dy, foil_distance=6.0, input_yield=input_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create heatmap
-        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(hydron_density), cmap=self.primary_cmap, shading='auto')
+        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(density_map), cmap=self.primary_cmap, shading='auto')
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)

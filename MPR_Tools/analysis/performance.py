@@ -215,7 +215,7 @@ class PerformanceAnalyzer:
             dsr_energy_range:
                 Energy range for DSR in MeV
             primary_energy_range:
-                Energy range for primary neutrons in MeV
+                Energy range for primary input particles in MeV
             
         Returns:
             Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies, energies_std, response, background)
@@ -351,7 +351,7 @@ class PerformanceAnalyzer:
             input_yield, optional: Input particle yield
             
         Returns:
-            Tuple of (hydron_density_map, response_map, X_meshgrid, Y_meshgrid)
+            Tuple of (density_map, response_map, X_meshgrid, Y_meshgrid)
         """
         if len(self.spectrometer.output_beam) == 0:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
