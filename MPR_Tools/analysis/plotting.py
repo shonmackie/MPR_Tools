@@ -498,7 +498,7 @@ class SpectrometerPlotter:
         filename: Optional[str] = None,
         dx: float = 0.5, 
         dy: float = 0.5,
-        input_yield: Optional[float] = None
+        particle_yield: Optional[float] = None
     ) -> None:
         """
         Plot a heatmap of recoil particle density in the focal plane.
@@ -513,7 +513,7 @@ class SpectrometerPlotter:
         
         particle = self.spectrometer.conversion_foil.particle
         # TODO: make foil distance configurable
-        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_distance=6.0, input_yield=input_yield)
+        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_distance=6.0, particle_yield=particle_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
         
@@ -522,17 +522,17 @@ class SpectrometerPlotter:
         
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        units = f'[{particle}/cm$^2$-source]' if input_yield == None else f'[{particle}/cm$^2$]'
+        units = f'[{particle}/cm$^2$-source]' if particle_yield == None else f'[{particle}/cm$^2$]'
         cbar.set_label(f'log$_{{10}}$(Fluence {units})')
         
         # Add dual data if available
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_distance=6.0, input_yield=input_yield)
+            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_distance=6.0, particle_yield=particle_yield)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-            units = f'[{particle2}/cm$^2$-source]' if input_yield == None else f'[{particle2}/cm$^2$]'
+            units = f'[{particle2}/cm$^2$-source]' if particle_yield == None else f'[{particle2}/cm$^2$]'
             cbar2.set_label(f'log$_{{10}}$(Fluence {units})')
         
         ax.set_xlabel('X Position [cm]')
@@ -549,14 +549,14 @@ class SpectrometerPlotter:
             fig, ax = plt.subplots(figsize=(10, 8))
             im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(response), cmap=self.primary_cmap, shading='auto')
             cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-            units = f'[response/cm$^2$-source]' if input_yield == None else f'[response/cm$^2$]'
+            units = f'[response/cm$^2$-source]' if particle_yield == None else f'[response/cm$^2$]'
             cbar.set_label(f'log$_{{10}}$(Detector Response {units})')
             
             # Add dual data if available
             if self.dual_data:
                 im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(response2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
                 cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-                units = f'[response/cm$^2$-source]' if input_yield == None else f'[response/cm$^2$]'
+                units = f'[response/cm$^2$-source]' if particle_yield == None else f'[response/cm$^2$]'
                 cbar2.set_label(f'log$_{{10}}$(Detector Response {units})')
             
             ax.set_xlabel('X Position [cm]')
@@ -572,7 +572,7 @@ class SpectrometerPlotter:
             
             # Get signal-to-background ratio
             total_background = self.spectrometer.hodoscope.get_total_background()
-            total_background *= input_yield if input_yield != None else 1.0
+            total_background *= particle_yield if particle_yield != None else 1.0
             signal_to_background = response / total_background
             
             im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(signal_to_background), cmap=self.primary_cmap, shading='auto')
