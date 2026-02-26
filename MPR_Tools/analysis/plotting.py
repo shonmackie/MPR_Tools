@@ -513,7 +513,7 @@ class SpectrometerPlotter:
         
         particle = self.spectrometer.conversion_foil.particle
         # TODO: make foil distance configurable
-        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_particle_density_map(particle, dx, dy, foil_distance=6.0, input_yield=input_yield)
+        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_distance=6.0, input_yield=input_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
         
@@ -529,7 +529,7 @@ class SpectrometerPlotter:
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_particle_density_map(particle2, dx, dy, foil_distance=6.0, input_yield=input_yield)
+            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_distance=6.0, input_yield=input_yield)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
             units = f'[{particle2}/cm$^2$-source]' if input_yield == None else f'[{particle2}/cm$^2$]'

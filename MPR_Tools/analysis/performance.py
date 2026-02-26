@@ -333,13 +333,12 @@ class PerformanceAnalyzer:
         
         return input_efficiencies
     
-    def get_particle_density_map(
+    def get_recoil_density_map(
         self,
-        particle: Literal['proton', 'deuteron', 'electron'] = 'proton',
         dx: float = 0.5, 
         dy: float = 0.5,
         foil_distance: Optional[float] = None,
-        input_yield: Optional[float] = None
+        particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Calculate the density of recoil particle impact sites and detector response (if available) in the focal plane.
@@ -348,7 +347,7 @@ class PerformanceAnalyzer:
             dx: X-direction resolution in cm
             dy: Y-direction resolution in cm
             foil_distance, optional: Distance between foil and target in meters
-            input_yield, optional: Input particle yield
+            particle_yield, optional: Input particle yield
             
         Returns:
             Tuple of (density_map, response_map, X_meshgrid, Y_meshgrid)
@@ -417,9 +416,9 @@ class PerformanceAnalyzer:
             response_map *= foil_solid_angle_fraction
             
         # Add input yield
-        if input_yield:
-            density_map *= input_yield
-            response_map *= input_yield
+        if particle_yield:
+            density_map *= particle_yield
+            response_map *= particle_yield
         
         # Save the density map as csv
         density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density_map.flatten(), response_map.flatten()))
@@ -449,8 +448,8 @@ class PerformanceAnalyzer:
         Returns:
             Tuple of x_positions, response_values
         """
-        density_map, response_map, X_mesh, Y_mesh = self.get_particle_density_map(
-            particle, dx, dy, foil_distance, particle_yield
+        density_map, response_map, X_mesh, Y_mesh = self.get_recoil_density_map(
+            dx, dy, foil_distance, particle_yield
         )
         
         # Sum response map along y to get total response vs x
