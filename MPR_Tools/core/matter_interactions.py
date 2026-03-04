@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from numpy.polynomial.legendre import legval
 from scipy import integrate
-from scipy.interpolate import CubicSpline, make_interp_spline
+from scipy.interpolate import PPoly, make_interp_spline
 
 from ..config.constants import ELECTRON_REST_ENERGY, NEUTRON_MASS, CLASSICAL_ELECTRON_RADIUS, FINE_STRUCTURE_CONSTANT
 
@@ -509,8 +509,12 @@ class ProbabilityDistribution:
             raise ValueError("the x-axis for a probability distribution must always be monotonically increasing.")
         self.min_value = values[0]
         self.max_value = values[-1]
-        # make a piecewise polynomial out of the given PDF
-        self.pdf = CubicSpline(values, probability_densities, extrapolate=False)
+        # make a piecewise 1st-order polynomial out of the given PDF
+        intercepts = probability_densities[0:-1]
+        slopes = np.diff(probability_densities)/np.diff(values)
+        self.pdf = PPoly(
+            np.stack([slopes, intercepts], axis=0),
+            values, extrapolate=False)
         # this object can then be integrated efficiently and exactly
         self.cdf = self.pdf.antiderivative()
     
