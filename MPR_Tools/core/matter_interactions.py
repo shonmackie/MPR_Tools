@@ -219,7 +219,7 @@ class ComptonScattering:
         self.incident_energy = None
         self.photon_angle_distribution = None
 
-    def get_macroscopic_cross_section(self, incident_energy: float | np.ndarray) -> float | np.ndarray:
+    def get_cross_section(self, incident_energy: float | np.ndarray) -> float | np.ndarray:
         """ get the total macroscopic cross section, for calculating attenuation, in m^-1 """
         if np.any(incident_energy <= ELECTRON_REST_ENERGY*2):
             raise ValueError("This formula only works for photon energies much greater than the electron rest energy")
