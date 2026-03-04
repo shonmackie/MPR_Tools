@@ -276,13 +276,11 @@ class MPRSpectrometer:
         
         while len(batch_results) < batch_size:
             try:                
-                # Sample incident particle energy
-                incident_energy = rng.choice(incident_energies, p=weighted_distribution)
-                
                 # Generate recoil particle with the worker's RNG
                 # The recoil particles generated are already accepted by the aperture
-                x0, y0, theta_s, phi_s, recoil_energy = conversion_foil.generate_recoil_particle(
-                    incident_energy,
+                x0, y0, theta_s, phi_s, incident_energy, recoil_energy = conversion_foil.generate_recoil_particle(
+                    incident_energies,
+                    weighted_distribution,
                     include_kinematics, 
                     include_stopping_power_loss, 
                     z_sampling=z_sampling,

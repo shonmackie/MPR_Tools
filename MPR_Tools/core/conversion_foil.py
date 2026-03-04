@@ -317,25 +317,29 @@ class ConversionFoil:
     
     def generate_recoil_particle(
         self, 
-        incident_energy: float,
+        incident_energies: np.ndarray,
+        energy_distribution: np.ndarray,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None
-    ) -> Tuple[float, float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float, float]:
         """
         Generate a scattered charged particle from incident particle interaction.
         
         Args:
-            incident_energy: Incident particle energy in MeV
+            incident_energies: Array of incident particle energies in MeV
+            energy_distribution: Distribution of incident particle energies
+                                 (each energy will have an equal chance to generate a ray, so
+                                 make sure you weight it by the scattering efficiency first)
             include_kinematics: Include energy loss from non-perpendicular scattering
             include_stopping_power_loss: Include SRIM energy loss calculation
             z_sampling: Depth sampling method ('exp' or 'uni')
             rng: Random number generator to use (for thread safety)
             
         Returns:
-            Tuple of (x0, y0, theta_scatter, phi_scatter, final_energy)
+            Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy)
         """
         # Use provided RNG or default
         if rng is None:
@@ -344,28 +348,31 @@ class ConversionFoil:
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
         
-        # do the cross section calculations
-        interaction_weights = []
-        for interaction in self.interactions:
-            interaction.calculate_angular_distribution(incident_energy)
-            weight = (interaction.get_cross_section(incident_energy) *
-                      interaction.get_recoil_probability(max_angle))
-            interaction_weights.append(weight)
-        interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
-        
-        # Set up z-sampling probability
-        if z_sampling == 'exp':
-            attenuation = 0
-            for interaction in self.interactions:
-                attenuation += interaction.get_cross_section(incident_energy)
-        else:  # uniform
-            attenuation = 0
-        
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
         rejected = 0
         while not accepted and rejected < 100:
+            # Sample incident particle energy from weighted distribution
+            incident_energy = np.random.choice(incident_energies, p=energy_distribution)
+            
+            # do the cross section calculations
+            interaction_weights = []
+            for interaction in self.interactions:
+                interaction.calculate_angular_distribution(incident_energy)
+                weight = (interaction.get_cross_section(incident_energy) *
+                          interaction.get_recoil_probability(max_angle))
+                interaction_weights.append(weight)
+            interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
+            
+            # Set up z-sampling probability
+            if z_sampling == 'exp':
+                attenuation = 0
+                for interaction in self.interactions:
+                    attenuation += interaction.get_cross_section(incident_energy)
+            else:  # uniform
+                attenuation = 0
+                
             interaction = rng.choice(self.interactions, p=interaction_weights)
             x0, y0, z0, theta_scatter, phi_scatter, recoil_energy = self._sample_scattered_ray(
                 rng, interaction, attenuation, include_kinematics, max_angle, y_restriction,
@@ -385,7 +392,7 @@ class ConversionFoil:
         if not accepted:
             raise ValueError("Unable to generate a recoil particle that passes through the aperture.")
                 
-        return x0, y0, theta_scatter, phi_scatter, recoil_energy
+        return x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy
     
     def _check_aperture_acceptance(
         self, 
@@ -596,12 +603,10 @@ class ConversionFoil:
         weighted_distribution = weighted_distribution / np.sum(weighted_distribution)
         
         for i in tqdm(range(num_recoil_particles), desc='Calculating proton energy distribution...'):
-            # Sample incident particle energy from weighted distribution
-            incident_energy = np.random.choice(incident_energies, p=weighted_distribution)
-            
             # Generate scattered recoil particle and extract final energy
-            _, _, _, _, recoil_energy = self.generate_recoil_particle(
-                incident_energy,
+            _, _, _, _, _, recoil_energy = self.generate_recoil_particle(
+                incident_energies,
+                weighted_distribution,
                 include_kinematics=True, 
                 include_stopping_power_loss=True
             )
