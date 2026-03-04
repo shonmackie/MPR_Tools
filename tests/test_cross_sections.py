@@ -124,7 +124,7 @@ def test_pair_production():
     plt.ylabel("Electron spectrum (MeV^-1)")
     plt.title(f"{pair_production.name} electron spectrum from 16.7 MeV photons")
     plt.tight_layout()
-    plt.savefig("tests/output/test_pair_production_cross_section.png")
+    plt.savefig("tests/output/figures/test_pair_production_cross_section.png")
     plt.close()
 
 
@@ -168,7 +168,7 @@ def test_z_sampling():
     plt.ylabel("y (cm)")
     plt.title("Recoil distribution (1.5 cm radius foil)")
     plt.tight_layout()
-    plt.savefig("tests/output/test_foil_xy_distribution.png")
+    plt.savefig("tests/output/figures/test_foil_xy_distribution.png")
     plt.close()
     
     plt.figure()
@@ -177,7 +177,7 @@ def test_z_sampling():
     plt.ylabel("Distribution (um^-1)")
     plt.title("Recoil distribution (20 um attenuation depth)")
     plt.tight_layout()
-    plt.savefig("tests/output/test_foil_z_distribution.png")
+    plt.savefig("tests/output/figures/test_foil_z_distribution.png")
     plt.close()
 
 
