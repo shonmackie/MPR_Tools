@@ -174,7 +174,7 @@ class FoilSweeper:
                 'total_efficiency': total_eff,
                 'mean_position': mean_pos,
                 'std_position': std_pos,
-                'fwhm': fwhm, # MeV
+                'fwhm': fwhm, # m
                 'energy_resolution': energy_res, # keV
                 'gradient': gradient
             })
@@ -317,7 +317,7 @@ class FoilSweeper:
             num_incident_particles: Number of incident particles for efficiency calculation
             
         Returns:
-            Tuple of (energy_resolution, log10_efficiency)
+            Tuple of (energy_resolution in keV, log10_efficiency)
         """
         # Build params dict with suggested values for trainable parameters
         params = {}

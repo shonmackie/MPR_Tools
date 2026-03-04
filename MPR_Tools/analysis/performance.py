@@ -1,6 +1,8 @@
 """Performance analysis methods for MPR spectrometer."""
 
 from __future__ import annotations
+
+from concurrent.futures import Executor
 from typing import Tuple, Optional, Union, Literal
 import warnings
 import numpy as np
@@ -31,7 +33,9 @@ class PerformanceAnalyzer:
         spectrometer: Optional[MPRSpectrometer] = None,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
-        verbose: bool = False
+        verbose: bool = False,
+        executor: Optional[Executor] = None,
+        max_workers: Optional[int] = None,
     ) -> Tuple[float, float, float, float, float]:
         """
         Analyze spectrometer performance for monoenergetic incident particles.
@@ -44,9 +48,11 @@ class PerformanceAnalyzer:
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             verbose: Print detailed results
-
+executor: Pool of workers to use (if None, we will make our own)
+            max_workers: Maximum number of worker processes (None for CPU count)
+            
         Returns:
-            Tuple of (mean_position, std_deviation, fwhm, energy_resolution, dispersion)
+            Tuple of (mean_position in m, std_deviation in m, fwhm in m, energy_resolution in keV, dispersion in m/MeV)
         """
         if spectrometer is None:
             spectrometer = self.spectrometer
@@ -62,9 +68,12 @@ class PerformanceAnalyzer:
                 num_recoils,
                 include_kinematics, 
                 include_stopping_power_loss,
-                save_beam=False
+                save_beam=False,
+                executor=executor,
+                max_workers=max_workers,
             )
-            spectrometer.apply_transfer_map(map_order=5, save_beam=False)
+            spectrometer.apply_transfer_map(
+                map_order=5, save_beam=False, executor=executor, max_workers=max_workers)
             x_positions = spectrometer.output_beam[:, 0]
             mean_position, std_deviation = norm.fit(x_positions)
             return mean_position, std_deviation
@@ -92,18 +101,20 @@ class PerformanceAnalyzer:
             print(f'  Mean position [cm]: {mean_position_0 * 100:.3f}')
             print(f'  Standard deviation [cm]: {std_deviation_0 * 100:.3f}')
             print(f'  FWHM [cm]: {fwhm_0 * 100:.3f}')
-            print(f'  Energy resolution [keV]: {energy_resolution * 1000:.2f}')
+            print(f'  Energy resolution [keV]: {energy_resolution:.2f}')
         
         return mean_position_0, std_deviation_0, fwhm_0, energy_resolution, dispersion
     def generate_performance_curve(
         self,
         num_energies: int = 40,
         num_recoils_per_energy: int = 10000,
-        num_efficiency_samples: int = int(1e6),
+        num_efficiency_samples: int = 10000,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         output_filename: Optional[str] = None,
-        reset: bool = True
+        reset: bool = True,
+        executor: Optional[Executor] = None,
+        max_workers: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Generate comprehensive performance analysis including location, resolution, and efficiency.
@@ -116,10 +127,12 @@ class PerformanceAnalyzer:
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
-            reset: Whether to regenerate the dataset or load an existing one
-
+            reset: Whether to regenerate the dataset rather than loading an existing one
+executor: Pool of workers to use (if None, we will make our own)
+            max_workers: Maximum number of worker processes (None for CPU count)
+            
         Returns:
-            Tuple of (energies, positions_mean, positions_std, energy_resolutions, total_efficiencies, foil_species)
+            Tuple of (energies in MeV, positions_mean in m, positions_std in m, energy_resolutions in keV, total_efficiencies, foil_species)
         """
         print('\nGenerating comprehensive performance analysis...')
 
@@ -160,8 +173,9 @@ class PerformanceAnalyzer:
                         spectrometer=spec,
                         include_kinematics=include_kinematics,
                         include_stopping_power_loss=include_stopping_power_loss,
-                        verbose=False
-                    )
+                        verbose=False,
+                    executor=executor,
+                    max_workers=max_workers,)
                     positions_mean[i] = mean_pos
                     positions_std[i] = std_dev
                     energy_resolutions[i] = energy_res
@@ -170,8 +184,9 @@ class PerformanceAnalyzer:
                     # Calculate efficiency for this energy
                     scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
                         energy,
-                        num_samples=num_efficiency_samples
-                    )
+                        num_samples=num_efficiency_samples,
+                    executor=executor,
+                    max_workers=max_workers,)
                     scattering_efficiencies[i] = scattering_efficiency
                     geometric_efficiencies[i] = geometric_efficiency
                     total_efficiencies[i] = total_efficiency
@@ -296,7 +311,7 @@ class PerformanceAnalyzer:
         # Total background is in response/cm^2-source
         # Assume background is uniform across detector
         total_background = self.spectrometer.hodoscope.get_total_background()
-        # Integrate background over y 
+        # Integrate background over y
         total_background *= X_mesh.shape[0] * dy
         if particle_yield:
             total_background *= particle_yield
@@ -423,14 +438,14 @@ class PerformanceAnalyzer:
         # Save the density map as csv
         density_data = np.column_stack((X_mesh.flatten(), Y_mesh.flatten(), density_map.flatten(), response_map.flatten()))
         density_df = pd.DataFrame(density_data, columns=['X', 'Y', 'Density', 'Sensitivity'])
-        density_df.to_csv(f'{self.spectrometer.figure_directory}/particle_density_map.csv', index=False)        
+        density_df.to_csv(f'{self.spectrometer.figure_directory}/particle_density_map.csv', index=False)
         
         return density_map, response_map, X_mesh, Y_mesh
     
     def analyze_response(
         self,
         particle: Literal['proton', 'deuteron', 'electron'] = 'proton',
-        dx: float = 0.5, 
+        dx: float = 0.5,
         dy: float = 0.5,
         foil_distance: Optional[float] = None,
         particle_yield: Optional[float] = None

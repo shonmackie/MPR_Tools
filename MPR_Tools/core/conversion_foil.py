@@ -5,12 +5,12 @@ import numpy as np
 from pathlib import Path
 
 from scipy import integrate
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import Executor
 import multiprocessing as mp
-import time
 from tqdm import tqdm
 
-from .matter_interactions import GenericInteraction, ElasticScattering, ComptonScattering, Interaction
+from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction
+from .parallelization import run_concurrently
 from ..config.constants import AVOGADRO, FOIL_MATERIALS
 
 
@@ -112,6 +112,8 @@ class ConversionFoil:
                     self.particle_mass))
             elif interaction_info['type'] == 'compton_scattering':
                 self.interactions.append(ComptonScattering(target_density))
+            elif interaction_info['type'] == 'pair_production':
+                self.interactions.append(PairProduction(target_density, interaction_info['target_charge']))
             else:
                 raise ValueError(f"I don't know the interaction type {interaction_info['type']!r}.")
     
@@ -295,12 +297,12 @@ class ConversionFoil:
             z0 = 0.0  # Sample at exit surface
         elif attenuation == np.inf:
             z0 = -self.thickness  # Sample at entrance surface
-        elif abs(self.thickness*attenuation) < 1e-9:
+        elif abs(self.thickness*attenuation) == 0:
             z0 = rng.uniform(-self.thickness, 0)  # Uniform distribution
         else:
-            front_bound = 1
-            back_bound = np.exp(self.thickness*attenuation)
-            z0 = -np.log(rng.uniform(front_bound, back_bound))/attenuation  # Truncated exponential distribution
+            front_bound = 0
+            back_bound = np.expm1(self.thickness*attenuation)
+            z0 = -np.log1p(rng.uniform(front_bound, back_bound))/attenuation  # Truncated exponential distribution
         
         # Sample scattering angles
         phi_scatter = 2 * np.pi * rng.random()
@@ -371,7 +373,7 @@ class ConversionFoil:
             )
 
             # Check if recoil particle passes through aperture
-            if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):                
+            if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
@@ -418,7 +420,8 @@ class ConversionFoil:
     def calculate_efficiency(
         self, 
         incident_energy: float,
-        num_samples: int = int(1e6),
+        num_samples: int = 10000,
+        executor: Optional[Executor] = None,
         max_workers: Optional[int] = None
     ) -> Tuple[float, float, float]:
         """
@@ -427,6 +430,7 @@ class ConversionFoil:
         Args:
             incident_energy: Incident particle energy in MeV
             num_samples: Number of particles to simulate
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
@@ -436,6 +440,9 @@ class ConversionFoil:
             max_workers = mp.cpu_count()
         
         print(f'\nEstimating intrinsic efficiency for {incident_energy:.3f} MeV particles using {max_workers} processes...')
+        
+        # Limit scattering angles for computational efficiency
+        max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
         
         # Calculate scattering probability in foil (non-parallelizable part)
         total_xs = 0
@@ -448,7 +455,8 @@ class ConversionFoil:
                              interaction.get_recoil_probability())
             interaction_weights.append(
                 interaction.get_cross_section(incident_energy) *
-                interaction.get_recoil_probability())
+                interaction.get_recoil_probability(max_angle))
+        angular_factor = effective_xs/sum(interaction_weights)  # the factor by which our sampling density is increased because we're using max_angle
         interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
         
         scattering_efficiency = effective_xs * (1 - np.exp(-total_xs * self.thickness)) / total_xs
@@ -457,62 +465,37 @@ class ConversionFoil:
         samples_per_process = num_samples // max_workers
         remaining_samples = num_samples % max_workers
         
-        # Create shared counter for progress tracking
-        manager = mp.Manager()
-        progress_counter = manager.Value('i', 0)
-        progress_lock = manager.Lock()
-        
-        # Initialize progress bar
-        pbar = tqdm(total=num_samples, desc='Calculating geometric acceptance')
-        
         # Execute in parallel
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            
-            # Submit jobs
-            for i in range(max_workers):
-                batch_size = samples_per_process + (1 if i < remaining_samples else 0)
-                if batch_size > 0:  # Only submit if there's work to do
-                    # Package all parameters for the worker
-                    worker_args = (
-                        batch_size,
-                        12345 + i * 1000,  # seed_offset
-                        self.interactions,
-                        interaction_weights,
-                        self.foil_radius,
-                        progress_counter,
-                        progress_lock
-                    )
-                    future = executor.submit(self._calculate_efficiency_batch_worker, *worker_args)
-                    futures.append(future)
-            
-            # Monitor progress while processes run
-            last_count = 0
-            while any(not future.done() for future in futures):
-                current_count = progress_counter.value
-                if current_count > last_count:
-                    pbar.update(current_count - last_count)
-                    last_count = current_count
-                time.sleep(0.5)  # Check every 500ms
-            
-            # Final update for any remaining progress
-            final_count = progress_counter.value
-            if final_count > last_count:
-                pbar.update(final_count - last_count)
-            
-            # Collect results
-            total_accepted = 0
-            total_processed = 0
-            
-            for future in as_completed(futures):
-                accepted_count, processed_count = future.result()
-                total_accepted += accepted_count
-                total_processed += processed_count
+        worker_args = []
+        for i in range(max_workers):
+            batch_size = samples_per_process + (1 if i < remaining_samples else 0)
+            if batch_size > 0:  # Only submit if there's work to do
+                # Package all parameters for the worker
+                worker_args.append((
+                    batch_size,
+                    12345 + i * 1000,  # seed_offset
+                    self.interactions,
+                    interaction_weights,
+                    max_angle,
+                    self.foil_radius,
+                ))
+                
+        results = run_concurrently(
+            self._calculate_efficiency_batch_worker, worker_args, executor,
+            progress_counter_total=num_samples,
+            task_title='Calculating geometric acceptance',
+        )
         
-        pbar.close()
+        # Collect results
+        total_accepted = 0
+        total_processed = 0
+        
+        for accepted_count, processed_count in results:
+            total_accepted += accepted_count
+            total_processed += processed_count
         
         # Calculate final efficiencies
-        geometric_efficiency = total_accepted / total_processed if total_processed > 0 else 0.0
+        geometric_efficiency = total_accepted / total_processed / angular_factor if total_processed > 0 else 0.0
         total_efficiency = scattering_efficiency * geometric_efficiency
         
         print(f'Processed {total_processed} samples using {max_workers} processes')
@@ -528,6 +511,7 @@ class ConversionFoil:
         seed_offset: int,
         interactions: list[Interaction],
         interaction_weights: np.ndarray,
+        max_angle: float,
         foil_radius: float,
         progress_counter,
         progress_lock
@@ -540,6 +524,7 @@ class ConversionFoil:
             seed_offset: Random seed offset for this worker
             interactions: Processes by which recoil particles are generated
             interaction_weights: Relative probability of each interaction process
+            max_angle: The maximum scattering angle to sample
             foil_radius: Foil radius in meters
             progress_counter: Shared counter for progress tracking
             progress_lock: Lock for thread-safe progress updates
@@ -561,7 +546,7 @@ class ConversionFoil:
                 # Sample scattered ray using helper method (no z-sampling for efficiency calculation)
                 interaction = rng.choice(interactions, p=interaction_weights)
                 x0, y0, _, theta_scatter, phi_scatter, _ = self._sample_scattered_ray(
-                    rng, interaction, include_kinematics=False, max_angle=np.pi, attenuation=-np.inf
+                    rng, interaction, include_kinematics=False, max_angle=max_angle, attenuation=-np.inf
                 )
                 
                 # N.B. We do not consider the very small displacement due to foil thickness here

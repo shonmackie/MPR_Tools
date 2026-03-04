@@ -1,8 +1,8 @@
 import os
-
-import numpy as np
+from concurrent.futures.process import ProcessPoolExecutor
 
 from MPR_Tools import MPRSpectrometer, ConversionFoil, Hodoscope, SpectrometerPlotter
+from analysis.performance import PerformanceAnalyzer
 
 def test_whole_workflow():
     # instantiate the output directory
@@ -19,8 +19,8 @@ def test_whole_workflow():
             aperture_type="circ",
         ),
         "tests/test_map.txt",
-        16,
-        12, 20,
+        14.0,
+        10.5, 17.5,
         Hodoscope(
             channels_left=70,
             channels_right=30,
@@ -30,19 +30,14 @@ def test_whole_workflow():
         run_directory="tests/output"
     )
 
-    # use a Dirac delta function incident spectrum
-    energies = np.linspace(0.0, 20.0, 201)
-    birth_spectrum = np.zeros_like(energies)
-    birth_spectrum[140] = 1
-
-    # do the math
-    nspc.generate_monte_carlo_rays(
-        energies, birth_spectrum,
-        num_recoil_particles=100,
-    )
-    nspc.apply_transfer_map()
-    nspc.read_beams()
-    nspc.bin_hodoscope_response()
+    analyzer = PerformanceAnalyzer(nspc)
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        analyzer.generate_performance_curve(
+            num_energies=3,
+            num_recoils_per_energy=100,
+            num_efficiency_samples=100,
+            executor=executor,
+        )
 
     plotter = SpectrometerPlotter(nspc)
     plotter.plot_focal_plane_distribution(include_hodoscope=True)

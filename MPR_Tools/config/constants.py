@@ -5,6 +5,7 @@ AVOGADRO = 6.022e23
 NEUTRON_MASS = 1.00867  # amu
 ELECTRON_REST_ENERGY = 0.510999  # MeV
 CLASSICAL_ELECTRON_RADIUS = 2.81794032e-15  # m
+FINE_STRUCTURE_CONSTANT = 1/137.035999
 
 # Material properties
 FOIL_MATERIALS = {
@@ -64,6 +65,16 @@ FOIL_MATERIALS = {
                 'type': 'compton_scattering',
                 'target_abundance': 4,
             },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 1,
+            },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 3,
+            },
         ]
     },
     'Be': {
@@ -78,6 +89,11 @@ FOIL_MATERIALS = {
                 'type': 'compton_scattering',
                 'target_abundance': 4,
             },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 4,
+            },
         ]
     },
     'B': {
@@ -91,6 +107,11 @@ FOIL_MATERIALS = {
             {
                 'type': 'compton_scattering',
                 'target_abundance': 5,
+            },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 5,
             },
         ]
     },
