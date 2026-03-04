@@ -25,7 +25,7 @@ class PerformanceAnalyzer:
     
     def analyze_monoenergetic_performance(
         self,
-        input_energy: float,
+        incident_energy: float,
         delta_energy: float = 0.05,
         num_recoil_particles: int = 10000,
         spectrometer: Optional[MPRSpectrometer] = None,
@@ -34,10 +34,10 @@ class PerformanceAnalyzer:
         verbose: bool = False
     ) -> Tuple[float, float, float, float, float]:
         """
-        Analyze spectrometer performance for monoenergetic input particles.
+        Analyze spectrometer performance for monoenergetic incident particles.
         
         Args:
-            input_energy: Incident input particle energy in MeV
+            incident_energy: Incident particle energy in MeV
             delta_energy: Percentage deviation from target energy for resolution calculation
             num_recoil_particles: Number of recoil particles to simulate
             spectrometer: MPRSpectrometer to analyze (defaults to self.spectrometer)
@@ -52,7 +52,7 @@ class PerformanceAnalyzer:
             spectrometer = self.spectrometer
 
         foil_name = spectrometer.conversion_foil.foil_material
-        print(f'\nAnalyzing {foil_name} performance for {input_energy:.3f} MeV monoenergetic input particles...')
+        print(f'\nAnalyzing {foil_name} performance for {incident_energy:.3f} MeV monoenergetic incident particles...')
         
         # Helper function for generating recoil positions mean and std
         def _get_positions(energy: float, num_recoils: int) -> Tuple[float, float]:
@@ -70,18 +70,18 @@ class PerformanceAnalyzer:
             return mean_position, std_deviation
         
         # Analyze focal plane distribution of target energy +/- delta
-        E_low = input_energy * (1 - delta_energy)
-        E_high = input_energy * (1 + delta_energy)
+        E_low = incident_energy * (1 - delta_energy)
+        E_high = incident_energy * (1 + delta_energy)
         # To save compute time, since we're only interested in the mean, use less recoils
         mean_position_low, std_deviation_low = _get_positions(E_low, num_recoil_particles // 10)
         mean_position_high, std_deviation_high = _get_positions(E_high, num_recoil_particles // 10)
         
         # Analyze focal plane distribution of target energy beamlet
-        mean_position_0, std_deviation_0 = _get_positions(input_energy, num_recoil_particles)
+        mean_position_0, std_deviation_0 = _get_positions(incident_energy, num_recoil_particles)
         fwhm_0 = 2 * np.sqrt(2 * np.log(2)) * std_deviation_0
 
         mean_positions = np.r_[mean_position_low, mean_position_0, mean_position_high]
-        energies = np.r_[E_low, input_energy, E_high]
+        energies = np.r_[E_low, incident_energy, E_high]
 
         dispersion = np.gradient(mean_positions, energies)[1]
 
@@ -207,7 +207,7 @@ class PerformanceAnalyzer:
         primary_energy_range: Tuple[float, float] = (13, 15)
     ) -> Tuple[float, float, float, float, Tuple[float, float], Tuple[float, float], np.ndarray, np.ndarray, np.ndarray, float]:
         """
-        Get plasma parameters from the spectrometer object.
+        Get plasma parameters from the spectrometer object, assuming the incident particles are neutrons.
         
         Args:
             n_bins:
@@ -215,12 +215,12 @@ class PerformanceAnalyzer:
             dsr_energy_range:
                 Energy range for DSR in MeV
             primary_energy_range:
-                Energy range for primary input particles in MeV
+                Energy range for primary neutrons in MeV
             
         Returns:
             Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies, energies_std, response, background)
         """
-        response, background, energies, energies_std = self._get_input_spectrum()
+        response, background, energies, energies_std = self._get_incident_spectrum()
         
         # Calculate dsr
         ds_idx = (energies > dsr_energy_range[0]) & (energies < dsr_energy_range[1])
@@ -268,7 +268,7 @@ class PerformanceAnalyzer:
             warnings.warn(f'Performance curve file {performance_curve_file} not found. May need to generate first.', RuntimeWarning)
             return
         
-    def _get_input_spectrum(
+    def _get_incident_spectrum(
         self,
         dx: float = 0.5,
         dy: float = 0.5,
@@ -276,13 +276,13 @@ class PerformanceAnalyzer:
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
         """
-        Get input particle mean energy based on the binned response.
+        Get incident particle mean energy based on the binned response.
         
         Returns:
             response: np.ndarray of detector response values
             background: float of total background contribution
-            input_energies: np.ndarray of input energies
-            input_energies_std: np.ndarray of input energy uncertainties
+            incident_energies: np.ndarray of incident energies
+            incident_energies_std: np.ndarray of incident energy uncertainties
         """
         recoil_density_map, response_map, X_mesh, Y_mesh = self.get_recoil_density_map(
             dx, dy, foil_distance, particle_yield
@@ -305,33 +305,33 @@ class PerformanceAnalyzer:
         performance_df = self._load_performance_curve()
         if performance_df is None:
             raise ValueError('Performance curve file not found. May need to generate first.')
-        input_energies = performance_df['energy [MeV]']
+        incident_energies = performance_df['energy [MeV]']
         position_mean = performance_df['position mean [m]']
         position_std = performance_df['position std [m]']
         gradient = performance_df['gradient [m/MeV]']
         
         # Interpolate to get the energies for the x positions
-        energies = np.interp(x_positions, position_mean, input_energies)
+        energies = np.interp(x_positions, position_mean, incident_energies)
         # Calculate energy uncertainty sigma_E = sigma_x / |dx/dE|
         energies_std = np.interp(x_positions, position_mean, position_std / np.abs(gradient))
         
         return response_values, total_background, energies, energies_std
     
-    def _get_input_efficiency(self, energies: np.ndarray) -> np.ndarray:
+    def _get_foil_efficiency(self, energies: np.ndarray) -> np.ndarray:
         """
-        Get the foil efficiency for a given set of input particle energies.
+        Get the foil efficiency for a given set of incident particle energies.
         """
         performance_df = self._load_performance_curve()
         if performance_df is not None:
-            input_energies = performance_df['energy [MeV]']
+            incident_energies = performance_df['energy [MeV]']
             total_efficiencies = performance_df['total efficiency']
             
-            # Interpolate to get the efficiencies for the input energies
-            input_efficiencies = np.interp(energies, input_energies, total_efficiencies)
+            # Interpolate to get the efficiencies for the incident energies
+            efficiencies = np.interp(energies, incident_energies, total_efficiencies)
         else:
-            input_efficiencies = np.ones(len(energies))
+            efficiencies = np.ones(len(energies))
         
-        return input_efficiencies
+        return efficiencies
     
     def get_recoil_density_map(
         self,
@@ -378,7 +378,7 @@ class PerformanceAnalyzer:
         cell_area_cm2 = dx*dy
         
         # Load performance curve to get foil efficiency and aperture solid angle
-        input_efficiencies = self._get_input_efficiency(input_energies)
+        foil_efficiencies = self._get_foil_efficiency(input_energies)
             
         # If detector is used, calculate the sensitivity for the incident recoil particle
         response_map = np.zeros_like(density_map)
@@ -398,11 +398,11 @@ class PerformanceAnalyzer:
             y_idx = max(0, min(y_idx, density_map.shape[0] - 1))
             
             # Add efficiency to cell
-            density_map[y_idx, x_idx] += input_efficiencies[i]
+            density_map[y_idx, x_idx] += foil_efficiencies[i]
             
             # If detector is used, weight by sensitivity efficiency
             if self.spectrometer.hodoscope.detector_used:
-                response_map[y_idx, x_idx] += input_efficiencies[i] * sensitivity_efficiencies[i]
+                response_map[y_idx, x_idx] += foil_efficiencies[i] * sensitivity_efficiencies[i]
         
         # Convert to recoils/cm^2/source_proton
         total_recoils = len(self.spectrometer.output_beam)
@@ -415,7 +415,7 @@ class PerformanceAnalyzer:
             density_map *= foil_solid_angle_fraction
             response_map *= foil_solid_angle_fraction
             
-        # Add input yield
+        # Add yield multiplier
         if particle_yield:
             density_map *= particle_yield
             response_map *= particle_yield

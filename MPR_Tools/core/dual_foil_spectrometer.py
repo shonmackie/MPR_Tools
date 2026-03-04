@@ -124,7 +124,7 @@ class DualFoilSpectrometer:
         )
         
         # Combined beam storage
-        self.combined_input_beam = np.zeros(0)
+        self.combined_incident_beam = np.zeros(0)
         self.combined_output_beam = np.zeros(0)
         
         print('\n' + '='*70)
@@ -133,7 +133,7 @@ class DualFoilSpectrometer:
     
     def generate_monte_carlo_rays(
         self,
-        input_energies: np.ndarray,
+        incident_energies: np.ndarray,
         energy_distribution: np.ndarray,
         num_recoil_particles: int,
         include_kinematics: bool = True,
@@ -146,7 +146,7 @@ class DualFoilSpectrometer:
         Generate recoil rays for both foils with y-restrictions.
         
         Args:
-            input_energies: Array of input particle energies in MeV
+            incident_energies: Array of incident particle energies in MeV
             energy_distribution: Relative probability distribution
             num_recoil_particles: Total number of recoil particles to simulate
             include_kinematics: Include kinematic energy transfer
@@ -156,8 +156,8 @@ class DualFoilSpectrometer:
             max_workers: Maximum number of worker processes
         """
         # Split recoil events between foils based on energy_distribution
-        ch2_idx = (input_energies >= self.ch2_min_energy) & (input_energies <= self.ch2_max_energy)
-        cd2_idx = (input_energies >= self.cd2_min_energy) & (input_energies <= self.cd2_max_energy)
+        ch2_idx = (incident_energies >= self.ch2_min_energy) & (incident_energies <= self.ch2_max_energy)
+        cd2_idx = (incident_energies >= self.cd2_min_energy) & (incident_energies <= self.cd2_max_energy)
         ch2_fraction = np.sum(energy_distribution[ch2_idx]) / (np.sum(energy_distribution[ch2_idx]) + np.sum(energy_distribution[cd2_idx]))
         num_ch2 = int(num_recoil_particles * ch2_fraction)
         num_cd2 = num_recoil_particles - num_ch2
@@ -165,7 +165,7 @@ class DualFoilSpectrometer:
         
         print(f'\nGenerating {num_ch2} CH2 (proton) rays with positive y restriction...')
         self.spec_ch2.generate_monte_carlo_rays(
-            input_energies=input_energies,
+            incident_energies=incident_energies,
             energy_distribution=energy_distribution,
             num_recoil_particles=num_ch2,
             include_kinematics=include_kinematics,
@@ -178,7 +178,7 @@ class DualFoilSpectrometer:
         
         print(f'\nGenerating {num_cd2} CD2 (deuteron) rays with negative y restriction...')
         self.spec_cd2.generate_monte_carlo_rays(
-            input_energies=input_energies,
+            incident_energies=incident_energies,
             energy_distribution=energy_distribution,
             num_recoil_particles=num_cd2,
             include_kinematics=include_kinematics,
@@ -327,7 +327,7 @@ class DualFoilSpectrometer:
             'y0': self.combined_input_beam[:, 2],
             'angle_y': self.combined_input_beam[:, 3],
             'energy_relative': self.combined_input_beam[:, 4],
-            'input_energy': self.combined_input_beam[:, 5],
+            'incident_energy': self.combined_input_beam[:, 5],
             'particle_type': self.combined_input_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)

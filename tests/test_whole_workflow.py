@@ -30,7 +30,7 @@ def test_whole_workflow():
         run_directory="tests/output"
     )
 
-    # use a Dirac delta function input spectrum
+    # use a Dirac delta function incident spectrum
     energies = np.linspace(0.0, 20.0, 201)
     birth_spectrum = np.zeros_like(energies)
     birth_spectrum[140] = 1

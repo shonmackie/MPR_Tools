@@ -18,7 +18,7 @@ class ConversionFoil:
     """
     Represents a conversion foil and aperture system for generating recoil particles.
     
-    The foil is where input particles impinge and scatter recoil particles, while the aperture
+    The foil is where incident particles scatter and generate recoil particles, while the aperture
     defines the ion optical acceptance.
     """    
     def __init__(
@@ -62,7 +62,7 @@ class ConversionFoil:
         
         # Calculate particle densities in CH2
         self.foil_material = foil_material
-        self.input_particle = FOIL_MATERIALS[foil_material]['input_particle']
+        self.incident_particle = FOIL_MATERIALS[foil_material]['incident_particle']
         self.particle = FOIL_MATERIALS[foil_material]['particle']
         self.foil_density = FOIL_MATERIALS[foil_material]['density'] # g/cm^3
         self.molecular_weight = FOIL_MATERIALS[foil_material]['molecular_weight'] # g/mol
@@ -273,7 +273,7 @@ class ConversionFoil:
         Args:
             rng: Random number generator
             interaction: The process by which to generated rays, pre-calculated at the relevant energy.
-            attenuation: incident input fluence falloff rate for z-sampling, in 1/m
+            attenuation: incident fluence falloff rate for z-sampling, in 1/m
                          (0 for uniform sampling; -inf for front-surface-only sampling)
             y_restriction: Restrict y to positive or negative half (None for full foil)
         """
@@ -316,7 +316,7 @@ class ConversionFoil:
     
     def generate_recoil_particle(
         self, 
-        input_energy: float,
+        incident_energy: float,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
@@ -324,10 +324,10 @@ class ConversionFoil:
         y_restriction: Optional[Literal['positive', 'negative']] = None
     ) -> Tuple[float, float, float, float, float]:
         """
-        Generate a scattered charged particle from input particle interaction.
+        Generate a scattered charged particle from incident particle interaction.
         
         Args:
-            input_energy: Incident input particle energy in MeV
+            incident_energy: Incident particle energy in MeV
             include_kinematics: Include energy loss from non-perpendicular scattering
             include_stopping_power_loss: Include SRIM energy loss calculation
             z_sampling: Depth sampling method ('exp' or 'uni')
@@ -346,8 +346,8 @@ class ConversionFoil:
         # do the cross section calculations
         interaction_weights = []
         for interaction in self.interactions:
-            interaction.calculate_angular_distribution(input_energy)
-            weight = (interaction.get_cross_section(input_energy) *
+            interaction.calculate_angular_distribution(incident_energy)
+            weight = (interaction.get_cross_section(incident_energy) *
                       interaction.get_recoil_probability(max_angle))
             interaction_weights.append(weight)
         interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
@@ -356,7 +356,7 @@ class ConversionFoil:
         if z_sampling == 'exp':
             attenuation = 0
             for interaction in self.interactions:
-                attenuation += interaction.get_cross_section(input_energy)
+                attenuation += interaction.get_cross_section(incident_energy)
         else:  # uniform
             attenuation = 0
         
@@ -417,7 +417,7 @@ class ConversionFoil:
     
     def calculate_efficiency(
         self, 
-        input_energy: float,
+        incident_energy: float,
         num_samples: int = int(1e6),
         max_workers: Optional[int] = None
     ) -> Tuple[float, float, float]:
@@ -425,29 +425,29 @@ class ConversionFoil:
         Estimate intrinsic efficiency (recoils/incident) of the spectrometer using parallel processing.
         
         Args:
-            input_energy: Incident input particle energy in MeV
+            incident_energy: Incident particle energy in MeV
             num_samples: Number of particles to simulate
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of scattering, geometric, and total efficiency as fraction of incident input particles
+            Tuple of scattering, geometric, and total efficiency as fraction of incident particles
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
         
-        print(f'\nEstimating intrinsic efficiency for {input_energy:.3f} MeV particles using {max_workers} processes...')
+        print(f'\nEstimating intrinsic efficiency for {incident_energy:.3f} MeV particles using {max_workers} processes...')
         
         # Calculate scattering probability in foil (non-parallelizable part)
         total_xs = 0
         effective_xs = 0
         interaction_weights = []
         for interaction in self.interactions:
-            interaction.calculate_angular_distribution(input_energy)
-            total_xs += interaction.get_cross_section(input_energy)
-            effective_xs += (interaction.get_cross_section(input_energy) *
+            interaction.calculate_angular_distribution(incident_energy)
+            total_xs += interaction.get_cross_section(incident_energy)
+            effective_xs += (interaction.get_cross_section(incident_energy) *
                              interaction.get_recoil_probability())
             interaction_weights.append(
-                interaction.get_cross_section(input_energy) *
+                interaction.get_cross_section(incident_energy) *
                 interaction.get_recoil_probability())
         interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
         
@@ -589,16 +589,16 @@ class ConversionFoil:
     
     def get_recoil_energy_distribution(
         self, 
-        input_energies: np.ndarray,
+        incident_energies: np.ndarray,
         energy_distribution: np.ndarray, 
         num_recoil_particles: int = int(1e2)
     ) -> np.ndarray:
         """
-        Calculate the recoil particle energy distribution at foil exit for a given input particle energy distribution.
+        Calculate the recoil particle energy distribution at foil exit for a given incident particle energy distribution.
         
         Args:
-            input_energies: Array of input particle energies in MeV
-            energy_distribution: Distribution of input particle energies (will be normalized)
+            incident_energies: Array of incident particle energies in MeV
+            energy_distribution: Distribution of incident particle energies (will be normalized)
             num_recoil_particles: Number of recoil events to simulate
             
         Returns:
@@ -609,18 +609,18 @@ class ConversionFoil:
         # Weight distribution by scattering cross section and normalize
         interaction_probability = np.zeros_like(energy_distribution)
         for interaction in self.interactions:
-            interaction_probability += (interaction.get_cross_section(input_energies) *
+            interaction_probability += (interaction.get_cross_section(incident_energies) *
                                         interaction.get_recoil_probability())
         weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution = weighted_distribution / np.sum(weighted_distribution)
         
         for i in tqdm(range(num_recoil_particles), desc='Calculating proton energy distribution...'):
-            # Sample input particle energy from weighted distribution
-            input_energy = np.random.choice(input_energies, p=weighted_distribution)
+            # Sample incident particle energy from weighted distribution
+            incident_energy = np.random.choice(incident_energies, p=weighted_distribution)
             
             # Generate scattered recoil particle and extract final energy
             _, _, _, _, recoil_energy = self.generate_recoil_particle(
-                input_energy,
+                incident_energy,
                 include_kinematics=True, 
                 include_stopping_power_loss=True
             )

@@ -39,8 +39,8 @@ class GenericInteraction:
         cross_section_m2 = cross_section_barns * 1e-28  # barns to m^2
         return self.target_density * cross_section_m2
         
-    def calculate_angular_distribution(self, input_energy: float):
-        """ prepare to generate recoil particles from the given incident input particle energy """
+    def calculate_angular_distribution(self, incident_energy: float):
+        """ prepare to generate recoil particles from the given incident particle energy """
         pass
 
     def get_recoil_probability(self, max_angle=np.pi) -> float:
@@ -110,7 +110,7 @@ class ElasticScattering(GenericInteraction):
         Convert center of mass frame to lab frame
         From Dan Casey MIT Thesis (2012), Appendix A
         '''
-        # This is the angle and differential cross section for the recoil particle, NOT the scattered input particle
+        # This is the angle and differential cross section for the recoil particle, NOT the scattered incident particle
         cos_theta_lab_recoil = np.sqrt((1 - cos_theta_cm) / 2)
         sigma_lab = 4 * cos_theta_lab_recoil * sigma_cm
         
@@ -120,7 +120,7 @@ class ElasticScattering(GenericInteraction):
             energies, sigma_lab, k=1, axis=0)  # Linear interpolation, no smoothing
         
         # leave these as None until we evaluate them at a specific energy
-        self.input_energy = None
+        self.incident_energy = None
         self.scatter_angles = None
         self.angle_distribution = None
         self.recoil_probability = 1
@@ -144,7 +144,7 @@ class ElasticScattering(GenericInteraction):
         Calculate lab-frame differential scattering cross section
         
         Args:
-            energy_MeV: Incident input particle energy in MeV
+            energy_MeV: Incident particle energy in MeV
             
         Returns:
             Lab-frame differential cross section
@@ -153,14 +153,14 @@ class ElasticScattering(GenericInteraction):
         energy_eV = energy_MeV * 1e6
         return self.diff_xs_recoil_interpolator(energy_eV)*np.sin(self.theta_lab)
     
-    def calculate_angular_distribution(self, input_energy: float):
-        """ prepare to generate recoil particles from the given incident input particle energy """
-        self.input_energy = input_energy
+    def calculate_angular_distribution(self, incident_energy: float):
+        """ prepare to generate recoil particles from the given incident particle energy """
+        self.incident_energy = incident_energy
         
         # Calculate differential cross section weights
         self.angle_distribution = ProbabilityDistribution(
             self.theta_lab,
-            self._calculate_differential_xs_lab(input_energy))
+            self._calculate_differential_xs_lab(incident_energy))
         
     def get_recoil_probability(self, max_angle=np.pi) -> float:
         """ calculate the fraction of interactions that produce a valid recoil particle """
@@ -179,7 +179,7 @@ class ElasticScattering(GenericInteraction):
         theta_scatter = self.angle_distribution.draw(rng, upper=max_angle)
         
         # Initialize recoil energy
-        recoil_energy = self.input_energy
+        recoil_energy = self.incident_energy
         
         # Apply kinematic energy loss
         if include_kinematics:
@@ -205,30 +205,30 @@ class ComptonScattering:
         self.target_density = target_density
         self.recoil_probability = 1
         
-        input_energies = np.linspace(1, 25, 25)
+        incident_energies = np.linspace(1, 25, 25)
         self.photon_angles = np.linspace(0, np.pi, 37)
-        photon_energy_grid, photon_angle_grid = np.meshgrid(input_energies, self.photon_angles, indexing='ij')
+        photon_energy_grid, photon_angle_grid = np.meshgrid(incident_energies, self.photon_angles, indexing='ij')
         differential_cross_section = self._get_differential_cross_section(photon_energy_grid, photon_angle_grid)
         photon_angle_distributions = differential_cross_section*np.sin(photon_angle_grid)
         
         # Create interpolation object for fast lookups
         self.photon_angle_distribution_interpolator = make_interp_spline(
-            input_energies, photon_angle_distributions, k=1, axis=0)
+            incident_energies, photon_angle_distributions, k=1, axis=0)
         
         # leave these as None until we evaluate them at a specific energy
-        self.input_energy = None
+        self.incident_energy = None
         self.photon_angle_distribution = None
 
-    def get_macroscopic_cross_section(self, input_energy: float) -> float:
+    def get_macroscopic_cross_section(self, incident_energy: float) -> float:
         """ get the total macroscopic cross section, for calculating attenuation, in m^-1 """
-        if input_energy <= ELECTRON_REST_ENERGY*2:
+        if incident_energy <= ELECTRON_REST_ENERGY*2:
             raise ValueError("This formula only works for photon energies much greater than the electron rest energy")
         s0 = 8/3*np.pi*CLASSICAL_ELECTRON_RADIUS**2  # m2
-        a0 = input_energy / ELECTRON_REST_ENERGY
+        a0 = incident_energy / ELECTRON_REST_ENERGY
         return s0 * 3 / 8 / a0 * (np.log(2 * a0) + 0.5) * self.target_density
     
-    def _get_differential_cross_section(self, input_energy: np.ndarray, photon_angle: np.ndarray):
-        alpha_0 = input_energy / ELECTRON_REST_ENERGY
+    def _get_differential_cross_section(self, incident_energy: np.ndarray, photon_angle: np.ndarray):
+        alpha_0 = incident_energy / ELECTRON_REST_ENERGY
         cos_theta = np.cos(photon_angle)
         return (
                 CLASSICAL_ELECTRON_RADIUS**2
@@ -242,25 +242,25 @@ class ComptonScattering:
         ) * self.target_density
     
     @staticmethod
-    def _convert_to_electron_angle(input_energy: float, photon_angle: float) -> float:
-        a_0 = input_energy / ELECTRON_REST_ENERGY
+    def _convert_to_electron_angle(incident_energy: float, photon_angle: float) -> float:
+        a_0 = incident_energy / ELECTRON_REST_ENERGY
         electron_angle = np.arctan(
             1 / ((a_0 + 1) * np.tan(photon_angle / 2))
         )
         return electron_angle
     
     @staticmethod
-    def _convert_to_photon_angle(input_energy: float, electron_angle: float) -> float:
-        a_0 = input_energy / ELECTRON_REST_ENERGY
+    def _convert_to_photon_angle(incident_energy: float, electron_angle: float) -> float:
+        a_0 = incident_energy / ELECTRON_REST_ENERGY
         return 2*np.arctan(
             1 / ((a_0 + 1) * np.tan(electron_angle))
         )
         
-    def calculate_angular_distribution(self, input_energy: float):
-        """ prepare to generate recoil particles from the given incident input particle energy """
-        self.input_energy = input_energy
+    def calculate_angular_distribution(self, incident_energy: float):
+        """ prepare to generate recoil particles from the given incident particle energy """
+        self.incident_energy = incident_energy
         self.photon_angle_distribution = ProbabilityDistribution(
-            self.photon_angles, self.photon_angle_distribution_interpolator(input_energy))
+            self.photon_angles, self.photon_angle_distribution_interpolator(incident_energy))
     
     def get_recoil_probability(self, max_angle=np.pi):
         """ calculate the fraction of interactions that produce a valid recoil particle """
@@ -269,22 +269,22 @@ class ComptonScattering:
         elif self.photon_angle_distribution is None:
             raise ValueError("You need to call calculate_angular_distribution() before I can start generating recoil rays.")
         else:
-            min_photon_angle = ComptonScattering._convert_to_photon_angle(self.input_energy, max_angle)
+            min_photon_angle = ComptonScattering._convert_to_photon_angle(self.incident_energy, max_angle)
             return self.photon_angle_distribution.integral(min_photon_angle, np.pi)
 
     def generate_recoil_particle(self, rng: np.random.Generator, include_kinematics: bool, max_angle: float) -> tuple[float, float]:
         """ draw a recoil particle and return its scattering angle (radians) and initial energy (MeV) """
         if self.photon_angle_distribution is None:
             raise ValueError("You need to call calculate_angular_distribution() before I can start generating recoil rays.")
-        min_photon_angle = ComptonScattering._convert_to_photon_angle(self.input_energy, max_angle)
+        min_photon_angle = ComptonScattering._convert_to_photon_angle(self.incident_energy, max_angle)
         photon_angle = self.photon_angle_distribution.draw(rng, lower=min_photon_angle)
-        electron_angle = ComptonScattering._convert_to_electron_angle(self.input_energy, photon_angle)
+        electron_angle = ComptonScattering._convert_to_electron_angle(self.incident_energy, photon_angle)
         if include_kinematics:
-            a_0 = self.input_energy / ELECTRON_REST_ENERGY
+            a_0 = self.incident_energy / ELECTRON_REST_ENERGY
             a = a_0 / (1 + a_0 * (1 - np.cos(photon_angle)))
             electron_energy = (a_0 - a) * ELECTRON_REST_ENERGY
         else:
-            electron_energy = self.input_energy - ELECTRON_REST_ENERGY/2
+            electron_energy = self.incident_energy - ELECTRON_REST_ENERGY/2
         return electron_angle, electron_energy
 
 

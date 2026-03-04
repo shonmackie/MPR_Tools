@@ -128,9 +128,9 @@ def test_probability_distribution():
     plt.close()
 
 
-def generate_recoil_particles(interaction: Interaction, input_energy: float, num_particles=10000):
+def generate_recoil_particles(interaction: Interaction, incident_energy: float, num_particles=10000):
     rng = random.default_rng(0)
-    interaction.calculate_angular_distribution(input_energy)
+    interaction.calculate_angular_distribution(incident_energy)
     angles = empty(num_particles)
     energies = empty(num_particles)
     for i in range(num_particles):
