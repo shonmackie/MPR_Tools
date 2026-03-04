@@ -5,11 +5,12 @@ AVOGADRO = 6.022e23
 NEUTRON_MASS = 1.00867  # amu
 ELECTRON_REST_ENERGY = 0.510999  # MeV
 CLASSICAL_ELECTRON_RADIUS = 2.81794032e-15  # m
+FINE_STRUCTURE_CONSTANT = 1/137.035999
 
 # Material properties
 FOIL_MATERIALS = {
     'CH2': {
-        'input_particle': 'neutron',
+        'incident_particle': 'neutron',
         'particle': 'proton',
         'density': 0.98,  # g/cm^3
         'molecular_weight': 14.0266,  # g/mol
@@ -31,7 +32,7 @@ FOIL_MATERIALS = {
         ]
     },
     'CD2': {
-        'input_particle': 'neutron',
+        'incident_particle': 'neutron',
         'particle': 'deuteron',
         'density': 1.131,  # g/cm^3
         'molecular_weight': 16.0395,  # g/mol
@@ -53,7 +54,7 @@ FOIL_MATERIALS = {
         ]
     },
     'LiH': {
-        'input_particle': 'photon',
+        'incident_particle': 'photon',
         'particle': 'electron',
         'density': 0.78,  # g/cm^3
         'molecular_weight': 7.95,  # g/mol
@@ -64,10 +65,20 @@ FOIL_MATERIALS = {
                 'type': 'compton_scattering',
                 'target_abundance': 4,
             },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 1,
+            },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 3,
+            },
         ]
     },
     'Be': {
-        'input_particle': 'photon',
+        'incident_particle': 'photon',
         'particle': 'electron',
         'density': 1.845,  # g/cm^3
         'molecular_weight': 9.0122,  # g/mol
@@ -78,10 +89,15 @@ FOIL_MATERIALS = {
                 'type': 'compton_scattering',
                 'target_abundance': 4,
             },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 4,
+            },
         ]
     },
     'B': {
-        'input_particle': 'photon',
+        'incident_particle': 'photon',
         'particle': 'electron',
         'density': 2.35,  # g/cm^3
         'molecular_weight': 10.81,  # g/mol
@@ -91,6 +107,11 @@ FOIL_MATERIALS = {
             {
                 'type': 'compton_scattering',
                 'target_abundance': 5,
+            },
+            {
+                'type': 'pair_production',
+                'target_abundance': 1,
+                'target_charge': 5,
             },
         ]
     },

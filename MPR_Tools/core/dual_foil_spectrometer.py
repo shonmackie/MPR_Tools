@@ -1,3 +1,4 @@
+from concurrent.futures import Executor
 import os
 from typing import Optional, Literal
 import numpy as np
@@ -124,7 +125,7 @@ class DualFoilSpectrometer:
         )
         
         # Combined beam storage
-        self.combined_input_beam = np.zeros(0)
+        self.combined_incident_beam = np.zeros(0)
         self.combined_output_beam = np.zeros(0)
         
         print('\n' + '='*70)
@@ -133,31 +134,33 @@ class DualFoilSpectrometer:
     
     def generate_monte_carlo_rays(
         self,
-        input_energies: np.ndarray,
+        incident_energies: np.ndarray,
         energy_distribution: np.ndarray,
         num_recoil_particles: int,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         save_beam: bool = True,
+        executor: Optional[Executor] = None,
         max_workers: Optional[int] = None
     ) -> None:
         """
         Generate recoil rays for both foils with y-restrictions.
         
         Args:
-            input_energies: Array of input particle energies in MeV
+            incident_energies: Array of incident particle energies in MeV
             energy_distribution: Relative probability distribution
             num_recoil_particles: Total number of recoil particles to simulate
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include SRIM energy loss
             z_sampling: Depth sampling method ('exp' or 'uni')
             save_beam: Whether to save beams to CSV
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes
         """
         # Split recoil events between foils based on energy_distribution
-        ch2_idx = (input_energies >= self.ch2_min_energy) & (input_energies <= self.ch2_max_energy)
-        cd2_idx = (input_energies >= self.cd2_min_energy) & (input_energies <= self.cd2_max_energy)
+        ch2_idx = (incident_energies >= self.ch2_min_energy) & (incident_energies <= self.ch2_max_energy)
+        cd2_idx = (incident_energies >= self.cd2_min_energy) & (incident_energies <= self.cd2_max_energy)
         ch2_fraction = np.sum(energy_distribution[ch2_idx]) / (np.sum(energy_distribution[ch2_idx]) + np.sum(energy_distribution[cd2_idx]))
         num_ch2 = int(num_recoil_particles * ch2_fraction)
         num_cd2 = num_recoil_particles - num_ch2
@@ -165,26 +168,28 @@ class DualFoilSpectrometer:
         
         print(f'\nGenerating {num_ch2} CH2 (proton) rays with positive y restriction...')
         self.spec_ch2.generate_monte_carlo_rays(
-            input_energies=input_energies,
+            incident_energies=incident_energies,
             energy_distribution=energy_distribution,
             num_recoil_particles=num_ch2,
             include_kinematics=include_kinematics,
             include_stopping_power_loss=include_stopping_power_loss,
             z_sampling=z_sampling,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers,
             y_restriction='positive'
         )
         
         print(f'\nGenerating {num_cd2} CD2 (deuteron) rays with negative y restriction...')
         self.spec_cd2.generate_monte_carlo_rays(
-            input_energies=input_energies,
+            incident_energies=incident_energies,
             energy_distribution=energy_distribution,
             num_recoil_particles=num_cd2,
             include_kinematics=include_kinematics,
             include_stopping_power_loss=include_stopping_power_loss,
             z_sampling=z_sampling,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers,
             y_restriction='negative',
         )
@@ -199,6 +204,7 @@ class DualFoilSpectrometer:
         self,
         map_order: int = 5,
         save_beam: bool = True,
+        executor: Optional[Executor] = None,
         max_workers: Optional[int] = None
     ) -> None:
         """
@@ -207,12 +213,14 @@ class DualFoilSpectrometer:
         Args:
             map_order: Order of transfer map to apply
             save_beam: Whether to save output beams to CSV
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes
         """
         print('\nApplying transfer map to CH2 (proton) beam...')
         self.spec_ch2.apply_transfer_map(
             map_order=map_order,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers
         )
         
@@ -220,6 +228,7 @@ class DualFoilSpectrometer:
         self.spec_cd2.apply_transfer_map(
             map_order=map_order,
             save_beam=False,
+            executor=executor,
             max_workers=max_workers
         )
         
@@ -323,11 +332,11 @@ class DualFoilSpectrometer:
         
         df = pd.DataFrame({
             'x0': self.combined_input_beam[:, 0],
-            'angle_x': self.combined_input_beam[:, 1],
+            'p_x_relative': self.combined_input_beam[:, 1],
             'y0': self.combined_input_beam[:, 2],
-            'angle_y': self.combined_input_beam[:, 3],
+            'p_y_relative': self.combined_input_beam[:, 3],
             'energy_relative': self.combined_input_beam[:, 4],
-            'input_energy': self.combined_input_beam[:, 5],
+            'incident_energy': self.combined_input_beam[:, 5],
             'particle_type': self.combined_input_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)
@@ -340,9 +349,9 @@ class DualFoilSpectrometer:
         
         df = pd.DataFrame({
             'x0': self.combined_output_beam[:, 0],
-            'angle_x': self.combined_output_beam[:, 1],
+            'p_x_relative': self.combined_output_beam[:, 1],
             'y0': self.combined_output_beam[:, 2],
-            'angle_y': self.combined_output_beam[:, 3],
+            'p_y_relative': self.combined_output_beam[:, 3],
             'energy_relative': self.combined_output_beam[:, 4],
             'particle_type': self.combined_output_beam[:, 5].astype(int)  # 1=proton, 2=deuteron
         })

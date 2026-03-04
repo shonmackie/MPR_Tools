@@ -3,7 +3,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
@@ -61,7 +60,7 @@ class SpectrometerPlotter:
         point_size: float = 1.0
     ) -> None:
         """
-        Plot recoil particle distribution in the focal plane.
+        Plot focal particle distribution in the detector plane.
         
         Args:
             filename: Output filename
@@ -90,12 +89,12 @@ class SpectrometerPlotter:
             ax.plot(x, y, color='black', linewidth=1.0)
             ax.plot(x, -y, color='black', linewidth=1.0)
 
-        # Scatter plot of recoil particle positions
-        recoil_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        # Scatter plot of focal particle positions
+        particle_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         scatter = ax.scatter(
             self.spectrometer.output_beam[:, 0]*100, 
             self.spectrometer.output_beam[:, 2]*100,
-            c=recoil_energies,
+            c=particle_energies,
             s=point_size,
             cmap=self.primary_cmap,
             alpha=0.7
@@ -139,16 +138,16 @@ class SpectrometerPlotter:
         fig, axes = plt.subplots(2, 2, figsize=(8, 6), layout='constrained')
         fig.suptitle('Phase Space')
         
-        # Color by recoil particle energy
+        # Color by focal particle energy
         x_pos = self.spectrometer.output_beam[:, 0] * 100  # Convert to cm
-        x_angle = self.spectrometer.output_beam[:, 1] * 1000  # Convert to mrad
+        x_moment = self.spectrometer.output_beam[:, 1] * 1000  # Convert to mrad
         y_pos = self.spectrometer.output_beam[:, 2] * 100 # Convert to cm
-        y_angle = self.spectrometer.output_beam[:, 3] * 1000  # Convert to mrad
-        recoil_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        y_moment = self.spectrometer.output_beam[:, 3] * 1000  # Convert to mrad
+        particle_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         
         # X-Y position plot
         scatter1 = axes[0, 0].scatter(
-            x_pos, y_pos, c=recoil_energies,
+            x_pos, y_pos, c=particle_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[0, 0].set_xlabel('X Position [cm]')
@@ -156,9 +155,9 @@ class SpectrometerPlotter:
         axes[0, 0].set_title('X-Y Position')
         axes[0, 0].grid(True, alpha=0.3)
         
-        # X position vs X angle
+        # X position vs normalized X momentum
         scatter2 = axes[0, 1].scatter(
-            x_pos, x_angle, c=recoil_energies,
+            x_pos, x_moment, c=particle_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[0, 1].set_xlabel('X Position [cm]')
@@ -168,7 +167,7 @@ class SpectrometerPlotter:
         
         # X position vs energy
         scatter3 = axes[1, 0].scatter(
-            x_pos, recoil_energies, c=recoil_energies,
+            x_pos, particle_energies, c=particle_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[1, 0].set_xlabel('X Position [cm]')
@@ -176,9 +175,9 @@ class SpectrometerPlotter:
         axes[1, 0].set_title('X Position-Energy')
         axes[1, 0].grid(True, alpha=0.3)
         
-        # Y position vs Y angle
+        # Y position vs normalized Y momentum
         scatter4 = axes[1, 1].scatter(
-            y_pos, y_angle, c=recoil_energies,
+            y_pos, y_moment, c=particle_energies,
             s=2.0, cmap=self.primary_cmap, alpha=0.7
         )
         axes[1, 1].set_xlabel('Y Position [cm]')
@@ -193,9 +192,9 @@ class SpectrometerPlotter:
         if self.dual_data:
             spec2: MPRSpectrometer = self.dual_data['spectrometer']
             x_pos2 = spec2.output_beam[:, 0] * 100 # Convert to cm
-            x_angle2 = spec2.output_beam[:, 1] * 1000 # Convert to mrad
+            x_moment2 = spec2.output_beam[:, 1] * 1000 # Convert to mrad
             y_pos2 = spec2.output_beam[:, 2] * 100 # Convert to cm
-            y_angle2 = spec2.output_beam[:, 3] * 1000 # Convert to mrad
+            y_moment2 = spec2.output_beam[:, 3] * 1000 # Convert to mrad
             recoil_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
             
             # X-Y position plot
@@ -204,9 +203,9 @@ class SpectrometerPlotter:
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
-            # X position vs X angle
+            # X position vs normalized X momentum
             scatter2 = axes[0, 1].scatter(
-                x_pos2, x_angle2, c=recoil_energies2,
+                x_pos2, x_moment2, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
@@ -216,9 +215,9 @@ class SpectrometerPlotter:
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
-            # Y position vs Y angle
+            # Y position vs normalized Y momentum
             scatter4 = axes[1, 1].scatter(
-                y_pos2, y_angle2, c=recoil_energies2,
+                y_pos2, y_moment2, c=recoil_energies2,
                 s=2.0, cmap=self.dual_data['secondary_cmap'], alpha=0.7
             )
             
@@ -430,17 +429,23 @@ class SpectrometerPlotter:
             fontsize=12
         )
         
+        particle_rest_energy = self.spectrometer.particle_mass*931.494  # MeV
+        reference_gamma = 1 + self.spectrometer.reference_energy/particle_rest_energy  # Lorentz factor of the reference particle
+
         # Draw sample of input rays
         num_rays_to_plot = min(len(self.spectrometer.input_beam), 200)  # Limit for clarity
         z_coords = np.linspace(0, aperture_distance, 20)
         
         for i in range(0, len(self.spectrometer.input_beam), max(1, len(self.spectrometer.input_beam) // num_rays_to_plot)):
             ray = self.spectrometer.input_beam[i]
-            x0, angle_x, y0, angle_y = ray[:4]
+            x0, p_x_relative, y0, p_y_relative, energy_relative = ray
             y0 *= 100 # cm
             
             # Calculate ray trajectory
-            slope = np.tan(angle_y)
+            energy = self.spectrometer.reference_energy*(1 + energy_relative)
+            gamma = 1 + energy/particle_rest_energy  # Lorentz factor of the particle
+            p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))  # the particle's momentum as a fraction of the reference particle's momentum
+            slope = np.tan(np.arcsin(p_y_relative/p_relative))
             y_trajectory = slope * z_coords + y0
             
             ax.plot(z_coords, y_trajectory, alpha=0.4, color=self.primary_color, linewidth=0.5)
@@ -450,11 +455,11 @@ class SpectrometerPlotter:
             spec2: MPRSpectrometer = self.dual_data['spectrometer']
             for i in range(0, len(spec2.input_beam), max(1, len(spec2.input_beam) // num_rays_to_plot)):
                 ray = spec2.input_beam[i]
-                x0, angle_x, y0, angle_y = ray[:4]
+                x0, p_x_relative, y0, p_y_relative = ray[:4]
                 y0 *= 100 # cm
                 
                 # Calculate ray trajectory
-                slope = np.tan(angle_y)
+                slope = np.tan(p_y_relative)
                 y_trajectory = slope * z_coords + y0
                 
                 ax.plot(z_coords, y_trajectory, alpha=0.4, color=self.dual_data['secondary_color'], linewidth=0.5)
@@ -501,7 +506,7 @@ class SpectrometerPlotter:
         particle_yield: Optional[float] = None
     ) -> None:
         """
-        Plot a heatmap of recoil particle density in the focal plane.
+        Plot a heatmap of focal particle density in the detector plane.
         
         Args:
             filename: Output filename for the plot
@@ -594,7 +599,7 @@ class SpectrometerPlotter:
             plt.close(fig)
             print(f'Signal-to-background ratio heatmap saved to {signal_to_background_filename}')
             
-            # Plot y-integrated S/B profile            
+            # Plot y-integrated S/B profile
             fig, ax = plt.subplots(figsize=(8, 4))
             # TODO: Actually integrate the signal. Only integrate over region where signal is non-zero
             y_integrated_signal_to_background = np.sum(response, axis=0) / (total_background * Y_mesh.shape[0])
@@ -628,12 +633,12 @@ class SpectrometerPlotter:
             })
             integrated_df.to_csv(y_integrated_filename.replace('.png', '.csv').replace(self.spectrometer.figure_directory, self.spectrometer.data_directory), index=False)
         
-    def plot_synthetic_input_histogram(
+    def plot_synthetic_incident_histogram(
         self,
         filename: Optional[str] = None,
     ):
         if filename == None:
-            filename = f'{self.spectrometer.figure_directory}/synthetic_{self.spectrometer.conversion_foil.input_particle}_histogram.png'
+            filename = f'{self.spectrometer.figure_directory}/synthetic_{self.spectrometer.conversion_foil.incident_particle}_histogram.png'
         dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std, response, background = self.performance_analyzer.get_plasma_parameters()
         fwhm = right_edge - left_edge
         
@@ -658,8 +663,8 @@ class SpectrometerPlotter:
         # Add energy standard deviation
         # hist_std = self._get_histogram_std(bins, energies, energies_std)
         # ax.fill_between(
-        #     bins[1:], 
-        #     hist - hist_std, 
+        #     bins[1:],
+        #     hist - hist_std,
         #     hist + hist_std,
         #     color='tab:blue',
         #     alpha=0.3,
@@ -742,7 +747,7 @@ class SpectrometerPlotter:
             fontsize=12
         )
         
-        ax.set_xlabel(f'{self.spectrometer.conversion_foil.input_particle.capitalize()} Energy [MeV]')
+        ax.set_xlabel(f'{self.spectrometer.conversion_foil.incident_particle.capitalize()} Energy [MeV]')
         ax.set_ylabel('PDF')
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
@@ -750,7 +755,7 @@ class SpectrometerPlotter:
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f'Synthetic {self.spectrometer.conversion_foil.input_particle} histogram saved to {filename}')
+        print(f'Synthetic {self.spectrometer.conversion_foil.incident_particle} histogram saved to {filename}')
         
     def _get_histogram_std(self, bins, energies, energies_std, density=True):
         """Helper function to compute histogram standard deviation."""
@@ -782,7 +787,7 @@ class SpectrometerPlotter:
     
     def plot_monoenergetic_analysis(
         self,  
-        input_energy: float,
+        incident_energy: float,
         mean_pos: float, 
         std_dev: float,
         filename: Optional[str] = None,
@@ -791,7 +796,7 @@ class SpectrometerPlotter:
         if filename == None:
             filename = (
                 f'{self.spectrometer.figure_directory}/' 
-                f'Monoenergetic_En{input_energy:.1f}MeV_'
+                f'Monoenergetic_En{incident_energy:.1f}MeV_'
                 f'T{self.spectrometer.conversion_foil.thickness_um:.0f}um_'
                 f'E0{self.spectrometer.reference_energy:.1f}MeV.png'
             )
@@ -809,7 +814,7 @@ class SpectrometerPlotter:
         
         axes[0].set_xlabel('X Position [cm]')
         axes[0].set_ylabel('Probability Density')
-        axes[0].set_title(f'X-Position Distribution\n{input_energy:.1f} MeV {self.spectrometer.conversion_foil.input_particle.capitalize()}s')
+        axes[0].set_title(f'X-Position Distribution\n{incident_energy:.1f} MeV {self.spectrometer.conversion_foil.incident_particle.capitalize()}s')
         axes[0].grid(True, alpha=0.3)
         axes[0].legend()
         
@@ -827,7 +832,7 @@ class SpectrometerPlotter:
         fig.colorbar(scatter, ax=axes[1], label=f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
         axes[1].set_xlabel('X Position [cm]')
         axes[1].set_ylabel('Y Position [cm]')
-        axes[1].set_title(f'Focal Plane Distribution\n{input_energy:.1f} MeV {self.spectrometer.conversion_foil.input_particle.capitalize()}s')
+        axes[1].set_title(f'Focal Plane Distribution\n{incident_energy:.1f} MeV {self.spectrometer.conversion_foil.incident_particle.capitalize()}s')
         axes[1].grid(True, alpha=0.3)
         
         fig.tight_layout()
@@ -851,7 +856,7 @@ class SpectrometerPlotter:
         
         # Left y-axis: position
         color_position = 'tab:orange'
-        ax1.set_xlabel(f'{self.spectrometer.conversion_foil.input_particle.capitalize()} Energy [MeV]')
+        ax1.set_xlabel(f'{self.spectrometer.conversion_foil.incident_particle.capitalize()} Energy [MeV]')
         ax1.set_ylabel(f'Position [cm]', color=color_position)
         
         # Right y-axis: resolution and efficiency
@@ -879,17 +884,17 @@ class SpectrometerPlotter:
             # Plot position curve
             position_line = ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
                     label=f'Position')
-            ax1.fill_between(energies, (positions - position_uncertainties) * 100, 
+            ax1.fill_between(energies, (positions - position_uncertainties) * 100,
                             (positions + position_uncertainties) * 100,
                             alpha=0.3, color=color_position)
             ax1.grid(True, alpha=0.3)
             ax1.tick_params(axis='y', labelcolor=color_position)
             
-            resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution, 
+            resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution,
                             linewidth=2, marker='o', markersize=4,
                             label=f'Resolution')
             
-            efficiency_line = ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency, 
+            efficiency_line = ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency,
                             linewidth=2, marker='s', markersize=4,
                             label=f'Efficiency')
             
@@ -1285,9 +1290,6 @@ class SweepPlotter:
         n_rows = int(np.ceil(len(z_values) / n_cols))
         fig, axs = plt.subplots(n_rows, n_cols, figsize=(n_cols*3, n_rows*3),
                                 sharex=True, sharey=True, squeeze=False, layout='constrained')
-        
-        # Initialize mappable contour
-        contour_obj = None
         
         # Plot heatmaps
         for i, ax in enumerate(axs.flatten()):
