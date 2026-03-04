@@ -446,7 +446,6 @@ class PerformanceAnalyzer:
     
     def analyze_response(
         self,
-        particle: Literal['proton', 'deuteron', 'electron'] = 'proton',
         dx: float = 0.5,
         dy: float = 0.5,
         foil_distance: Optional[float] = None,
@@ -456,7 +455,6 @@ class PerformanceAnalyzer:
         Analyze the detector response in the focal plane.
         
         Args:
-            particle: Particle type
             dx: X-direction resolution in cm
             dy: Y-direction resolution in cm
             foil_distance, optional: Distance between foil and target in meters

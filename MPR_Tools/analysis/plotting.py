@@ -3,7 +3,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
@@ -430,6 +429,9 @@ class SpectrometerPlotter:
             fontsize=12
         )
         
+        particle_rest_energy = self.spectrometer.particle_mass*931.494  # MeV
+        reference_gamma = 1 + self.spectrometer.reference_energy/particle_rest_energy  # Lorentz factor of the reference particle
+
         # Draw sample of input rays
         num_rays_to_plot = min(len(self.spectrometer.input_beam), 200)  # Limit for clarity
         z_coords = np.linspace(0, aperture_distance, 20)
@@ -441,8 +443,7 @@ class SpectrometerPlotter:
             
             # Calculate ray trajectory
             energy = self.spectrometer.reference_energy*(1 + energy_relative)
-            gamma = 1 + energy/(self.spectrometer.particle_mass*931.494)
-            reference_gamma = 1 + self.spectrometer.reference_energy/(self.spectrometer.particle_mass*931.494)
+            gamma = 1 + energy/particle_rest_energy  # Lorentz factor of the particle
             p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))  # the particle's momentum as a fraction of the reference particle's momentum
             slope = np.tan(np.arcsin(p_y_relative/p_relative))
             y_trajectory = slope * z_coords + y0
@@ -1289,9 +1290,6 @@ class SweepPlotter:
         n_rows = int(np.ceil(len(z_values) / n_cols))
         fig, axs = plt.subplots(n_rows, n_cols, figsize=(n_cols*3, n_rows*3),
                                 sharex=True, sharey=True, squeeze=False, layout='constrained')
-        
-        # Initialize mappable contour
-        contour_obj = None
         
         # Plot heatmaps
         for i, ax in enumerate(axs.flatten()):

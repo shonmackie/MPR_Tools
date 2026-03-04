@@ -105,7 +105,8 @@ class MPRSpectrometer:
         )
         energy_offset_values = energy_values - self.reference_energy
         
-        reference_gamma = 1 + self.reference_energy/(self.conversion_foil.particle_mass*931.494)
+        particle_rest_energy = self.conversion_foil.particle_mass*931.494  # MeV
+        reference_gamma = 1 + self.reference_energy/particle_rest_energy  # Lorentz factor of the central ray
 
         self.input_beam = np.zeros((num_rays, 6))
         print(f'Characteristic ray energy range: {min_energy:.3f}-{max_energy:.3f} MeV')
@@ -143,7 +144,7 @@ class MPRSpectrometer:
                                 angle_y = np.arctan((y_aperture - y_foil) / self.conversion_foil.aperture_distance)
                                 
                                 # Calculate relative transverse momenta since that's what COSY uses instead of angle fsr
-                                gamma = 1 + energy/(self.conversion_foil.particle_mass*931.494)
+                                gamma = 1 + energy/particle_rest_energy  # lorentz factor of the ray
                                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
                                 p_x_relative = p_relative * np.sin(angle_x)
                                 p_y_relative = p_relative * np.sin(angle_y)
@@ -268,7 +269,8 @@ class MPRSpectrometer:
         # Create independent random number generator
         rng = np.random.default_rng(seed_offset)
         
-        reference_gamma = 1 + reference_energy/(conversion_foil.particle_mass*931.494)
+        particle_rest_energy = conversion_foil.particle_mass*931.494  # MeV
+        reference_gamma = 1 + reference_energy/particle_rest_energy  # Lorentz factor of the central ray
         
         batch_results = np.empty((0, 6), dtype=float)
         
@@ -295,7 +297,7 @@ class MPRSpectrometer:
                 angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
                 angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
                 
-                gamma = 1 + recoil_energy/(conversion_foil.particle_mass*931.494)
+                gamma = 1 + recoil_energy/particle_rest_energy  # Lorentz factor of the ray
                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
                 p_x_relative = p_relative * np.sin(angle_x)
                 p_y_relative = p_relative * np.sin(angle_y)

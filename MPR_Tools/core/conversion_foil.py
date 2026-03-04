@@ -154,7 +154,6 @@ class ConversionFoil:
     def set_thickness(self, thickness_um: float) -> None:
         """Set foil thickness in μm."""
         self.thickness = thickness_um * 1e-6
-        self.z_grid = np.linspace(-self.thickness, 0, len(self.z_grid))
     
     def set_aperture_distance(self, distance_cm: float) -> None:
         """
@@ -477,7 +476,6 @@ class ConversionFoil:
                     self.interactions,
                     interaction_weights,
                     max_angle,
-                    self.foil_radius,
                 ))
                 
         results = run_concurrently(
@@ -512,7 +510,6 @@ class ConversionFoil:
         interactions: list[Interaction],
         interaction_weights: np.ndarray,
         max_angle: float,
-        foil_radius: float,
         progress_counter,
         progress_lock
     ) -> Tuple[int, int]:
@@ -525,7 +522,6 @@ class ConversionFoil:
             interactions: Processes by which recoil particles are generated
             interaction_weights: Relative probability of each interaction process
             max_angle: The maximum scattering angle to sample
-            foil_radius: Foil radius in meters
             progress_counter: Shared counter for progress tracking
             progress_lock: Lock for thread-safe progress updates
             
