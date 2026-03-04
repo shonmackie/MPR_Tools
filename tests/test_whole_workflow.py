@@ -1,8 +1,7 @@
 import os
 from concurrent.futures.process import ProcessPoolExecutor
 
-from MPR_Tools import MPRSpectrometer, ConversionFoil, Hodoscope, SpectrometerPlotter
-from analysis.performance import PerformanceAnalyzer
+from MPR_Tools import MPRSpectrometer, ConversionFoil, Hodoscope, SpectrometerPlotter, PerformanceAnalyzer
 
 def test_whole_workflow():
     # instantiate the output directory

@@ -86,7 +86,7 @@ def test_compton_scatter():
         target_density=1,
     )
     
-    assert isclose(compton_scatter.get_cross_section(16.7), 0.0348e-28, rtol=0.05, atol=0)  # 3.5 mb is from the exact Klein-Nishina formula
+    assert isclose(compton_scatter.get_macroscopic_cross_section(16.7), 0.0348e-28, rtol=0.05, atol=0)  # 3.5 mb is from the exact Klein-Nishina formula
     
     angles, energies = generate_recoil_particles(compton_scatter, 16.7)
     assert all((angles >= 0) & (angles <= pi/2))
