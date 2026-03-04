@@ -48,7 +48,7 @@ class PerformanceAnalyzer:
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             verbose: Print detailed results
-executor: Pool of workers to use (if None, we will make our own)
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
@@ -128,7 +128,7 @@ executor: Pool of workers to use (if None, we will make our own)
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
             reset: Whether to regenerate the dataset rather than loading an existing one
-executor: Pool of workers to use (if None, we will make our own)
+            executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
@@ -174,8 +174,9 @@ executor: Pool of workers to use (if None, we will make our own)
                         include_kinematics=include_kinematics,
                         include_stopping_power_loss=include_stopping_power_loss,
                         verbose=False,
-                    executor=executor,
-                    max_workers=max_workers,)
+                        executor=executor,
+                        max_workers=max_workers,
+                    )
                     positions_mean[i] = mean_pos
                     positions_std[i] = std_dev
                     energy_resolutions[i] = energy_res
@@ -185,8 +186,9 @@ executor: Pool of workers to use (if None, we will make our own)
                     scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
                         energy,
                         num_samples=num_efficiency_samples,
-                    executor=executor,
-                    max_workers=max_workers,)
+                        executor=executor,
+                        max_workers=max_workers,
+                    )
                     scattering_efficiencies[i] = scattering_efficiency
                     geometric_efficiencies[i] = geometric_efficiency
                     total_efficiencies[i] = total_efficiency

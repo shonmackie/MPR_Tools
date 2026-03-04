@@ -302,7 +302,7 @@ class PairProduction:
         self.target_density = target_density
         
         # photon energies at which to calculate the cross section
-        self.input_energy_table = np.geomspace(2*ELECTRON_REST_ENERGY, 25, 11)  # MeV
+        self.incident_energy_table = np.geomspace(2*ELECTRON_REST_ENERGY, 25, 11)  # MeV
         # electron parameters at which to calculate the cross section
         self.energy_fraction_table = np.linspace(0, 1, 51)
         self.angle_CM_table = np.linspace(0, np.pi/2, 51)
@@ -311,16 +311,16 @@ class PairProduction:
         dihedral_angle_table = np.linspace(0, np.pi, 21)
         # the double-differential cross section ma pat each input energy
         self.total_xs_table, differential_xs_table, double_differential_xs_table = PairProduction._calculate_cross_section(
-            charge, self.input_energy_table, self.energy_fraction_table,
+            charge, self.incident_energy_table, self.energy_fraction_table,
             self.angle_CM_table, positron_angle_CM_table, dihedral_angle_table)
         
-        print(f'Calculated pair production tables for {len(self.input_energy_table)} photon energies')
+        print(f'Calculated pair production tables for {len(self.incident_energy_table)} photon energies')
     
         # Create interpolation objects for fast lookups
         self.differential_xs_interpolator = make_interp_spline(
-            self.input_energy_table, differential_xs_table, k=1, axis=0)
+            self.incident_energy_table, differential_xs_table, k=1, axis=0)
         self.double_differential_xs_interpolator = make_interp_spline(
-            self.input_energy_table, double_differential_xs_table, k=1, axis=0)
+            self.incident_energy_table, double_differential_xs_table, k=1, axis=0)
         
         # leave these as None until we evaluate them at a specific energy
         self.double_differential_xs = None
@@ -330,7 +330,7 @@ class PairProduction:
 
     @staticmethod
     def _calculate_cross_section(
-            charge: int, input_energy: np.ndarray, energy_fraction: np.ndarray,
+            charge: int, incident_energy: np.ndarray, energy_fraction: np.ndarray,
             electron_angle_CM: np.ndarray, positron_angle_CM: np.ndarray, dihedral_angle: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -346,7 +346,7 @@ class PairProduction:
         
         Args:
             charge: the charge number of the particle with which the photon is interacting
-            input_energy: the incident photon energies at which to calculate the cross section (MeV)
+            incident_energy: the incident photon energies at which to calculate the cross section (MeV)
             energy_fraction: the fractions of kinetic energy given to the electron at which to calculate the cross section
             electron_angle_CM: the angles between the photon and electron trajectories at which to calculate the cross section (rad)
             positron_angle_CM: the angles between the photon and positron trajectories to sample (rad)
@@ -357,19 +357,19 @@ class PairProduction:
             1: a 2D array of the differential microscopic cross section at each combination of energy and electron angle, in m^2/sr
             2: a 3D array of the double-differential microscopic cross section at each combination of energy, electron angle, and electron energy fraction, in m^2/sr/MeV
         """
-        input_energy, energy_fraction, electron_angle_CM, positron_angle_CM, dihedral_angle = np.meshgrid(
-            input_energy, energy_fraction, electron_angle_CM, positron_angle_CM, dihedral_angle,
+        incident_energy, energy_fraction, electron_angle_CM, positron_angle_CM, dihedral_angle = np.meshgrid(
+            incident_energy, energy_fraction, electron_angle_CM, positron_angle_CM, dihedral_angle,
             indexing="ij", sparse=True)
         
         # convert from these normalized coordinates to the coordinates over which we'll actual integrate
-        electron_kinetic_energy = energy_fraction*(input_energy - 2*ELECTRON_REST_ENERGY)  # MeV
-        electron_angle = PairProduction._convert_CM_to_lab(electron_angle_CM, input_energy)
-        positron_angle = PairProduction._convert_CM_to_lab(positron_angle_CM, input_energy)
+        electron_kinetic_energy = energy_fraction*(incident_energy - 2*ELECTRON_REST_ENERGY)  # MeV
+        electron_angle = PairProduction._convert_CM_to_lab(electron_angle_CM, incident_energy)
+        positron_angle = PairProduction._convert_CM_to_lab(positron_angle_CM, incident_energy)
         
         # this section of the code uses abbreviated notation: γ for photons, n for electrons, and p for positrons
         # E is total relativistic energy in MeV, p is momentum magnitude in MeV/c,
         # and q is recoiling nucleus momentum in MeV/c
-        Eγ = input_energy
+        Eγ = incident_energy
         En = electron_kinetic_energy + ELECTRON_REST_ENERGY
         Ep = Eγ - En
         pn2 = np.maximum(0, En**2 - ELECTRON_REST_ENERGY**2)  # these should both always >= 0 in theory but because of roundoff we have to enforce that
@@ -423,7 +423,7 @@ class PairProduction:
         return total_xs, differential_xs, double_differential_xs
     
     @staticmethod
-    def _convert_CM_to_lab(angle: np.ndarray, input_energy: float | np.ndarray) -> np.ndarray:
+    def _convert_CM_to_lab(angle: np.ndarray, incident_energy: float | np.ndarray) -> np.ndarray:
         """
         convert an electron or positron trajectory angle from the quasi-center-of-mass frame to the lab frame.
         this isn't really the center of mass frame, since I think that would depend on the mass of the interacting
@@ -434,33 +434,33 @@ class PairProduction:
         a convenient way to concentrate integration samples on the more probable parts of the distribution.
         none of the actual math is done in the quasi-CM frame.
         """
-        return np.arctan(2*ELECTRON_REST_ENERGY/input_energy*np.tan(angle))
+        return np.arctan(2*ELECTRON_REST_ENERGY/incident_energy*np.tan(angle))
     
-    def get_cross_section(self, input_energy: float | np.ndarray) -> float | np.ndarray:
+    def get_cross_section(self, incident_energy: float | np.ndarray) -> float | np.ndarray:
         """ get the total macroscopic cross section, for calculating attenuation, in m^-1 """
-        if np.any(input_energy > self.input_energy_table[-1]):
-            raise ValueError(f"I didn't calculate the PP xs for {input_energy} MeV photons")
+        if np.any(incident_energy > self.incident_energy_table[-1]):
+            raise ValueError(f"I didn't calculate the PP xs for {incident_energy} MeV photons")
         else:
             return np.where(
-                input_energy > 2*ELECTRON_REST_ENERGY,
+                incident_energy > 2*ELECTRON_REST_ENERGY,
                 self.target_density * np.interp(
-                    input_energy,
-                    self.input_energy_table,
+                    incident_energy,
+                    self.incident_energy_table,
                     self.total_xs_table),
                 0,
             )
     
-    def calculate_angular_distribution(self, input_energy: float):
+    def calculate_angular_distribution(self, incident_energy: float):
         """ prepare to generate recoil particles from the given incident input particle energy """
         # calculate the angular distribution
-        differential_xs = self.differential_xs_interpolator(input_energy)
-        angle_table = PairProduction._convert_CM_to_lab(self.angle_CM_table, input_energy)
+        differential_xs = self.differential_xs_interpolator(incident_energy)
+        angle_table = PairProduction._convert_CM_to_lab(self.angle_CM_table, incident_energy)
         self.angle_distribution = ProbabilityDistribution(
             angle_table,
             differential_xs * np.sin(angle_table))
         # prepare to calculate the energy distribution
-        double_differential_xs = self.double_differential_xs_interpolator(input_energy)
-        self.electron_energy_table = self.energy_fraction_table * (input_energy - 2*ELECTRON_REST_ENERGY)
+        double_differential_xs = self.double_differential_xs_interpolator(incident_energy)
+        self.electron_energy_table = self.energy_fraction_table * (incident_energy - 2*ELECTRON_REST_ENERGY)
         self.energy_distribution_interpolator = make_interp_spline(
             angle_table, double_differential_xs, k=1, axis=0)
     
