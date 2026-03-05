@@ -38,8 +38,8 @@ class MPRSpectrometer:
             conversion_foil: ConversionFoil object
             transfer_map_path: Path to COSY transfer map file
             reference_energy: Reference energy in MeV
-            min_energy: Minimum acceptance energy in MeV
-            max_energy: Maximum acceptance energy in MeV
+            min_energy: Minimum recoil particle acceptance energy in MeV
+            max_energy: Maximum recoil particle acceptance energy in MeV
             hodoscope: Hodoscope detector system
             run_directory: Directory for saving run data and figures
         """
@@ -58,6 +58,10 @@ class MPRSpectrometer:
             os.makedirs(self.figure_directory)
         if not os.path.exists(self.data_directory):
             os.makedirs(self.data_directory)
+        
+        # calculate approximate incident particle energy bounds
+        self.min_incident_energy = conversion_foil.get_incident_energy(min_energy)
+        self.max_incident_energy = conversion_foil.get_incident_energy(max_energy)
         
         # Load transfer map
         # TODO: add functionality to check if a calibration curve exists for this map. If not, generate one!
@@ -204,8 +208,8 @@ class MPRSpectrometer:
         
         # Narrow energy distribution unless doing monoenergetic performance
         if len(incident_energies) > 1:
-            # Only use incident energies within acceptance range
-            idx = (incident_energies >= self.min_energy) & (incident_energies <= self.max_energy)
+            # Only use incident energies that can possibly produce recoil energies within acceptance range
+            idx = incident_energies >= self.min_energy
             incident_energies = incident_energies[idx]
             energy_distribution = energy_distribution[idx]
         
@@ -282,7 +286,7 @@ class MPRSpectrometer:
                     incident_energies,
                     weighted_distribution,
                     include_kinematics, 
-                    include_stopping_power_loss, 
+                    include_stopping_power_loss,
                     z_sampling=z_sampling,
                     rng=rng,  # Pass the worker's RNG
                     y_restriction=y_restriction

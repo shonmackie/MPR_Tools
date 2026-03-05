@@ -51,7 +51,14 @@ class GenericInteraction:
     
     def generate_recoil_particle(self, rng: np.random.Generator, include_kinematics: bool, max_angle: float) -> tuple[float, float]:
         """ draw a recoil particle and return its energy and scattering angle """
-        raise ValueError("This interaction does not produce ")
+        raise ValueError("This interaction does not produce recoil particles.")
+    
+    def get_incident_energy(self, recoil_energy: float) -> float:
+        """
+        estimate the incident particle energy that corresponds to a recoil particle distribution with the given peak,
+        or raise a ValueError if this interaction does not produce peaked recoil particle distributions.
+        """
+        raise ValueError("This interaction does not produce recoil particles.")
 
 
 class ElasticScattering(GenericInteraction):
@@ -82,7 +89,9 @@ class ElasticScattering(GenericInteraction):
         print(f'Loaded differential scattering data from {differential_xs_path}')
         
         self.particle_mass = particle_mass
-        
+        gamma = NEUTRON_MASS / self.particle_mass
+        self.energy_factor = 4 * gamma / (1 + gamma)**2
+    
         # Extract energy grid
         energies = self.differential_xs_data[0]
         # Cosine grid
@@ -180,15 +189,21 @@ class ElasticScattering(GenericInteraction):
         theta_scatter = self.angle_distribution.draw(rng, upper=max_angle)
         
         # Initialize recoil energy
-        recoil_energy = self.incident_energy
+        recoil_energy = self.energy_factor * self.incident_energy
         
         # Apply kinematic energy loss
         if include_kinematics:
             # Calculate energy loss from (382) of https://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node52.html
-            gamma = NEUTRON_MASS / self.particle_mass
-            recoil_energy *= 4 * gamma / (1 + gamma)**2 * np.cos(theta_scatter)**2
+            recoil_energy *= np.cos(theta_scatter)**2
         
         return theta_scatter, recoil_energy
+    
+    def get_incident_energy(self, recoil_energy: float) -> float:
+        """
+        estimate the incident particle energy that corresponds to a recoil particle distribution with the given peak,
+        or raise a ValueError if this interaction does not produce peaked recoil particle distributions.
+        """
+        return recoil_energy / self.energy_factor
 
 
 class ComptonScattering:
@@ -286,6 +301,13 @@ class ComptonScattering:
         else:
             electron_energy = self.incident_energy - ELECTRON_REST_ENERGY/2
         return electron_angle, electron_energy
+    
+    def get_incident_energy(self, recoil_energy: float) -> float:
+        """
+        estimate the incident particle energy that corresponds to a recoil particle distribution with the given peak,
+        or raise a ValueError if this interaction does not produce peaked recoil particle distributions.
+        """
+        return recoil_energy + ELECTRON_REST_ENERGY/2
     
     
 class PairProduction:
@@ -490,6 +512,13 @@ class PairProduction:
         electron_energy = electron_energy_distribution.draw(rng)
         
         return angle, electron_energy
+    
+    def get_incident_energy(self, recoil_energy: float) -> float:
+        """
+        estimate the incident particle energy that corresponds to a recoil particle distribution with the given peak,
+        or raise a ValueError if this interaction does not produce peaked recoil particle distributions.
+        """
+        raise ValueError("Pair production emits a contiuum; it is impossible to infer the incident photo energy from one electron energy.")
 
 
 Interaction = GenericInteraction | ComptonScattering | PairProduction

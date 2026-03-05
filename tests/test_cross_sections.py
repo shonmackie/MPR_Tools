@@ -38,6 +38,8 @@ def test_np_scatter():
     
     assert isclose(proton_scatter.get_cross_section(14.0), 0.687562e-28, rtol=1e-9, atol=0)
     
+    assert isclose(proton_scatter.get_incident_energy(14.0), 14.0, atol=0.01)
+    
     angles, energies = generate_recoil_particles(proton_scatter, 14.0)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 14))
@@ -65,6 +67,8 @@ def test_nd_scatter():
     
     assert isclose(deuteron_scatter.get_cross_section(14.0), 0.6435662e-28, rtol=1e-9, atol=0)
     
+    assert isclose(deuteron_scatter.get_incident_energy(12.444), 14.0, atol=0.01)
+    
     angles, energies = generate_recoil_particles(deuteron_scatter, 14.0)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 12.5))
@@ -87,6 +91,8 @@ def test_compton_scatter():
     )
     
     assert isclose(compton_scatter.get_cross_section(16.7), 0.0348e-28, rtol=0.05, atol=0)  # 3.5 mb is from the exact Klein-Nishina formula
+    
+    assert isclose(compton_scatter.get_incident_energy(16.45), 16.7, atol=0.01)
     
     angles, energies = generate_recoil_particles(compton_scatter, 16.7)
     assert all((angles >= 0) & (angles <= pi/2))

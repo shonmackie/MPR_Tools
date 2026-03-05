@@ -179,6 +179,19 @@ class ConversionFoil:
         if self.aperture_type != 'rect':
             raise ValueError("Aperture height can only be set for rectangular apertures.")
         self.aperture_height = height_cm * 1e-2
+        
+    def get_incident_energy(self, recoil_energy: float) -> float:
+        """
+        Estimate the incident particle energy that best corresponds to the given recoil particle spectrum peak.
+        """
+        recoil_birth_energy = self.calculate_initial_energy(recoil_energy, self.thickness/2)
+        incident_energy = None
+        for interaction in self.interactions:
+            try:
+                incident_energy = interaction.get_incident_energy(recoil_birth_energy)
+            except ValueError:
+                pass
+        return incident_energy
     
     def calculate_stopping_power_loss(
         self, 

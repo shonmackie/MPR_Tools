@@ -187,7 +187,7 @@ class PerformanceAnalyzer:
                 print(f'\nAnalyzing {foil_name} foil...')
 
                 # Energy range
-                energies = np.linspace(spec.min_energy, spec.max_energy, num_energies)
+                energies = np.linspace(spec.min_incident_energy, spec.max_incident_energy, num_energies)
 
                 positions_mean = np.zeros_like(energies)
                 positions_fwhm = np.zeros_like(energies)
