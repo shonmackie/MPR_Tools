@@ -72,7 +72,7 @@ class MPRSpectrometer:
         self.input_beam: np.ndarray = np.zeros(0)
         self.output_beam: np.ndarray = np.zeros(0)
         
-        print(f'M{conversion_foil.particle[0].capitalize()}R spectrometer initialization complete.\n')
+        print(f'MPR spectrometer initialization complete.\n')
     
     def generate_characteristic_rays(
         self,
