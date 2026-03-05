@@ -877,7 +877,7 @@ class SpectrometerPlotter:
             # Extract data from DataFrame
             energies = grp['energy [MeV]'].to_numpy()
             positions = grp['position mean [m]'].to_numpy()
-            position_uncertainties = grp['position std [m]'].to_numpy()
+            position_uncertainties = grp['position fwhm [m]'].to_numpy()
             energy_resolutions = grp['resolution [keV]'].to_numpy()
             total_efficiencies = grp['total efficiency'].to_numpy()
             
