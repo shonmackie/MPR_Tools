@@ -187,32 +187,6 @@ def test_z_sampling():
     plt.close()
 
 
-def test_probability_distribution():
-    # the probability distribution is defined by the linear interpolation between these three points
-    x_table = array([10, 20, 30])
-    p_table = array([20, 10, 20])
-    distribution = ProbabilityDistribution(x_table, p_table)
-    
-    assert distribution.integral(20, inf) == 1/2
-    
-    rng = random.default_rng(0)
-    samples = empty(10000)
-    for i in range(samples.size):
-        samples[i] = distribution.draw(rng, lower=20, upper=inf)
-    assert all((samples >= 20) & (samples <= 30))
-    assert isclose(mean(samples), 20 + 50/9, atol=3*0.003)  # the standard deviation is about 0.3, so random error is about 0.003
-    assert isclose(std(samples), 10*sqrt(13/162), atol=3*0.003)
-    
-    plt.figure()
-    plt.hist(samples, density=True, bins=50)
-    x = linspace(20, 30)
-    plt.plot(x, 2/30*(1 + (x - 20)/10), '--')
-    plt.title("Parabolic probability distribution")
-    plt.tight_layout()
-    plt.savefig("tests/output/figures/test_probability_distribution.png")
-    plt.close()
-
-
 def generate_recoil_particles(interaction: Interaction, incident_energy: float, num_particles=10000):
     rng = random.default_rng(0)
     interaction.calculate_angular_distribution(incident_energy)

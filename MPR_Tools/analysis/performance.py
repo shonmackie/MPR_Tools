@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Executor
-from typing import Tuple, Optional, Union, Literal
+from typing import Tuple, Optional, Union
 import warnings
 import numpy as np
 import pandas as pd
@@ -27,34 +27,58 @@ class PerformanceAnalyzer:
         else:
             raise ValueError(f"Unsupported spectrometer type: {type(spectrometer)}")
     
-    def fwhm(self, data: np.ndarray, bandwidth: str | float = "scott") -> float:
+    @staticmethod
+    def fwhm(data: np.ndarray, bandwidth_method: str | float = "scott", _recursions=0) -> tuple[float, float]:
         """
         Estimate the FWHM of a 1D distribution using a KDE.
 
         Parameters
         ----------
         data      : 1D array of position samples
-        bandwidth : KDE bandwidth — "scott", "silverman", or a float in data units
+        bandwidth_method : KDE bandwidth — "scott", "silverman", or a sigma as a float in data units
+        _recursions: The number of times this function has called itself
 
         Returns
         -------
-        FWHM as a float
+        FWHM as a float, and the center of the half-max interval as a float
         """
         data = np.asarray(data, dtype=float)
 
-        bw = bandwidth / np.std(data) if isinstance(bandwidth, (int, float)) else bandwidth
-        kde = gaussian_kde(data, bw_method=bw)
+        if isinstance(bandwidth_method, (int, float)):
+            bandwidth_method = bandwidth_method / np.std(data)
+        kde = gaussian_kde(data, bw_method=bandwidth_method)
 
-        x = np.linspace(data.min(), data.max(), 1024)
+        bandwidth_factor = kde.factor
+        bandsigma = bandwidth_factor * np.std(data)
+        bandwidth = 2*np.sqrt(2*np.log(2)) * bandsigma
+        
+        x = np.linspace(data.min(), data.max(), round(5 * (data.max() - data.min()) / bandwidth))
         y = kde(x)
 
+        # Find the most extreme data points where y >= half_max
         half_max = y.max() / 2
         roots = UnivariateSpline(x, y - half_max, s=0).roots()
-
-        if len(roots) < 2:
-            raise RuntimeError("Could not find two half-max crossings. Try a smaller bandwidth.")
-
-        return roots[-1] - roots[0]
+        if y[0] >= half_max:
+            lower = x[0]
+        else:
+            lower = roots[0]
+        if y[-1] >= half_max:
+            upper = x[-1]
+        else:
+            upper = roots[-1]
+            
+        full_width = upper - lower
+        position = (lower + upper)/2
+        
+        # If the kernel seems like it could be smaller
+        if full_width < 3*bandwidth and _recursions < 5:
+            # Reduce the kernel size to aim for bandwidth < full_width/3
+            reduction = 4*bandwidth/full_width
+            return PerformanceAnalyzer.fwhm(
+                data, bandwidth_method=bandsigma/reduction, _recursions=_recursions + 1)
+        
+        else:
+            return full_width, position
 
     def analyze_monoenergetic_performance(
         self,
@@ -164,7 +188,7 @@ class PerformanceAnalyzer:
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of (energies in MeV, positions_mean in m, positions_fwhm in m, energy_resolutions in keV, total_efficiencies, foil_species)
+            Pandas dataframe containing energies in MeV, positions_mean in m, positions_fwhm in m, energy_resolutions in keV, total_efficiencies, foil_species
         """
         print('\nGenerating comprehensive performance analysis...')
 
@@ -212,8 +236,7 @@ class PerformanceAnalyzer:
                         max_workers=max_workers)
                     
                     positions = spec.output_beam[:,0]
-                    positions_mean[i] = np.mean(positions)
-                    positions_fwhm[i] = self.fwhm(positions)
+                    positions_fwhm[i], positions_mean[i] = PerformanceAnalyzer.fwhm(positions)
                     
                     # Calculate efficiency for this energy
                     scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
