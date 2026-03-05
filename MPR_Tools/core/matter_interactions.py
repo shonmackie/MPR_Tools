@@ -117,7 +117,7 @@ class ElasticScattering(GenericInteraction):
         sigma_lab = 4 * cos_theta_lab_recoil * sigma_cm
         
         # Create interpolation object for fast lookups
-        self.theta_lab = np.acos(cos_theta_lab_recoil)
+        self.theta_lab = np.arccos(cos_theta_lab_recoil)
         self.diff_xs_recoil_interpolator = make_interp_spline(
             energies, sigma_lab, k=1, axis=0)  # Linear interpolation, no smoothing
         

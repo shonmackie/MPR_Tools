@@ -8,6 +8,8 @@ import warnings
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
+from scipy.stats import gaussian_kde
+from scipy.interpolate import UnivariateSpline
 from tqdm import tqdm
 
 from ..core.spectrometer import MPRSpectrometer
@@ -25,6 +27,35 @@ class PerformanceAnalyzer:
         else:
             raise ValueError(f"Unsupported spectrometer type: {type(spectrometer)}")
     
+    def fwhm(self, data: np.ndarray, bandwidth: str | float = "scott") -> float:
+        """
+        Estimate the FWHM of a 1D distribution using a KDE.
+
+        Parameters
+        ----------
+        data      : 1D array of position samples
+        bandwidth : KDE bandwidth — "scott", "silverman", or a float in data units
+
+        Returns
+        -------
+        FWHM as a float
+        """
+        data = np.asarray(data, dtype=float)
+
+        bw = bandwidth / np.std(data) if isinstance(bandwidth, (int, float)) else bandwidth
+        kde = gaussian_kde(data, bw_method=bw)
+
+        x = np.linspace(data.min(), data.max(), 1024)
+        y = kde(x)
+
+        half_max = y.max() / 2
+        roots = UnivariateSpline(x, y - half_max, s=0).roots()
+
+        if len(roots) < 2:
+            raise RuntimeError("Could not find two half-max crossings. Try a smaller bandwidth.")
+
+        return roots[-1] - roots[0]
+
     def analyze_monoenergetic_performance(
         self,
         incident_energy: float,
@@ -104,6 +135,7 @@ class PerformanceAnalyzer:
             print(f'  Energy resolution [keV]: {energy_resolution:.2f}')
         
         return mean_position_0, std_deviation_0, fwhm_0, energy_resolution, dispersion
+    
     def generate_performance_curve(
         self,
         num_energies: int = 40,
@@ -132,7 +164,7 @@ class PerformanceAnalyzer:
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of (energies in MeV, positions_mean in m, positions_std in m, energy_resolutions in keV, total_efficiencies, foil_species)
+            Tuple of (energies in MeV, positions_mean in m, positions_fwhm in m, energy_resolutions in keV, total_efficiencies, foil_species)
         """
         print('\nGenerating comprehensive performance analysis...')
 
@@ -158,7 +190,7 @@ class PerformanceAnalyzer:
                 energies = np.linspace(spec.min_energy, spec.max_energy, num_energies)
 
                 positions_mean = np.zeros_like(energies)
-                positions_std = np.zeros_like(energies)
+                positions_fwhm = np.zeros_like(energies)
                 gradients = np.zeros_like(energies)
                 energy_resolutions = np.zeros_like(energies)
                 scattering_efficiencies = np.zeros_like(energies)
@@ -167,21 +199,22 @@ class PerformanceAnalyzer:
 
                 for i, energy in enumerate(tqdm(energies, desc=f'Calculating {foil_name} performance...')):
                     # Calculate location and resolution from monoenergetic analysis
-                    mean_pos, std_dev, fwhm, energy_res, gradient = self.analyze_monoenergetic_performance(
-                        energy,
-                        num_recoil_particles=num_recoils_per_energy,
-                        spectrometer=spec,
-                        include_kinematics=include_kinematics,
-                        include_stopping_power_loss=include_stopping_power_loss,
-                        verbose=False,
+                    spec.generate_monte_carlo_rays(np.array([energy]), 
+                        np.array([1.0]), 
+                        num_recoils_per_energy,
+                        include_kinematics, 
+                        include_stopping_power_loss,
+                        save_beam=False,
                         executor=executor,
-                        max_workers=max_workers,
-                    )
-                    positions_mean[i] = mean_pos
-                    positions_std[i] = std_dev
-                    energy_resolutions[i] = energy_res
-                    gradients[i] = gradient
-
+                        max_workers=max_workers,)
+                    spec.apply_transfer_map(save_beam=False,
+                        executor=executor,
+                        max_workers=max_workers)
+                    
+                    positions = spec.output_beam[:,0]
+                    positions_mean[i] = np.mean(positions)
+                    positions_fwhm[i] = self.fwhm(positions)
+                    
                     # Calculate efficiency for this energy
                     scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
                         energy,
@@ -192,13 +225,17 @@ class PerformanceAnalyzer:
                     scattering_efficiencies[i] = scattering_efficiency
                     geometric_efficiencies[i] = geometric_efficiency
                     total_efficiencies[i] = total_efficiency
+                
+                # calculate dispersion gradient and energy resolution from monoenergetic beamlet results
+                gradients = np.gradient(positions_mean, energies)  # m/MeV
+                energy_resolutions = positions_fwhm/gradients * 1000 # keV
 
                 # Create DataFrame for this foil
                 foil_df = pd.DataFrame({
                     'foil': foil_name,
                     'energy [MeV]': energies,
                     'position mean [m]': positions_mean,
-                    'position std [m]': positions_std,
+                    'position fwhm [m]': positions_fwhm,
                     'gradient [m/MeV]': gradients,
                     'resolution [keV]': energy_resolutions,
                     'scattering efficiency': scattering_efficiencies,
