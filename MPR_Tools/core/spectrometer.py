@@ -423,7 +423,7 @@ class MPRSpectrometer:
         
         ### Apply transfer map to each recoil ray ###
         # Initialize output ray with input energy
-        output_batch = np.zeros_like(input_batch)
+        output_batch = np.zeros((batch_size, 5))
         output_batch[:, 4] = input_batch[:, 4]
         
         # Apply each map term
@@ -431,7 +431,7 @@ class MPRSpectrometer:
             # Only include terms up to specified order
             if np.sum(term_powers) <= map_order:
                 # Calculate monomial term
-                monomial = np.prod([input_batch[:, k]**term_powers[k] for k in range(4)]) * input_batch[:, 4]**term_powers[5]
+                monomial = np.prod([input_batch[:, k]**term_powers[k] for k in range(4)], axis=0) * input_batch[:, 4]**term_powers[5]
                 if mass_included:
                     monomial *= relative_mass**term_powers[6]
                     
