@@ -360,6 +360,18 @@ class ConversionFoil:
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
         
+        # Limit scattering to the interactions that actually scatter
+        recoil_interactions = []
+        for interaction in self.interactions:
+            if interaction.generates_recoil_particles:
+                recoil_interactions.append(interaction)
+        
+        # Keep track of some energy-dependent things, as we may not need to recalculate them every time
+        previous_incident_energy = None
+        angle_distributions = None
+        interaction_weights = None
+        attenuation = None
+        
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
@@ -368,26 +380,27 @@ class ConversionFoil:
             # Sample incident particle energy from weighted distribution
             incident_energy = np.random.choice(incident_energies, p=energy_distribution)
             
-            # do the cross section calculations
-            angle_distributions = {}
-            interaction_weights = []
-            recoil_interactions = []
-            for interaction in self.interactions:
-                if interaction.generates_recoil_particles:
+            # This part is a little expensive, so only do it if the incident energy is different from last time...
+            if incident_energy != previous_incident_energy:
+                # Do the cross section calculations
+                angle_distributions = {}
+                interaction_weights = []
+                for interaction in recoil_interactions:
                     angle_distributions[interaction] = interaction.get_angle_distribution(incident_energy)
                     weight = (interaction.get_cross_section(incident_energy) *
                               angle_distributions[interaction].integral(0, max_angle))
                     interaction_weights.append(weight)
-                    recoil_interactions.append(interaction)
-            interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
-            
-            # Set up z-sampling probability
-            if z_sampling == 'exp':
-                attenuation = 0
-                for interaction in self.interactions:
-                    attenuation += interaction.get_cross_section(incident_energy)
-            else:  # uniform
-                attenuation = 0
+                interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
+                
+                # Set up z-sampling probability
+                if z_sampling == 'exp':  # exponential
+                    attenuation = 0
+                    for interaction in self.interactions:
+                        attenuation += interaction.get_cross_section(incident_energy)
+                else:  # uniform
+                    attenuation = 0
+                
+                previous_incident_energy = incident_energy
                 
             interaction = rng.choice(recoil_interactions, p=interaction_weights)
             x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
