@@ -370,7 +370,7 @@ class MPRSpectrometer:
         
         output_batches = run_concurrently(
             self._apply_transfer_map_worker, worker_args, executor,
-            progress_counter_total=num_recoil_particles,
+            progress_counter_total=self.transfer_map.shape[1]*max_workers,
             task_title=f'Applying order {map_order} transfer map',
         )
         
@@ -404,9 +404,8 @@ class MPRSpectrometer:
             
         Returns:
             Batch of output rays [N x 5]
-        """        
+        """
         batch_size = len(input_batch)
-        output_batch = np.zeros((batch_size, 5))
         
         ### Convert last column of transfer map to monomial powers for each term ###
         # Need to convert term powers to integers
@@ -423,24 +422,22 @@ class MPRSpectrometer:
         term_powers_array = np.array([list(s) for s in term_indices_str], dtype=int)
         
         ### Apply transfer map to each recoil ray ###
-        for i, input_ray in enumerate(input_batch):
-            # Initialize output ray with input energy
-            output_ray = np.array([0.0, 0.0, 0.0, 0.0, input_ray[4]])
-            
-            # Apply each map term
-            for j, term_powers in enumerate(term_powers_array):                
-                # Only include terms up to specified order
-                if np.sum(term_powers) <= map_order:
-                    # Calculate monomial term
-                    monomial = np.prod([input_ray[k]**term_powers[k] for k in range(4)]) * input_ray[4]**term_powers[5]
-                    if mass_included:
-                        monomial *= relative_mass**term_powers[6]
+        # Initialize output ray with input energy
+        output_batch = np.zeros_like(input_batch)
+        output_batch[:, 4] = input_batch[:, 4]
+        
+        # Apply each map term
+        for j, term_powers in enumerate(term_powers_array):
+            # Only include terms up to specified order
+            if np.sum(term_powers) <= map_order:
+                # Calculate monomial term
+                monomial = np.prod([input_batch[:, k]**term_powers[k] for k in range(4)]) * input_batch[:, 4]**term_powers[5]
+                if mass_included:
+                    monomial *= relative_mass**term_powers[6]
                     
-                    # Add contributions to each coordinate
-                    for coord in range(4):  # x, p_x, y, p_y
-                        output_ray[coord] += transfer_map[coord, j] * monomial
-            
-            output_batch[i] = output_ray
+                # Add contributions to each coordinate
+                for coord in range(4):  # x, p_x, y, p_y
+                    output_batch[:, coord] += transfer_map[coord, j] * monomial
             
             # Update progress counter thread-safely
             with progress_lock:
