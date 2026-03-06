@@ -9,7 +9,8 @@ from concurrent.futures import Executor
 import multiprocessing as mp
 from tqdm import tqdm
 
-from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction
+from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction, \
+    ProbabilityDistribution
 from .parallelization import run_concurrently
 from ..config.constants import AVOGADRO, FOIL_MATERIALS
 
@@ -179,6 +180,19 @@ class ConversionFoil:
         if self.aperture_type != 'rect':
             raise ValueError("Aperture height can only be set for rectangular apertures.")
         self.aperture_height = height_cm * 1e-2
+        
+    def get_incident_energy(self, recoil_energy: float) -> float:
+        """
+        Estimate the incident particle energy that best corresponds to the given recoil particle spectrum peak.
+        """
+        recoil_birth_energy = self.calculate_initial_energy(recoil_energy, self.thickness/2)
+        incident_energy = None
+        for interaction in self.interactions:
+            try:
+                incident_energy = interaction.get_incident_energy(recoil_birth_energy)
+            except ValueError:
+                pass
+        return incident_energy
     
     def calculate_stopping_power_loss(
         self, 
@@ -222,7 +236,7 @@ class ConversionFoil:
             path_length: Distance traveled through material in m
             
         Returns:
-            Initial recoil paricle energy in MeV
+            Initial recoil particle energy in MeV
         """
         final_x = np.interp(
             final_energy, self.integrated_stopping_data[0], self.integrated_stopping_data[1])
@@ -262,18 +276,17 @@ class ConversionFoil:
     def _sample_scattered_ray(
         self,
         rng: np.random.Generator,
-        interaction: Interaction,
+        theta_distribution: ProbabilityDistribution,
         attenuation: float,
-        include_kinematics: bool,
         max_angle: float,
         y_restriction: Optional[Literal['positive', 'negative']] = None
-    ) -> Tuple[float, float, float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float]:
         """
         Sample a scattered ray from the foil.
         
         Args:
             rng: Random number generator
-            interaction: The process by which to generated rays, pre-calculated at the relevant energy.
+            theta_distribution: The scattering angle probability distribution, in radians
             attenuation: incident fluence falloff rate for z-sampling, in 1/m
                          (0 for uniform sampling; -inf for front-surface-only sampling)
             y_restriction: Restrict y to positive or negative half (None for full foil)
@@ -305,14 +318,13 @@ class ConversionFoil:
         
         # Sample scattering angles
         phi_scatter = 2 * np.pi * rng.random()
-        theta_scatter, recoil_energy = interaction.generate_recoil_particle(
-            rng, include_kinematics, max_angle)
+        theta_scatter = theta_distribution.draw(rng, upper=max_angle)
         
         # Adjust initial coordinates for transport through foil
         x0 += z0 * np.tan(theta_scatter) * np.cos(phi_scatter)
         y0 += z0 * np.tan(theta_scatter) * np.sin(phi_scatter)
         
-        return x0, y0, z0, theta_scatter, phi_scatter, recoil_energy
+        return x0, y0, z0, theta_scatter, phi_scatter
 
     
     def generate_recoil_particle(
@@ -348,6 +360,18 @@ class ConversionFoil:
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
         
+        # Limit scattering to the interactions that actually scatter
+        recoil_interactions = []
+        for interaction in self.interactions:
+            if interaction.generates_recoil_particles:
+                recoil_interactions.append(interaction)
+        
+        # Keep track of some energy-dependent things, as we may not need to recalculate them every time
+        previous_incident_energy = None
+        angle_distributions = None
+        interaction_weights = None
+        attenuation = None
+        
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
@@ -356,30 +380,41 @@ class ConversionFoil:
             # Sample incident particle energy from weighted distribution
             incident_energy = np.random.choice(incident_energies, p=energy_distribution)
             
-            # do the cross section calculations
-            interaction_weights = []
-            for interaction in self.interactions:
-                interaction.calculate_angular_distribution(incident_energy)
-                weight = (interaction.get_cross_section(incident_energy) *
-                          interaction.get_recoil_probability(max_angle))
-                interaction_weights.append(weight)
-            interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
-            
-            # Set up z-sampling probability
-            if z_sampling == 'exp':
-                attenuation = 0
-                for interaction in self.interactions:
-                    attenuation += interaction.get_cross_section(incident_energy)
-            else:  # uniform
-                attenuation = 0
+            # This part is a little expensive, so only do it if the incident energy is different from last time...
+            if incident_energy != previous_incident_energy:
+                # Do the cross section calculations
+                angle_distributions = {}
+                interaction_weights = []
+                for interaction in recoil_interactions:
+                    angle_distributions[interaction] = interaction.get_angle_distribution(incident_energy)
+                    weight = (interaction.get_cross_section(incident_energy) *
+                              angle_distributions[interaction].integral(0, max_angle))
+                    interaction_weights.append(weight)
+                interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
                 
-            interaction = rng.choice(self.interactions, p=interaction_weights)
-            x0, y0, z0, theta_scatter, phi_scatter, recoil_energy = self._sample_scattered_ray(
-                rng, interaction, attenuation, include_kinematics, max_angle, y_restriction,
+                # Set up z-sampling probability
+                if z_sampling == 'exp':  # exponential
+                    attenuation = 0
+                    for interaction in self.interactions:
+                        attenuation += interaction.get_cross_section(incident_energy)
+                else:  # uniform
+                    attenuation = 0
+                
+                previous_incident_energy = incident_energy
+                
+            interaction = rng.choice(recoil_interactions, p=interaction_weights)
+            x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                rng, angle_distributions[interaction], attenuation, max_angle, y_restriction,
             )
 
             # Check if recoil particle passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
+                # Initialize recoil energy
+                recoil_energy = interaction.get_recoil_energy(
+                    incident_energy,
+                    theta_scatter if include_kinematics else 0,
+                    rng)
+                
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
@@ -453,15 +488,18 @@ class ConversionFoil:
         # Calculate scattering probability in foil (non-parallelizable part)
         total_xs = 0
         effective_xs = 0
+        angle_distributions = {}
         interaction_weights = []
+        recoil_interactions = []
         for interaction in self.interactions:
-            interaction.calculate_angular_distribution(incident_energy)
             total_xs += interaction.get_cross_section(incident_energy)
-            effective_xs += (interaction.get_cross_section(incident_energy) *
-                             interaction.get_recoil_probability())
-            interaction_weights.append(
-                interaction.get_cross_section(incident_energy) *
-                interaction.get_recoil_probability(max_angle))
+            if interaction.generates_recoil_particles:
+                effective_xs += interaction.get_cross_section(incident_energy)
+                angle_distributions[interaction] = interaction.get_angle_distribution(incident_energy)
+                interaction_weights.append(
+                    interaction.get_cross_section(incident_energy) *
+                    angle_distributions[interaction].integral(0, max_angle))
+                recoil_interactions.append(interaction)
         angular_factor = effective_xs/sum(interaction_weights)  # the factor by which our sampling density is increased because we're using max_angle
         interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
         
@@ -480,8 +518,9 @@ class ConversionFoil:
                 worker_args.append((
                     batch_size,
                     12345 + i * 1000,  # seed_offset
-                    self.interactions,
+                    recoil_interactions,
                     interaction_weights,
+                    angle_distributions,
                     max_angle,
                 ))
                 
@@ -516,6 +555,7 @@ class ConversionFoil:
         seed_offset: int,
         interactions: list[Interaction],
         interaction_weights: np.ndarray,
+        angle_distributions: dict[Interaction, ProbabilityDistribution],
         max_angle: float,
         progress_counter,
         progress_lock
@@ -548,8 +588,8 @@ class ConversionFoil:
                 
                 # Sample scattered ray using helper method (no z-sampling for efficiency calculation)
                 interaction = rng.choice(interactions, p=interaction_weights)
-                x0, y0, _, theta_scatter, phi_scatter, _ = self._sample_scattered_ray(
-                    rng, interaction, include_kinematics=False, max_angle=max_angle, attenuation=-np.inf
+                x0, y0, _, theta_scatter, phi_scatter = self._sample_scattered_ray(
+                    rng, angle_distributions[interaction], max_angle=max_angle, attenuation=-np.inf
                 )
                 
                 # N.B. We do not consider the very small displacement due to foil thickness here
@@ -597,8 +637,8 @@ class ConversionFoil:
         # Weight distribution by scattering cross section and normalize
         interaction_probability = np.zeros_like(energy_distribution)
         for interaction in self.interactions:
-            interaction_probability += (interaction.get_cross_section(incident_energies) *
-                                        interaction.get_recoil_probability())
+            if interaction.generates_recoil_particles:
+                interaction_probability += interaction.get_cross_section(incident_energies)
         weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution = weighted_distribution / np.sum(weighted_distribution)
         

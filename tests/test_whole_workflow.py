@@ -19,7 +19,7 @@ def test_whole_workflow():
         ),
         "tests/test_map.txt",
         14.0,
-        10.5, 17.5,
+        9.4, 15.6,
         Hodoscope(
             channels_left=70,
             channels_right=30,
@@ -43,5 +43,5 @@ def test_whole_workflow():
     plotter.plot_phase_space()
     plotter.plot_characteristic_rays(radial_points=1, angular_points=8, aperture_radial_points=1, aperture_angular_points=8)
     plotter.plot_simple_position_histogram()
-    plotter.plot_monoenergetic_analysis(2.4, 2.4, 0.2)
-    plotter.plot_data(2.4)
+    plotter.plot_monoenergetic_analysis(14, 0, 0.1)
+    plotter.plot_data(14)

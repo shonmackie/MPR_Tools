@@ -4,13 +4,11 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
-from numpy import random, pi, inf, isclose, empty, degrees, array, mean, sqrt, std, linspace, log, exp, hypot, median, \
-    tan, cos, sin
+from numpy import random, pi, isclose, empty, degrees, log, exp, hypot, median, array, full
 
 from MPR_Tools import ConversionFoil
 from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
     PairProduction, ProbabilityDistribution
-
 
 os.makedirs('tests/output/figures', exist_ok=True)
 
@@ -24,7 +22,7 @@ def test_nC12_scatter():
     
     assert isclose(carbon_scatter.get_cross_section(14.0), 0.819214e-28, rtol=1e-9, atol=0)
     
-    assert carbon_scatter.get_recoil_probability() == 0
+    assert not carbon_scatter.generates_recoil_particles
 
 
 def test_np_scatter():
@@ -38,11 +36,13 @@ def test_np_scatter():
     
     assert isclose(proton_scatter.get_cross_section(14.0), 0.687562e-28, rtol=1e-9, atol=0)
     
+    assert isclose(proton_scatter.get_incident_energy(14.0), 14.0, atol=0.01)
+    
     angles, energies = generate_recoil_particles(proton_scatter, 14.0)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 14))
     
-    assert proton_scatter.get_recoil_probability() == 1
+    assert proton_scatter.generates_recoil_particles
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -65,11 +65,13 @@ def test_nd_scatter():
     
     assert isclose(deuteron_scatter.get_cross_section(14.0), 0.6435662e-28, rtol=1e-9, atol=0)
     
+    assert isclose(deuteron_scatter.get_incident_energy(12.444), 14.0, atol=0.01)
+    
     angles, energies = generate_recoil_particles(deuteron_scatter, 14.0)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 12.5))
     
-    assert deuteron_scatter.get_recoil_probability() == 1
+    assert deuteron_scatter.generates_recoil_particles
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -86,13 +88,15 @@ def test_compton_scatter():
         target_density=1,
     )
     
-    assert isclose(compton_scatter.get_macroscopic_cross_section(16.7), 0.0348e-28, rtol=0.05, atol=0)  # 3.5 mb is from the exact Klein-Nishina formula
+    assert isclose(compton_scatter.get_cross_section(16.7), 0.0348e-28, rtol=0.05, atol=0)  # 3.5 mb is from the exact Klein-Nishina formula
+    
+    assert isclose(compton_scatter.get_incident_energy(16.45), 16.7, atol=0.01)
     
     angles, energies = generate_recoil_particles(compton_scatter, 16.7)
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 16.45))
     
-    assert compton_scatter.get_recoil_probability() == 1
+    assert compton_scatter.generates_recoil_particles
     
     plt.figure()
     plt.hist(degrees(angles), density=True, bins=100)
@@ -116,7 +120,7 @@ def test_pair_production():
     assert all((angles >= 0) & (angles <= pi))
     assert all((energies >= 0) & (energies <= 15.7))
     
-    assert pair_production.get_recoil_probability() == 1
+    assert pair_production.generates_recoil_particles
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -137,27 +141,20 @@ def test_z_sampling():
         foil_material='B',
     )
     
-    scattering_process = ComptonScattering(1)
-    scattering_process.calculate_angular_distribution(16.7)
-    
     rng = random.default_rng(0)
+    dirac_delta = ProbabilityDistribution(array([-1e-20, 1e-20]), array([1, 1]))
     N = 10000
     x, y, z0, theta, phi = empty(N), empty(N), empty(N), empty(N), empty(N)
     for i in range(N):
-        x[i], y[i], z0[i], theta[i], phi[i], _ = foil._sample_scattered_ray(
+        x[i], y[i], z0[i], theta[i], phi[i] = foil._sample_scattered_ray(
             rng,
-            scattering_process,
+            dirac_delta,
             attenuation=1/20e-6,
-            include_kinematics=False,
             max_angle=pi/2,
         )
-        
-    # correct x and y so that it's birth location, not pass-thru-the-z-plane location
-    x0 = x - z0*tan(theta)*cos(phi)
-    y0 = y - z0*tan(theta)*sin(phi)
     
     theoretical_median = -50e-6 - 20e-6*log(0.5 + 0.5*exp(-50/20))
-    assert all(hypot(x0, y0) <= 1.5e-2)
+    assert all(hypot(x, y) <= 1.5e-2)
     assert all((z0 >= -50e-6) & (z0 <= 0e-6))
     assert isclose(median(z0), theoretical_median, atol=3*0.2e-6, rtol=0)  # the std is about 20 um, so random error is about 0.2 um
     
@@ -181,38 +178,13 @@ def test_z_sampling():
     plt.close()
 
 
-def test_probability_distribution():
-    # with spline interpolation, this set of points will make a parabolic probability distribution
-    x_table = array([10, 20, 30])
-    p_table = array([20, 10, 20])
-    distribution = ProbabilityDistribution(x_table, p_table)
-    
-    assert distribution.integral(20, inf) == 1/2
-    
-    rng = random.default_rng(0)
-    samples = empty(10000)
-    for i in range(samples.size):
-        samples[i] = distribution.draw(rng, lower=20, upper=inf)
-    assert all((samples >= 20) & (samples <= 30))
-    assert isclose(mean(samples), 25.625, atol=3*0.003)  # the standard deviation is about 0.3, so random error is about 0.003
-    assert isclose(std(samples), sqrt(8.359375), atol=3*0.003)
-    
-    plt.figure()
-    plt.hist(samples, density=True, bins=50)
-    x = linspace(20, 30)
-    plt.plot(x, .075 + .00075*(x - 20)**2, '--')
-    plt.title("Parabolic probability distribution")
-    plt.tight_layout()
-    plt.savefig("tests/output/figures/test_probability_distribution.png")
-    plt.close()
-
-
 def generate_recoil_particles(interaction: Interaction, incident_energy: float, num_particles=10000):
     rng = random.default_rng(0)
-    interaction.calculate_angular_distribution(incident_energy)
+    angle_distribution = interaction.get_angle_distribution(incident_energy)
     angles = empty(num_particles)
     energies = empty(num_particles)
     for i in range(num_particles):
-        angles[i], energies[i] = interaction.generate_recoil_particle(
-            include_kinematics=True, rng=rng, max_angle=pi)
+        angles[i] = angle_distribution.draw(rng=rng)
+        energies[i] = interaction.get_recoil_energy(
+            incident_energy, angles[i], rng=rng)
     return angles, energies

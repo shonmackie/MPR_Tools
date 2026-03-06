@@ -38,8 +38,8 @@ class MPRSpectrometer:
             conversion_foil: ConversionFoil object
             transfer_map_path: Path to COSY transfer map file
             reference_energy: Reference energy in MeV
-            min_energy: Minimum acceptance energy in MeV
-            max_energy: Maximum acceptance energy in MeV
+            min_energy: Minimum recoil particle acceptance energy in MeV
+            max_energy: Maximum recoil particle acceptance energy in MeV
             hodoscope: Hodoscope detector system
             run_directory: Directory for saving run data and figures
         """
@@ -59,6 +59,10 @@ class MPRSpectrometer:
         if not os.path.exists(self.data_directory):
             os.makedirs(self.data_directory)
         
+        # calculate approximate incident particle energy bounds
+        self.min_incident_energy = conversion_foil.get_incident_energy(min_energy)
+        self.max_incident_energy = conversion_foil.get_incident_energy(max_energy)
+        
         # Load transfer map
         # TODO: add functionality to check if a calibration curve exists for this map. If not, generate one!
         self.transfer_map = np.genfromtxt(transfer_map_path, unpack=True)
@@ -68,7 +72,7 @@ class MPRSpectrometer:
         self.input_beam: np.ndarray = np.zeros(0)
         self.output_beam: np.ndarray = np.zeros(0)
         
-        print(f'M{conversion_foil.particle[0].capitalize()}R spectrometer initialization complete.\n')
+        print(f'MPR spectrometer initialization complete.\n')
     
     def generate_characteristic_rays(
         self,
@@ -204,16 +208,16 @@ class MPRSpectrometer:
         
         # Narrow energy distribution unless doing monoenergetic performance
         if len(incident_energies) > 1:
-            # Only use incident energies within acceptance range
-            idx = (incident_energies >= self.min_energy) & (incident_energies <= self.max_energy)
+            # Only use incident energies that can possibly produce recoil energies within acceptance range
+            idx = incident_energies >= self.min_energy
             incident_energies = incident_energies[idx]
             energy_distribution = energy_distribution[idx]
         
         # Weight energy distribution by scattering cross section
         interaction_probability = np.zeros_like(energy_distribution)
         for interaction in self.conversion_foil.interactions:
-            interaction_probability += (interaction.get_cross_section(incident_energies) *
-                                        interaction.get_recoil_probability())
+            if interaction.generates_recoil_particles:
+                interaction_probability += interaction.get_cross_section(incident_energies)
         weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution /= np.sum(weighted_distribution)
         
@@ -282,7 +286,7 @@ class MPRSpectrometer:
                     incident_energies,
                     weighted_distribution,
                     include_kinematics, 
-                    include_stopping_power_loss, 
+                    include_stopping_power_loss,
                     z_sampling=z_sampling,
                     rng=rng,  # Pass the worker's RNG
                     y_restriction=y_restriction
@@ -366,7 +370,7 @@ class MPRSpectrometer:
         
         output_batches = run_concurrently(
             self._apply_transfer_map_worker, worker_args, executor,
-            progress_counter_total=num_recoil_particles,
+            progress_counter_total=self.transfer_map.shape[1]*max_workers,
             task_title=f'Applying order {map_order} transfer map',
         )
         
@@ -400,9 +404,8 @@ class MPRSpectrometer:
             
         Returns:
             Batch of output rays [N x 5]
-        """        
+        """
         batch_size = len(input_batch)
-        output_batch = np.zeros((batch_size, 5))
         
         ### Convert last column of transfer map to monomial powers for each term ###
         # Need to convert term powers to integers
@@ -419,24 +422,22 @@ class MPRSpectrometer:
         term_powers_array = np.array([list(s) for s in term_indices_str], dtype=int)
         
         ### Apply transfer map to each recoil ray ###
-        for i, input_ray in enumerate(input_batch):
-            # Initialize output ray with input energy
-            output_ray = np.array([0.0, 0.0, 0.0, 0.0, input_ray[4]])
-            
-            # Apply each map term
-            for j, term_powers in enumerate(term_powers_array):                
-                # Only include terms up to specified order
-                if np.sum(term_powers) <= map_order:
-                    # Calculate monomial term
-                    monomial = np.prod([input_ray[k]**term_powers[k] for k in range(4)]) * input_ray[4]**term_powers[5]
-                    if mass_included:
-                        monomial *= relative_mass**term_powers[6]
+        # Initialize output ray with input energy
+        output_batch = np.zeros((batch_size, 5))
+        output_batch[:, 4] = input_batch[:, 4]
+        
+        # Apply each map term
+        for j, term_powers in enumerate(term_powers_array):
+            # Only include terms up to specified order
+            if np.sum(term_powers) <= map_order:
+                # Calculate monomial term
+                monomial = np.prod([input_batch[:, k]**term_powers[k] for k in range(4)], axis=0) * input_batch[:, 4]**term_powers[5]
+                if mass_included:
+                    monomial *= relative_mass**term_powers[6]
                     
-                    # Add contributions to each coordinate
-                    for coord in range(4):  # x, p_x, y, p_y
-                        output_ray[coord] += transfer_map[coord, j] * monomial
-            
-            output_batch[i] = output_ray
+                # Add contributions to each coordinate
+                for coord in range(4):  # x, p_x, y, p_y
+                    output_batch[:, coord] += transfer_map[coord, j] * monomial
             
             # Update progress counter thread-safely
             with progress_lock:
