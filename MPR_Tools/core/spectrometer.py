@@ -216,8 +216,8 @@ class MPRSpectrometer:
         # Weight energy distribution by scattering cross section
         interaction_probability = np.zeros_like(energy_distribution)
         for interaction in self.conversion_foil.interactions:
-            interaction_probability += (interaction.get_cross_section(incident_energies) *
-                                        interaction.get_recoil_probability())
+            if interaction.generates_recoil_particles:
+                interaction_probability += interaction.get_cross_section(incident_energies)
         weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution /= np.sum(weighted_distribution)
         

@@ -962,9 +962,8 @@ class SpectrometerPlotter:
         angles_deg = np.degrees(angles_rad)
         
         for interaction in foil.interactions:
-            interaction.calculate_angular_distribution(energy_MeV)
-            if hasattr(interaction, 'angle_distribution'):
-                diff_xs_lab = interaction.angle_distribution.pdf(angles_rad)
+            if interaction.generates_recoil_particles:
+                diff_xs_lab = interaction.get_angle_distribution(energy_MeV).pdf(angles_rad)
                 axs[0].plot(angles_deg, diff_xs_lab, 'tab:blue', linewidth=2)
                 
         axs[0].set_xlabel('Angle [deg]')
@@ -1003,9 +1002,8 @@ class SpectrometerPlotter:
             title = f'{foil.particle} and {foil2.particle} at {energy_MeV:.2f} MeV'
             
             for interaction in foil2.interactions:
-                interaction.calculate_angular_distribution(energy_MeV)
-                if hasattr(interaction, 'angle_distribution'):
-                    diff_xs_lab2 = interaction.angle_distribution.pdf(angles_rad)
+                if interaction.generates_recoil_particles:
+                    diff_xs_lab2 = interaction.get_angle_distribution(energy_MeV).pdf(angles_rad)
                     axs[0].plot(angles_deg, diff_xs_lab2, 'darkorange', linewidth=2)
             
             # n-hydron cross section data

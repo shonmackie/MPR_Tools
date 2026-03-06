@@ -4,13 +4,11 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
-from numpy import random, pi, inf, isclose, empty, degrees, array, mean, sqrt, std, linspace, log, exp, hypot, median, \
-    tan, cos, sin
+from numpy import random, pi, isclose, empty, degrees, log, exp, hypot, median, array, full
 
 from MPR_Tools import ConversionFoil
 from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
     PairProduction, ProbabilityDistribution
-
 
 os.makedirs('tests/output/figures', exist_ok=True)
 
@@ -24,7 +22,7 @@ def test_nC12_scatter():
     
     assert isclose(carbon_scatter.get_cross_section(14.0), 0.819214e-28, rtol=1e-9, atol=0)
     
-    assert carbon_scatter.get_recoil_probability() == 0
+    assert not carbon_scatter.generates_recoil_particles
 
 
 def test_np_scatter():
@@ -44,7 +42,7 @@ def test_np_scatter():
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 14))
     
-    assert proton_scatter.get_recoil_probability() == 1
+    assert proton_scatter.generates_recoil_particles
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -73,7 +71,7 @@ def test_nd_scatter():
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 12.5))
     
-    assert deuteron_scatter.get_recoil_probability() == 1
+    assert deuteron_scatter.generates_recoil_particles
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -98,7 +96,7 @@ def test_compton_scatter():
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 16.45))
     
-    assert compton_scatter.get_recoil_probability() == 1
+    assert compton_scatter.generates_recoil_particles
     
     plt.figure()
     plt.hist(degrees(angles), density=True, bins=100)
@@ -122,7 +120,7 @@ def test_pair_production():
     assert all((angles >= 0) & (angles <= pi))
     assert all((energies >= 0) & (energies <= 15.7))
     
-    assert pair_production.get_recoil_probability() == 1
+    assert pair_production.generates_recoil_particles
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -143,27 +141,20 @@ def test_z_sampling():
         foil_material='B',
     )
     
-    scattering_process = ComptonScattering(1)
-    scattering_process.calculate_angular_distribution(16.7)
-    
     rng = random.default_rng(0)
+    dirac_delta = ProbabilityDistribution(array([-1e-20, 1e-20]), array([1, 1]))
     N = 10000
     x, y, z0, theta, phi = empty(N), empty(N), empty(N), empty(N), empty(N)
     for i in range(N):
-        x[i], y[i], z0[i], theta[i], phi[i], _ = foil._sample_scattered_ray(
+        x[i], y[i], z0[i], theta[i], phi[i] = foil._sample_scattered_ray(
             rng,
-            scattering_process,
+            dirac_delta,
             attenuation=1/20e-6,
-            include_kinematics=False,
             max_angle=pi/2,
         )
-        
-    # correct x and y so that it's birth location, not pass-thru-the-z-plane location
-    x0 = x - z0*tan(theta)*cos(phi)
-    y0 = y - z0*tan(theta)*sin(phi)
     
     theoretical_median = -50e-6 - 20e-6*log(0.5 + 0.5*exp(-50/20))
-    assert all(hypot(x0, y0) <= 1.5e-2)
+    assert all(hypot(x, y) <= 1.5e-2)
     assert all((z0 >= -50e-6) & (z0 <= 0e-6))
     assert isclose(median(z0), theoretical_median, atol=3*0.2e-6, rtol=0)  # the std is about 20 um, so random error is about 0.2 um
     
@@ -189,10 +180,11 @@ def test_z_sampling():
 
 def generate_recoil_particles(interaction: Interaction, incident_energy: float, num_particles=10000):
     rng = random.default_rng(0)
-    interaction.calculate_angular_distribution(incident_energy)
+    angle_distribution = interaction.get_angle_distribution(incident_energy)
     angles = empty(num_particles)
     energies = empty(num_particles)
     for i in range(num_particles):
-        angles[i], energies[i] = interaction.generate_recoil_particle(
-            include_kinematics=True, rng=rng, max_angle=pi)
+        angles[i] = angle_distribution.draw(rng=rng)
+        energies[i] = interaction.get_recoil_energy(
+            incident_energy, angles[i], rng=rng)
     return angles, energies
