@@ -15,4 +15,3 @@ There are also tests meant to be run using Pytest.
 After pip installing MPR_Tools to your python path, navigate to the the directory this README is in and run `python -m pytest`.
 If something is wrong with the code, they'll raise an error.
 It also saves a bunch of plots to `tests/output/`.  Check those out to make sure they look okay and normal.
-Except `characteristic_rays.png`; that one never looks normal and I don't know why.
