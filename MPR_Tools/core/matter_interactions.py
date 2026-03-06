@@ -234,9 +234,10 @@ class ComptonScattering:
     @staticmethod
     def _convert_to_electron_angle(incident_energy: float, photon_angle: np.ndarray) -> np.ndarray:
         a_0 = incident_energy / ELECTRON_REST_ENERGY
-        electron_angle = np.arctan(
-            1 / ((a_0 + 1) * np.tan(photon_angle / 2))
-        )
+        with np.errstate(divide='ignore'):  # there's a divide-by-zero that we can ignore here because arctan handles it just fine
+            electron_angle = np.arctan(
+                1 / ((a_0 + 1) * np.tan(photon_angle / 2))
+            )
         return electron_angle
     
     @staticmethod
