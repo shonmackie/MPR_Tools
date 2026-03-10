@@ -187,7 +187,7 @@ class HodoscopeCreator:
 
         energies = performance_df['energy [MeV]'].to_numpy()
         positions = performance_df['position [m]'].to_numpy()
-        fwhms = performance_df['position fwhm [m]'].to_numpy()
+        widths = performance_df['position width [m]'].to_numpy()
 
         if filename is None:
             filename = f'{self.spectrometer.figure_directory}/hodoscope_bins.png'
@@ -195,18 +195,18 @@ class HodoscopeCreator:
             filename = f'{self.spectrometer.figure_directory}/{filename}'
 
         # Interpolator for drawing the staircase
-        width_of_energy = interp1d(energies, fwhms, bounds_error=False,
-                                      fill_value=(fwhms[0], fwhms[-1]))
+        width_of_energy = interp1d(energies, widths, bounds_error=False,
+                                      fill_value=(widths[0], widths[-1]))
 
         fig, ax = plt.subplots(figsize=(9, 5))
 
-        # Background: performance curve with ±fwhm/2 band
+        # Background: performance curve with ±width/2 band
         ax.plot(energies, positions * 100, color='tab:orange', linewidth=2, label='Position')
         ax.fill_between(
             energies,
-            (positions - fwhms / 2) * 100,
-            (positions + fwhms / 2) * 100,
-            alpha=0.25, color='tab:orange', label='FWHM',
+            (positions - widths / 2) * 100,
+            (positions + widths / 2) * 100,
+            alpha=0.25, color='tab:orange', label='width',
         )
 
         # Staircase lines: each vertical at bin center, each horizontal at the junction
@@ -224,7 +224,7 @@ class HodoscopeCreator:
         last_bin_top   = (bin_positions[-1] + last_bin_width / 2) * 100
         ax.plot([bin_energies[-1], energies[-1]], [last_bin_top, last_bin_top],
                 color=staircase_color, linewidth=1.2, alpha=0.8)
-
+        breakpoint()
         for i, (bin_energy, bin_position) in enumerate(zip(bin_energies, bin_positions)):
             bin_width = float(width_of_energy(bin_energy))
             bin_bottom = (bin_position - bin_width / 2) * 100

@@ -388,13 +388,13 @@ class PerformanceAnalyzer:
             raise ValueError('Performance curve file not found. May need to generate first.')
         incident_energies = performance_df['energy [MeV]']
         position_mean = performance_df['position [m]']
-        position_std = performance_df['position fwhm [m]']
+        position_width = performance_df['position width [m]']
         gradient = performance_df['gradient [m/MeV]']
         
         # Interpolate to get the energies for the x positions
         energies = np.interp(x_positions, position_mean, incident_energies)
         # Calculate energy uncertainty sigma_E = sigma_x / |dx/dE|
-        energies_std = np.interp(x_positions, position_mean, position_std / np.abs(gradient))
+        energies_std = np.interp(x_positions, position_mean, position_width / np.abs(gradient))
         
         return response_values, total_background, energies, energies_std
     

@@ -868,15 +868,15 @@ class SpectrometerPlotter:
             # Extract data from DataFrame
             energies = grp['energy [MeV]'].to_numpy()
             positions = grp['position [m]'].to_numpy()
-            position_fwhm = grp['position fwhm [m]'].to_numpy()
+            position_width = grp['position width [m]'].to_numpy()
             energy_resolutions = grp['resolution [keV]'].to_numpy()
             total_efficiencies = grp['total efficiency'].to_numpy()
 
-            # Plot position curve (center of half-max interval) with ±fwhm/2 band
+            # Plot position curve (center of half-max interval) with ±width/2 band
             position_line = ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
                     label=f'Position')
-            ax1.fill_between(energies, (positions - position_fwhm / 2) * 100,
-                            (positions + position_fwhm / 2) * 100,
+            ax1.fill_between(energies, (positions - position_width / 2) * 100,
+                            (positions + position_width / 2) * 100,
                             alpha=0.3, color=color_position)
             ax1.grid(True, alpha=0.3)
             ax1.tick_params(axis='y', labelcolor=color_position)
