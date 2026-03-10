@@ -787,8 +787,6 @@ class SpectrometerPlotter:
     def plot_monoenergetic_analysis(
         self,  
         incident_energy: float,
-        mean_pos: float, 
-        std_dev: float,
         filename: Optional[str] = None,
     ) -> None:
         """Generate analysis plots for monoenergetic performance."""
@@ -805,12 +803,6 @@ class SpectrometerPlotter:
         x_positions = self.spectrometer.output_beam[:, 0]*100 # cm
         
         axes[0].hist(x_positions, bins=30, alpha=0.7, density=True, label='Simulation')
-        
-        # Gaussian fit overlay
-        x_fit = np.linspace(x_positions.min(), x_positions.max(), 100)
-        gaussian_fit = norm.pdf(x_fit, mean_pos * 100, std_dev * 100)
-        axes[0].plot(x_fit, gaussian_fit, 'r-', label='Gaussian Fit', linewidth=2)
-        
         axes[0].set_xlabel('X Position [cm]')
         axes[0].set_ylabel('Probability Density')
         axes[0].set_title(f'X-Position Distribution\n{incident_energy:.1f} MeV {self.spectrometer.conversion_foil.incident_particle.capitalize()}s')

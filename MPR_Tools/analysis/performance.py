@@ -28,19 +28,20 @@ class PerformanceAnalyzer:
             raise ValueError(f"Unsupported spectrometer type: {type(spectrometer)}")
     
     @staticmethod
-    def fwhm(data: np.ndarray, bandwidth_method: str | float = "scott", _recursions=0) -> tuple[float, float]:
+    def fwfm(data: np.ndarray, fractional_max, bandwidth_method: str | float = "scott", _recursions=0) -> tuple[float, float]:
         """
-        Estimate the FWHM of a 1D distribution using a KDE.
+        Estimate the full-width fractional-max (FWFM) of a 1D distribution using a KDE.
 
         Parameters
         ----------
         data      : 1D array of position samples
+        fractional_max : Fractional position at which to estimate the full width (e.g. 0.5 for FWHM)
         bandwidth_method : KDE bandwidth — "scott", "silverman", or a sigma as a float in data units
         _recursions: The number of times this function has called itself
 
         Returns
         -------
-        FWHM as a float, and the center of the half-max interval as a float
+        FWFM as a float, and the center of the fractional-max interval as a float
         """
         data = np.asarray(data, dtype=float)
 
@@ -55,14 +56,14 @@ class PerformanceAnalyzer:
         x = np.linspace(data.min(), data.max(), round(5 * (data.max() - data.min()) / bandwidth))
         y = kde(x)
 
-        # Find the most extreme data points where y >= half_max
-        half_max = y.max() / 2
-        roots = UnivariateSpline(x, y - half_max, s=0).roots()
-        if y[0] >= half_max:
+        # Find the most extreme data points where y >= y_cutoff
+        y_cutoff = y.max() * fractional_max
+        roots = UnivariateSpline(x, y - y_cutoff, s=0).roots()
+        if y[0] >= y_cutoff:
             lower = x[0]
         else:
             lower = roots[0]
-        if y[-1] >= half_max:
+        if y[-1] >= y_cutoff:
             upper = x[-1]
         else:
             upper = roots[-1]
@@ -74,8 +75,8 @@ class PerformanceAnalyzer:
         if full_width < 3*bandwidth and _recursions < 5:
             # Reduce the kernel size to aim for bandwidth < full_width/3
             reduction = 4*bandwidth/full_width
-            return PerformanceAnalyzer.fwhm(
-                data, bandwidth_method=bandsigma/reduction, _recursions=_recursions + 1)
+            return PerformanceAnalyzer.fwfm(
+                data, fractional_max, bandwidth_method=bandsigma/reduction, _recursions=_recursions + 1)
         
         else:
             return full_width, position
@@ -85,13 +86,14 @@ class PerformanceAnalyzer:
         incident_energy: float,
         delta_energy: float = 0.05,
         num_recoil_particles: int = 10000,
+        fractional_max: float = 0.5,
         spectrometer: Optional[MPRSpectrometer] = None,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         verbose: bool = False,
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
-    ) -> Tuple[float, float, float, float, float]:
+    ) -> Tuple[float, float, float, float]:
         """
         Analyze spectrometer performance for monoenergetic incident particles.
         
@@ -99,6 +101,7 @@ class PerformanceAnalyzer:
             incident_energy: Incident particle energy in MeV
             delta_energy: Percentage deviation from target energy for resolution calculation
             num_recoil_particles: Number of recoil particles to simulate
+            fractional_max: Fractional position at which to estimate the full width (e.g. 0.5 for FWHM)
             spectrometer: MPRSpectrometer to analyze (defaults to self.spectrometer)
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
@@ -107,7 +110,7 @@ class PerformanceAnalyzer:
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of (mean_position in m, std_deviation in m, fwhm in m, energy_resolution in keV, dispersion in m/MeV)
+            Tuple of (position_mean in m, std_deviation in m, fwfm in m, energy_resolution in keV, dispersion in m/MeV)
         """
         if spectrometer is None:
             spectrometer = self.spectrometer
@@ -129,42 +132,41 @@ class PerformanceAnalyzer:
             )
             spectrometer.apply_transfer_map(
                 map_order=5, save_beam=False, executor=executor, max_workers=max_workers)
-            x_positions = spectrometer.output_beam[:, 0]
-            mean_position, std_deviation = norm.fit(x_positions)
-            return mean_position, std_deviation
+            positions = spectrometer.output_beam[:, 0]
+            position_width, position_mean = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
+            return position_mean, position_width
         
         # Analyze focal plane distribution of target energy +/- delta
         E_low = incident_energy * (1 - delta_energy)
         E_high = incident_energy * (1 + delta_energy)
         # To save compute time, since we're only interested in the mean, use less recoils
-        mean_position_low, std_deviation_low = _get_positions(E_low, num_recoil_particles // 10)
-        mean_position_high, std_deviation_high = _get_positions(E_high, num_recoil_particles // 10)
+        position_mean_low, position_width_low = _get_positions(E_low, num_recoil_particles // 10)
+        position_mean_high, position_width_high = _get_positions(E_high, num_recoil_particles // 10)
         
         # Analyze focal plane distribution of target energy beamlet
-        mean_position_0, std_deviation_0 = _get_positions(incident_energy, num_recoil_particles)
-        fwhm_0 = 2 * np.sqrt(2 * np.log(2)) * std_deviation_0
+        position_mean_0, position_width_0 = _get_positions(incident_energy, num_recoil_particles)
 
-        mean_positions = np.r_[mean_position_low, mean_position_0, mean_position_high]
+        position_means = np.r_[position_mean_low, position_mean_0, position_mean_high]
         energies = np.r_[E_low, incident_energy, E_high]
 
-        dispersion = np.gradient(mean_positions, energies)[1]
+        dispersion = np.gradient(position_means, energies)[1]
 
-        energy_resolution = 1000 / (dispersion / fwhm_0) if fwhm_0 > 0 else 0 # keV
+        energy_resolution = 1000 / (dispersion / position_width_0) if position_width_0 > 0 else 0 # keV
 
         if verbose:
             print('Ion Optical Image Parameters:')
-            print(f'  Mean position [cm]: {mean_position_0 * 100:.3f}')
-            print(f'  Standard deviation [cm]: {std_deviation_0 * 100:.3f}')
-            print(f'  FWHM [cm]: {fwhm_0 * 100:.3f}')
+            print(f'  Mean position [cm]: {position_mean_0 * 100:.3f}')
+            print(f'  fwfm [cm]: {position_width_0 * 100:.3f}')
             print(f'  Energy resolution [keV]: {energy_resolution:.2f}')
         
-        return mean_position_0, std_deviation_0, fwhm_0, energy_resolution, dispersion
+        return position_mean_0, position_width_0, energy_resolution, dispersion
     
     def generate_performance_curve(
         self,
         num_energies: int = 40,
         num_recoils_per_energy: int = 10000,
         num_efficiency_samples: int = 10000,
+        fractional_max: float = 0.5,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         output_filename: Optional[str] = None,
@@ -180,6 +182,7 @@ class PerformanceAnalyzer:
             num_energies: Number of energy points to simulate
             num_recoils_per_energy: Number of recoil events per energy point for location/resolution
             num_efficiency_samples: Number of samples for efficiency calculation
+            fractional_max: Fraction of maximum of spatial peak to use for resolution calculation (defaults to 0.5 for FWHM)
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
@@ -188,7 +191,7 @@ class PerformanceAnalyzer:
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Pandas dataframe containing energies in MeV, position (center of half-max interval) in m, positions_fwhm in m, energy_resolutions in keV, total_efficiencies, foil_species
+            Pandas dataframe containing energies in MeV, position (center of fractional-max interval) in m, positions_width in m, energy_resolutions in keV, total_efficiencies, foil_species
         """
         print('\nGenerating comprehensive performance analysis...')
 
@@ -214,7 +217,7 @@ class PerformanceAnalyzer:
                 energies = np.linspace(spec.min_incident_energy, spec.max_incident_energy, num_energies)
 
                 positions_mean = np.zeros_like(energies)
-                positions_fwhm = np.zeros_like(energies)
+                positions_width = np.zeros_like(energies)
                 gradients = np.zeros_like(energies)
                 energy_resolutions = np.zeros_like(energies)
                 scattering_efficiencies = np.zeros_like(energies)
@@ -236,7 +239,7 @@ class PerformanceAnalyzer:
                         max_workers=max_workers)
                     
                     positions = spec.output_beam[:,0]
-                    positions_fwhm[i], positions_mean[i] = PerformanceAnalyzer.fwhm(positions)
+                    positions_width[i], positions_mean[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
                     
                     # Calculate efficiency for this energy
                     scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
@@ -251,14 +254,15 @@ class PerformanceAnalyzer:
                 
                 # calculate dispersion gradient and energy resolution from monoenergetic beamlet results
                 gradients = np.gradient(positions_mean, energies)  # m/MeV
-                energy_resolutions = positions_fwhm/gradients * 1000 # keV
+                energy_resolutions = positions_width/gradients * 1000 # keV
 
                 # Create DataFrame for this foil
                 foil_df = pd.DataFrame({
                     'foil': foil_name,
                     'energy [MeV]': energies,
                     'position [m]': positions_mean,
-                    'position fwhm [m]': positions_fwhm,
+                    'position width [m]': positions_width,
+                    'fractional max': fractional_max,
                     'gradient [m/MeV]': gradients,
                     'resolution [keV]': energy_resolutions,
                     'scattering efficiency': scattering_efficiencies,

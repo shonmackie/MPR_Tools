@@ -45,7 +45,9 @@ class HodoscopeCreator:
         self,
         start_energy: float,
         performance_curve_file: Optional[str] = None,
-        fractional_max: float = 0.5,
+        peak_energy_min: Optional[float] = None,
+        peak_energy_max: Optional[float] = None,
+        n_peak_bins: Optional[int] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Generate hodoscope bin boundaries using the staircase algorithm.
@@ -56,10 +58,9 @@ class HodoscopeCreator:
                 ``PerformanceAnalyzer.generate_performance_curve()``.
                 Defaults to the standard location inside the spectrometer's
                 data directory.
-            fractional_max: Fraction of the peak used to define the bin width.
-                ``0.5`` (default) gives the FWHM.  For other values the width
-                is scaled from the stored FWHM using the Gaussian approximation
-                ``width(f) = FWHM * sqrt(log(2) / log(1/f))``.
+            peak_energy_min: If provided, the lower bound of a signal peak region.
+            peak_energy_max: If provided, the upper bound of a signal peak region.
+            n_peak_bins: If provided along with the peak energy bounds, the number of narrow bins to place within the signal peak region.
 
         Returns:
             bin_energies  : Center energy of each bin [MeV], shape (N,).
@@ -76,31 +77,34 @@ class HodoscopeCreator:
 
         energies = performance_df['energy [MeV]'].to_numpy()
         positions = performance_df['position [m]'].to_numpy()
-        fwhms = performance_df['position fwhm [m]'].to_numpy()
+        # Default width is FWHM, but can be any fractional max interval depending on how the performance curve was generated
+        widths = performance_df['position width [m]'].to_numpy() 
 
-        # Scale FWHM for non-half-max fractions (Gaussian approximation)
-        if fractional_max != 0.5:
-            scale = np.sqrt(np.log(2) / np.log(1.0 / fractional_max))
-            widths = fwhms * scale
-        else:
-            widths = fwhms
+        # Position interpolator (built first so we can use it for the signal region below)
+        position_of_energy = interp1d(energies, positions, bounds_error=False,
+                                      fill_value=(positions[0], positions[-1]))
+
+        # Narrow bins in the signal peak region so it is well resolved
+        if peak_energy_min and peak_energy_max and n_peak_bins:
+            # Convert target energy bin width to position width using the position interpolator
+            peak_range_width = (position_of_energy(peak_energy_max) - position_of_energy(peak_energy_min)) / n_peak_bins
+            signal_region_mask = (energies >= peak_energy_min) & (energies <= peak_energy_max)
+            widths = np.where(signal_region_mask, np.minimum(widths, peak_range_width), widths)
 
         # Half-width bounds as a function of energy
         lower_bounds = positions - widths / 2  # lower edge of each bin
         upper_bounds = positions + widths / 2  # upper edge of each bin
 
-        # Monotone interpolators: energy → position / width
-        position_of_energy = interp1d(energies, positions, bounds_error=False,
-                                      fill_value=(positions[0], positions[-1]))
+        # Width interpolator (built after widths are finalized)
         width_of_energy = interp1d(energies, widths, bounds_error=False,
-                                      fill_value=(widths[0], widths[-1]))
+                                   fill_value=(widths[0], widths[-1]))
 
         # Inverse interpolators for the staircase step:
         #   given a target position on the lower/upper bound curve, find energy
         energy_of_lower_bound = interp1d(lower_bounds, energies, bounds_error=False,
-                                         fill_value='extrapolate')  # type: ignore[arg-type]
+                                         fill_value='extrapolate')
         energy_of_upper_bound = interp1d(upper_bounds, energies, bounds_error=False,
-                                         fill_value='extrapolate')  # type: ignore[arg-type]
+                                         fill_value='extrapolate')
 
         energy_min, energy_max = energies[0], energies[-1]
 
@@ -160,6 +164,8 @@ class HodoscopeCreator:
         bin_positions: np.ndarray,
         performance_curve_file: Optional[str] = None,
         filename: Optional[str] = None,
+        peak_energy_min: Optional[float] = None,
+        peak_energy_max: Optional[float] = None,
     ) -> None:
         """
         Plot the staircase bin layout overlaid on the performance curve.
@@ -170,6 +176,8 @@ class HodoscopeCreator:
             performance_curve_file: Optional path to performance CSV.
             filename: Output filename.  Defaults to
                 ``<figure_directory>/hodoscope_bins.png``.
+            peak_energy_min: If provided, the lower bound of a signal peak region to highlight on the plot.
+            peak_energy_max: If provided, the upper bound of a signal peak region to highlight on the plot.
         """
         # Load performance curve
         performance_curve_file = performance_curve_file or 'comprehensive_performance.csv'
@@ -238,6 +246,10 @@ class HodoscopeCreator:
             color=staircase_color, zorder=5, s=30,
             label=f'{len(bin_energies)} bins',
         )
+
+        # Highlight signal peak region if provided
+        if peak_energy_min and peak_energy_max:
+            ax.axvspan(peak_energy_min, peak_energy_max, color='tab:green', alpha=0.2, zorder=0, label='Signal Peak Region')
 
         incident_particle = self.spectrometer.conversion_foil.incident_particle.capitalize()
         ax.set_xlabel(f'{incident_particle} Energy [MeV]')
