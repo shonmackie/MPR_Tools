@@ -212,19 +212,6 @@ class HodoscopeCreator:
         # Staircase lines: each vertical at bin center, each horizontal at the junction
         # between adjacent bins. At the borders, extend by one bin spacing to close the staircase.
         staircase_color = 'tab:blue'
-
-        # Left border: extend the first bin's bottom edge to the start of the energy range
-        first_bin_width  = float(width_of_energy(bin_energies[0]))
-        first_bin_bottom = (bin_positions[0] - first_bin_width / 2) * 100
-        ax.plot([energies[0], bin_energies[0]], [first_bin_bottom, first_bin_bottom],
-                color=staircase_color, linewidth=1.2, alpha=0.8)
-
-        # Right border: extend the last bin's top edge to the end of the energy range
-        last_bin_width = float(width_of_energy(bin_energies[-1]))
-        last_bin_top   = (bin_positions[-1] + last_bin_width / 2) * 100
-        ax.plot([bin_energies[-1], energies[-1]], [last_bin_top, last_bin_top],
-                color=staircase_color, linewidth=1.2, alpha=0.8)
-        breakpoint()
         for i, (bin_energy, bin_position) in enumerate(zip(bin_energies, bin_positions)):
             bin_width = float(width_of_energy(bin_energy))
             bin_bottom = (bin_position - bin_width / 2) * 100
