@@ -188,7 +188,7 @@ class PerformanceAnalyzer:
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Pandas dataframe containing energies in MeV, positions_mean in m, positions_fwhm in m, energy_resolutions in keV, total_efficiencies, foil_species
+            Pandas dataframe containing energies in MeV, position (center of half-max interval) in m, positions_fwhm in m, energy_resolutions in keV, total_efficiencies, foil_species
         """
         print('\nGenerating comprehensive performance analysis...')
 
@@ -257,7 +257,7 @@ class PerformanceAnalyzer:
                 foil_df = pd.DataFrame({
                     'foil': foil_name,
                     'energy [MeV]': energies,
-                    'position mean [m]': positions_mean,
+                    'position [m]': positions_mean,
                     'position fwhm [m]': positions_fwhm,
                     'gradient [m/MeV]': gradients,
                     'resolution [keV]': energy_resolutions,
@@ -383,8 +383,8 @@ class PerformanceAnalyzer:
         if performance_df is None:
             raise ValueError('Performance curve file not found. May need to generate first.')
         incident_energies = performance_df['energy [MeV]']
-        position_mean = performance_df['position mean [m]']
-        position_std = performance_df['position std [m]']
+        position_mean = performance_df['position [m]']
+        position_std = performance_df['position fwhm [m]']
         gradient = performance_df['gradient [m/MeV]']
         
         # Interpolate to get the energies for the x positions
