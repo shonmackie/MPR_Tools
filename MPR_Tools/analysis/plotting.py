@@ -10,6 +10,7 @@ from matplotlib.colors import Normalize
 from scipy.stats import norm
 from scipy.interpolate import griddata
 from labellines import labelLines
+import pandas as pd
 
 # Set default plotting parameters
 plt.rcParams['font.size'] = 16
@@ -22,7 +23,6 @@ from ..analysis.performance import PerformanceAnalyzer
 
 if TYPE_CHECKING:
     from ..analysis.parameter_sweep import FoilSweeper
-    import pandas as pd
 
 class SpectrometerPlotter:
     """Handles all plotting functionality for MPR spectrometer."""
@@ -429,7 +429,7 @@ class SpectrometerPlotter:
             fontsize=12
         )
         
-        particle_rest_energy = self.spectrometer.particle_mass*931.494  # MeV
+        particle_rest_energy = self.spectrometer.conversion_foil.particle_mass*931.494  # MeV
         reference_gamma = 1 + self.spectrometer.reference_energy/particle_rest_energy  # Lorentz factor of the reference particle
 
         # Draw sample of input rays
@@ -438,11 +438,11 @@ class SpectrometerPlotter:
         
         for i in range(0, len(self.spectrometer.input_beam), max(1, len(self.spectrometer.input_beam) // num_rays_to_plot)):
             ray = self.spectrometer.input_beam[i]
-            x0, p_x_relative, y0, p_y_relative, energy_relative = ray
+            x0, p_x_relative, y0, p_y_relative, energy_relative, incident_energy = ray
             y0 *= 100 # cm
             
             # Calculate ray trajectory
-            energy = self.spectrometer.reference_energy*(1 + energy_relative)
+            energy = self.spectrometer.reference_energy * (1 +  energy_relative)  # MeV
             gamma = 1 + energy/particle_rest_energy  # Lorentz factor of the particle
             p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))  # the particle's momentum as a fraction of the reference particle's momentum
             slope = np.tan(np.arcsin(p_y_relative/p_relative))
@@ -788,8 +788,6 @@ class SpectrometerPlotter:
     def plot_monoenergetic_analysis(
         self,  
         incident_energy: float,
-        mean_pos: float, 
-        std_dev: float,
         filename: Optional[str] = None,
     ) -> None:
         """Generate analysis plots for monoenergetic performance."""
@@ -806,12 +804,6 @@ class SpectrometerPlotter:
         x_positions = self.spectrometer.output_beam[:, 0]*100 # cm
         
         axes[0].hist(x_positions, bins=30, alpha=0.7, density=True, label='Simulation')
-        
-        # Gaussian fit overlay
-        x_fit = np.linspace(x_positions.min(), x_positions.max(), 100)
-        gaussian_fit = norm.pdf(x_fit, mean_pos * 100, std_dev * 100)
-        axes[0].plot(x_fit, gaussian_fit, 'r-', label='Gaussian Fit', linewidth=2)
-        
         axes[0].set_xlabel('X Position [cm]')
         axes[0].set_ylabel('Probability Density')
         axes[0].set_title(f'X-Position Distribution\n{incident_energy:.1f} MeV {self.spectrometer.conversion_foil.incident_particle.capitalize()}s')
@@ -876,16 +868,16 @@ class SpectrometerPlotter:
         for foil, grp in df.groupby('foil'):
             # Extract data from DataFrame
             energies = grp['energy [MeV]'].to_numpy()
-            positions = grp['position mean [m]'].to_numpy()
-            position_uncertainties = grp['position fwhm [m]'].to_numpy()
+            positions = grp['position [m]'].to_numpy()
+            position_width = grp['position width [m]'].to_numpy()
             energy_resolutions = grp['resolution [keV]'].to_numpy()
             total_efficiencies = grp['total efficiency'].to_numpy()
-            
-            # Plot position curve
+
+            # Plot position curve (center of half-max interval) with ±width/2 band
             position_line = ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
                     label=f'Position')
-            ax1.fill_between(energies, (positions - position_uncertainties) * 100,
-                            (positions + position_uncertainties) * 100,
+            ax1.fill_between(energies, (positions - position_width / 2) * 100,
+                            (positions + position_width / 2) * 100,
                             alpha=0.3, color=color_position)
             ax1.grid(True, alpha=0.3)
             ax1.tick_params(axis='y', labelcolor=color_position)

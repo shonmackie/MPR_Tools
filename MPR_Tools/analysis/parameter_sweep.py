@@ -157,7 +157,7 @@ class FoilSweeper:
             )
             
             # Calculate performance metrics using spectrometer's parallelized methods
-            mean_pos, std_pos, fwhm, energy_res, gradient = self.performance_analyzer.analyze_monoenergetic_performance(
+            mean_pos, width, energy_res, gradient = self.performance_analyzer.analyze_monoenergetic_performance(
                 incident_energy,
                 num_recoil_particles=num_recoil_particles,
                 include_kinematics=True,
@@ -172,9 +172,8 @@ class FoilSweeper:
                 'scattering_efficiency': scattering_eff,
                 'geometric_efficiency': geometric_eff,
                 'total_efficiency': total_eff,
-                'mean_position': mean_pos,
-                'std_position': std_pos,
-                'fwhm': fwhm, # m
+                'position_mean': mean_pos,
+                'position_width': width,
                 'energy_resolution': energy_res, # keV
                 'gradient': gradient
             })
