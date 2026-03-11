@@ -438,10 +438,11 @@ class SpectrometerPlotter:
         
         for i in range(0, len(self.spectrometer.input_beam), max(1, len(self.spectrometer.input_beam) // num_rays_to_plot)):
             ray = self.spectrometer.input_beam[i]
-            x0, p_x_relative, y0, p_y_relative, energy, energy_relative = ray
+            x0, p_x_relative, y0, p_y_relative, energy_relative, incident_energy = ray
             y0 *= 100 # cm
             
             # Calculate ray trajectory
+            energy = self.spectrometer.reference_energy * (1 +  energy_relative)  # MeV
             gamma = 1 + energy/particle_rest_energy  # Lorentz factor of the particle
             p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))  # the particle's momentum as a fraction of the reference particle's momentum
             slope = np.tan(np.arcsin(p_y_relative/p_relative))
