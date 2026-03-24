@@ -351,8 +351,6 @@ class PerformanceAnalyzer:
         
     def _get_incident_spectrum(
         self,
-        dx: float = 0.5,
-        dy: float = 0.5,
         foil_distance: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
@@ -365,20 +363,17 @@ class PerformanceAnalyzer:
             incident_energies: np.ndarray of incident energies
             incident_energies_std: np.ndarray of incident energy uncertainties
         """
-        recoil_density_map, response_map, X_mesh, Y_mesh = self.get_recoil_density_map(
-            dx, dy, foil_distance, particle_yield
-        )
-        
-        # Sum response map along y to get total response vs x
-        # In units of response/cm(-source)
-        response_values = np.sum(response_map, axis=0) * dy
-        x_positions = X_mesh[0, :] / 100  # Convert to meters
-        
+        signal_per_bin, _ = self.get_recoil_x_map(foil_distance, particle_yield)
+        hodoscope = self.spectrometer.hodoscope
+        x_positions = hodoscope.channel_centers  # meters
+        response_values = signal_per_bin
+
         # Total background is in response/cm^2-source
         # Assume background is uniform across detector
         total_background = self.spectrometer.hodoscope.get_total_background()
-        # Integrate background over y
-        total_background *= X_mesh.shape[0] * dy
+        # Integrate background over channel heights
+        channel_heights_cm = hodoscope.channel_heights * 100
+        total_background = np.sum(total_background * hodoscope.channel_widths * 100 * channel_heights_cm)
         if particle_yield:
             total_background *= particle_yield
         
@@ -508,32 +503,79 @@ class PerformanceAnalyzer:
         
         return density_map, response_map, X_mesh, Y_mesh
     
-    def analyze_response(
+    def get_recoil_x_map(
         self,
-        dx: float = 0.5,
-        dy: float = 0.5,
         foil_distance: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Analyze the detector response in the focal plane.
-        
+        Bin the recoil beam into 1-D x channels and compute signal and y-coverage per channel.
+        By default the hodoscope channel edges and heights are used for binning.
+
+        The y-acceptance cut is applied symmetrically around y=0 (the reference ray).
+        Signal is normalised to [particles/source] per channel (or [particles] when
+        ``particle_yield`` is given).  Coverage is the fraction of beam captured in y.
+
         Args:
-            dx: X-direction resolution in cm
-            dy: Y-direction resolution in cm
-            foil_distance, optional: Distance between foil and target in meters
-            particle_yield, optional: Particle yield
-            
+            foil_distance: Distance from foil to detector in cm for solid-angle correction.
+            particle_yield: Total source yield; scales the returned signal counts.
+
         Returns:
-            Tuple of x_positions, response_values
+            Tuple of (signal_per_bin, coverage_per_bin) where
+            signal_per_bin [particles/source or particles], coverage_per_bin [0-1].
         """
-        density_map, response_map, X_mesh, Y_mesh = self.get_recoil_density_map(
-            dx, dy, foil_distance, particle_yield
+        if len(self.spectrometer.output_beam) == 0:
+            raise ValueError("No output beam data available. Run apply_transfer_map() first.")
+
+        hodoscope = self.spectrometer.hodoscope
+        x_positions = self.spectrometer.output_beam[:, 0] * 100  # m to cm
+        y_positions = self.spectrometer.output_beam[:, 2] * 100  # m to cm
+        input_energies = self.spectrometer.input_beam[:, 4]
+        output_energies = self.spectrometer.output_beam[:, 4]
+        total_particles = len(x_positions)
+
+        # Determine bin edges and channel heights
+        bin_edges_cm = hodoscope.channel_edges * 100   # m to cm
+        bin_heights_cm = hodoscope.channel_heights * 100  # m to cm
+
+        n_bins = len(bin_edges_cm) - 1
+
+        # Per-particle weights
+        foil_efficiencies = self._get_foil_efficiency(input_energies)
+        sensitivity_efficiencies = hodoscope.get_detector_response(
+            energies=output_energies,
+            particle=self.spectrometer.conversion_foil.particle
         )
-        
-        # Sum response map along y to get total response vs x
-        response_values = np.sum(response_map, axis=0)
-        x_positions = X_mesh[0, :]
-        
-        return x_positions, response_values
+        weights = foil_efficiencies * sensitivity_efficiencies
+
+        # Bin particles into x channels; track total and within-y-acceptance separately
+        signal_per_bin = np.zeros(n_bins)
+        total_per_bin = np.zeros(n_bins)
+        for i in range(total_particles):
+            bin_idx = int(np.searchsorted(bin_edges_cm, x_positions[i], side='right') - 1)
+            if 0 <= bin_idx < n_bins:
+                total_per_bin[bin_idx] += weights[i]
+                if abs(y_positions[i]) <= bin_heights_cm[bin_idx] / 2:
+                    signal_per_bin[bin_idx] += weights[i]
+
+        # Normalise to particles/source
+        signal_per_bin /= total_particles
+        total_per_bin /= total_particles
+
+        # Solid-angle correction for finite foil distance
+        if foil_distance:
+            foil_solid_angle_fraction = (
+                self.spectrometer.conversion_foil.foil_radius ** 2 / (4 * foil_distance ** 2)
+            )
+            signal_per_bin *= foil_solid_angle_fraction
+            total_per_bin *= foil_solid_angle_fraction
+
+        # Yield scaling
+        if particle_yield:
+            signal_per_bin *= particle_yield
+            total_per_bin *= particle_yield
+
+        coverage_per_bin = np.where(total_per_bin > 0, signal_per_bin / total_per_bin, 0.0)
+
+        return signal_per_bin, coverage_per_bin
         

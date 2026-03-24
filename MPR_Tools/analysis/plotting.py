@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Tuple, Union
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
@@ -319,67 +320,160 @@ class SpectrometerPlotter:
         print(f'  Y position range: {self.spectrometer.output_beam[:, 2].min()*100:.2f} - {self.spectrometer.output_beam[:, 2].max()*100:.2f} cm')
         print(f'Characteristic ray plot saved to {filename}')
     
-    def plot_simple_position_histogram(
-        self, 
-        filename: Optional[str] = None, 
-        num_bins: int = 40
+    def plot_position_histogram(
+        self,
+        filename: Optional[str] = None,
+        foil_distance: Optional[float] = None,
+        incident_particle_yield: Optional[float] = None,
+        neutron_background_file: Optional[str] = None,
+        photon_background_file: Optional[str] = None,
+        neutron_energy: Optional[float] = None,
+        neutron_flux: Optional[float] = None,
+        photon_energy: Optional[float] = None,
+        photon_flux: Optional[float] = None,
     ) -> None:
         """
-        Plot a simple histogram of recoil ray counts vs horizontal position.
-        
+        Plot signal and background counts per hodoscope channel, with S/B and coverage panels.
+
+        Bins are taken from the hodoscope channel definitions by default.
+
+        Three panels are produced:
+          1. Signal (and background, if provided) counts per channel [particles/source].
+          2. log10(S/B) per channel (only when background is provided).
+          3. Fraction of total y-beam captured within each channel's height [%].
+
         Args:
-            filename: Output filename for the plot
-            num_bins: Number of histogram bins
+            filename: Output filename for the plot.
+            foil_distance: Distance from foil to detector in cm for solid-angle correction.
+            incident_particle_yield: Total source yield; scales both signal and background.
+            neutron_background_file: CSV with 'energy' [MeV] and 'energy_mean'
+                [particles/cm^2-source] columns for the neutron background spectrum.
+            photon_background_file: CSV with 'energy' [MeV] and 'energy_mean'
+                [particles/cm^2-source] columns for the photon background spectrum.
+            neutron_energy: Single neutron energy in MeV (scalar background input).
+            neutron_flux: Neutron flux in particles/cm^2-source (scalar background input).
+            photon_energy: Single photon energy in MeV (scalar background input).
+            photon_flux: Photon flux in particles/cm^2-source (scalar background input).
         """
-        if filename == None:
+        if filename is None:
             filename = f'{self.spectrometer.figure_directory}/counts_vs_position.png'
-        
+
         if len(self.spectrometer.output_beam) == 0:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
-        
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        
-        x_positions = self.spectrometer.output_beam[:, 0]*100 # cm
-        x_range = (x_positions.min(), x_positions.max())
-        
-        ax.hist(
-            x_positions, 
-            bins=np.linspace(x_range[0], x_range[1], num_bins),
-            density=True,
-            alpha=0.7,
-            color=self.primary_color,
-            edgecolor='black',
-            linewidth=0.5
+
+        hodoscope = self.spectrometer.hodoscope
+
+        # --- Signal via get_recoil_x_map ---
+        signal, coverage = self.performance_analyzer.get_recoil_x_map(
+            foil_distance=foil_distance, particle_yield=incident_particle_yield
         )
+        channel_centers = hodoscope.channel_centers * 100  # m to cm
+        channel_widths = hodoscope.channel_widths * 100  # m to cm
+        channel_heights = hodoscope.channel_heights * 100  # m to cm
         
-        # Add dual data if available
-        if self.dual_data:
-            spec2: MPRSpectrometer = self.dual_data['spectrometer']
-            x_positions2 = spec2.output_beam[:, 0]*100 # cm
-            x_range2 = (x_positions2.min(), x_positions2.max())
-            
-            ax.hist(
-                x_positions2, 
-                bins=np.linspace(x_range2[0], x_range2[1], num_bins),
-                density=True,
-                alpha=0.7,
-                color=self.dual_data['secondary_color'],
-                edgecolor='black',
-                linewidth=0.5,
-                label=self.dual_data['secondary_label']
+        # signal units: [particles/source] (or [particles] with yield)
+
+        # --- Background per channel ---
+        has_background = any(p is not None for p in [
+            neutron_background_file, photon_background_file,
+            neutron_energy, neutron_flux, photon_energy, photon_flux
+        ])
+        background: Optional[np.ndarray] = None
+        if has_background and hodoscope.detector_used:
+            total_background = hodoscope.get_total_background(
+                neutron_energy=neutron_energy,
+                photon_energy=photon_energy,
+                neutron_flux=neutron_flux,
+                photon_flux=photon_flux,
+                neutron_background_file=neutron_background_file,
+                photon_background_file=photon_background_file
             )
-            ax.legend()
-        
-        ax.set_xlabel('Horizontal Position [cm]')
-        ax.set_ylabel('Counts')
-        ax.set_title('Particle Counts vs Position')
-        ax.set_yscale('log')
-        ax.grid(True, alpha=0.3)
-        
+            if incident_particle_yield is not None:
+                total_background *= incident_particle_yield
+            # background per channel: [particles/cm²] × bin_width [cm] × channel_height [cm]
+            background = total_background * channel_widths * channel_heights
+
+        # --- Dual spectrometer ---
+        signal2 = coverage2 = channel_centers2 = channel_widths2 = channel_heights2 = None
+        if self.dual_data:
+            signal2, coverage2 = (
+                self.dual_data['performance_analyzer'].get_recoil_x_map(
+                    foil_distance=foil_distance, particle_yield=incident_particle_yield
+                )
+            )
+            channel_centers2 = hodoscope.channel_centers * 100  # m to cm
+            channel_widths2 = hodoscope.channel_widths * 100  # m to cm
+            channel_heights2 = hodoscope.channel_heights * 100  # m to cm
+
+        # --- Derive per-plot filenames from base filename ---
+        base, ext = os.path.splitext(filename)
+        filename_counts = filename
+        filename_sb = f'{base}_sb{ext}'
+        filename_coverage = f'{base}_coverage{ext}'
+
+        particle_label = self.spectrometer.conversion_foil.particle
+        units = 'particles' if incident_particle_yield is not None else 'particles/source'
+
+        # Plot 1: counts
+        fig, ax_counts = plt.subplots(figsize=(10, 4))
+        ax_counts.bar(channel_centers, signal, width=channel_widths,
+                      alpha=0.7, color=self.primary_color, edgecolor='black',
+                      linewidth=0.5, label=particle_label)
+        if background is not None:
+            ax_counts.bar(channel_centers, background, width=channel_widths,
+                          alpha=0.5, color='gray', edgecolor='black',
+                          linewidth=0.5, label='Background')
+        if self.dual_data and signal2 is not None:
+            ax_counts.bar(channel_centers2, signal2, width=channel_widths2,
+                          alpha=0.5, color=self.dual_data['secondary_color'],
+                          edgecolor='black', linewidth=0.5,
+                          label=self.dual_data['secondary_label'])
+        ax_counts.set_yscale('log')
+        ax_counts.set_xlabel('Horizontal Position [cm]')
+        ax_counts.set_ylabel(f'Counts [{units}]')
+        ax_counts.legend()
+        ax_counts.grid(True, alpha=0.3)
         fig.tight_layout()
-        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        fig.savefig(filename_counts, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f'Position histogram saved to {filename}')
+        print(f'Position histogram saved to {filename_counts}')
+
+        # Plot 2 (optional): S/B
+        if background is not None:
+            fig, ax_sb = plt.subplots(figsize=(10, 4))
+            sb = np.where(background > 0, signal / background, np.nan)
+            ax_sb.bar(channel_centers, np.log10(sb), width=channel_widths,
+                      color=self.primary_color, edgecolor='black', linewidth=0.5)
+            if self.dual_data and signal2 is not None and channel_widths2 is not None and channel_heights2 is not None:
+                background2 = total_background * channel_widths2 * channel_heights2
+                sb2 = np.where(background2 > 0, signal2 / background2, np.nan)
+                ax_sb.bar(channel_centers2, np.log10(sb2), width=channel_widths2,
+                          color=self.dual_data['secondary_color'],
+                          edgecolor='black', linewidth=0.5, alpha=0.5)
+            ax_sb.set_xlabel('Horizontal Position [cm]')
+            ax_sb.set_ylabel('log$_{10}$(S/B)')
+            ax_sb.grid(True, alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(filename_sb, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f'S/B plot saved to {filename_sb}')
+
+        # Plot 3: signal coverage
+        fig, ax_coverage = plt.subplots(figsize=(10, 4))
+        ax_coverage.bar(channel_centers, coverage * 100, width=channel_widths,
+                        color=self.primary_color, edgecolor='black', linewidth=0.5, alpha=0.7)
+        if self.dual_data and coverage2 is not None:
+            ax_coverage.bar(channel_centers2, coverage2 * 100, width=channel_widths2,
+                            color=self.dual_data['secondary_color'],
+                            edgecolor='black', linewidth=0.5, alpha=0.5)
+        ax_coverage.set_xlabel('Horizontal Position [cm]')
+        ax_coverage.set_ylabel('Signal Coverage [%]')
+        ax_coverage.set_ylim(0, 105)
+        ax_coverage.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(filename_coverage, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f'Coverage plot saved to {filename_coverage}')
         
     def plot_input_ray_geometry(self, filename: Optional[str] = None) -> None:
         """
@@ -499,71 +593,73 @@ class SpectrometerPlotter:
         print(f'Input ray geometry plot saved to {filename}')
 
     def plot_particle_density_heatmap(
-        self, 
+        self,
         filename: Optional[str] = None,
-        dx: float = 0.5, 
+        dx: float = 0.5,
         dy: float = 0.5,
-        particle_yield: Optional[float] = None
+        incident_particle_yield: Optional[float] = None,
+        foil_distance: Optional[float] = None,
     ) -> None:
         """
         Plot a heatmap of focal particle density in the detector plane.
-        
+
         Args:
-            filename: Output filename for the plot
-            dx: X-direction resolution in cm
-            dy: Y-direction resolution in cm
+            filename: Output filename for the plot.
+            dx: X-direction resolution in cm.
+            dy: Y-direction resolution in cm.
+            incident_particle_yield: Total particle yield (particles/source). Scales the density map.
+            foil_distance: Distance from the foil to the detector in cm.
         """
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/particle_density_heatmap.png'
-        
+
         particle = self.spectrometer.conversion_foil.particle
-        # TODO: make foil distance configurable
-        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_distance=6.0, particle_yield=particle_yield)
+        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_distance=foil_distance, particle_yield=incident_particle_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        
+
         # Create heatmap
         im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(density_map), cmap=self.primary_cmap, shading='auto')
-        
+
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-        units = f'[{particle}/cm$^2$-source]' if particle_yield == None else f'[{particle}/cm$^2$]'
+        units = f'[{particle}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle}/cm$^2$]'
         cbar.set_label(f'log$_{{10}}$(Fluence {units})')
-        
+
         # Add dual data if available
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_distance=6.0, particle_yield=particle_yield)
+            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_distance=foil_distance, particle_yield=incident_particle_yield)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-            units = f'[{particle2}/cm$^2$-source]' if particle_yield == None else f'[{particle2}/cm$^2$]'
+            units = f'[{particle2}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle2}/cm$^2$]'
             cbar2.set_label(f'log$_{{10}}$(Fluence {units})')
-        
+
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
         ax.set_aspect('equal')
-        
+
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Particle density heatmap saved to {filename}')
-        
-        # If detector is used, also plot response map
+
+        # If detector is used, also plot response map and signal-to-background
         if self.spectrometer.hodoscope.detector_used:
             fig, ax = plt.subplots(figsize=(10, 8))
             im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(response), cmap=self.primary_cmap, shading='auto')
             cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-            units = f'[response/cm$^2$-source]' if particle_yield == None else f'[response/cm$^2$]'
+            units = f'[response/cm$^2$-source]' if incident_particle_yield is None else f'[response/cm$^2$]'
             cbar.set_label(f'log$_{{10}}$(Detector Response {units})')
-            
+
             # Add dual data if available
             if self.dual_data:
                 im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(response2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
                 cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-                units = f'[response/cm$^2$-source]' if particle_yield == None else f'[response/cm$^2$]'
+                units = f'[response/cm$^2$-source]' if incident_particle_yield is None else f'[response/cm$^2$]'
                 cbar2.set_label(f'log$_{{10}}$(Detector Response {units})')
-            
+
             ax.set_xlabel('X Position [cm]')
             ax.set_ylabel('Y Position [cm]')
             ax.set_aspect('equal')
@@ -571,67 +667,6 @@ class SpectrometerPlotter:
             response_filename = filename.replace('.png', '_response.png')
             fig.savefig(response_filename, dpi=150, bbox_inches='tight')
             print(f'Detector response heatmap saved to {response_filename}')
-            
-            # Now plot the signal-to-background ratio map
-            fig, ax = plt.subplots(figsize=(10, 8))
-            
-            # Get signal-to-background ratio
-            total_background = self.spectrometer.hodoscope.get_total_background()
-            total_background *= particle_yield if particle_yield != None else 1.0
-            signal_to_background = response / total_background
-            
-            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(signal_to_background), cmap=self.primary_cmap, shading='auto')
-            cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-            cbar.set_label('log$_{10}$(S/B)')
-            
-            if self.dual_data:
-                signal_to_background2 = response2 / total_background
-                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(signal_to_background2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
-                cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-                cbar2.set_label('log$_{10}$(S/B)')
-            
-            ax.set_xlabel('X Position [cm]')
-            ax.set_ylabel('Y Position [cm]')
-            ax.set_aspect('equal')
-            fig.tight_layout()
-            signal_to_background_filename = filename.replace('.png', '_signal_to_background.png')
-            fig.savefig(signal_to_background_filename, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            print(f'Signal-to-background ratio heatmap saved to {signal_to_background_filename}')
-            
-            # Plot y-integrated S/B profile
-            fig, ax = plt.subplots(figsize=(8, 4))
-            # TODO: Actually integrate the signal. Only integrate over region where signal is non-zero
-            y_integrated_signal_to_background = np.sum(response, axis=0) / (total_background * Y_mesh.shape[0])
-            # Take middle few rows
-            middle_idx = int(Y_mesh.shape[0]/2)
-            y_integrated_signal_to_background = np.sum(response[middle_idx - 5:middle_idx + 5, :], axis=0) / (total_background * 10)
-            x_values = X_mesh[0, :]
-            ax.plot(x_values, np.log10(y_integrated_signal_to_background), label='Signal-to-Background')
-            
-            if self.dual_data:
-                y_integrated_signal_to_background2 = np.sum(response2, axis=0) / (total_background * Y_mesh2.shape[0])
-                # Take middle few rows
-                middle_idx2 = int(Y_mesh2.shape[0]/2)
-                y_integrated_signal_to_background2 = np.sum(response2[middle_idx2 - 5:middle_idx2 + 5, :], axis=0) / (total_background * 10)
-                x_values2 = X_mesh2[0, :]
-                ax.plot(x_values2, np.log10(y_integrated_signal_to_background2), label='Signal-to-Background (Dual)')
-            
-            ax.set_xlabel('X Position [cm]')
-            ax.set_ylabel('log$_{10}$(S/B)')
-            ax.grid(True, alpha=0.6)
-            fig.tight_layout()
-            y_integrated_filename = filename.replace('.png', '_y_integrated_signal_to_background.png')
-            fig.savefig(y_integrated_filename, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            print(f'Y-integrated signal-to-background profile saved to {y_integrated_filename}')
-            
-            # Save data to csv
-            integrated_df = pd.DataFrame({
-                'X Position [cm]': x_values,
-                'log10(S/B)': np.log10(y_integrated_signal_to_background)
-            })
-            integrated_df.to_csv(y_integrated_filename.replace('.png', '.csv').replace(self.spectrometer.figure_directory, self.spectrometer.data_directory), index=False)
         
     def plot_synthetic_incident_histogram(
         self,
