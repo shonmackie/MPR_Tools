@@ -398,7 +398,7 @@ class PerformanceAnalyzer:
         Get the foil efficiency for a given set of incident particle energies.
         """
         performance_df = self._load_performance_curve()
-        if performance_df is not None:
+        if performance_df:
             incident_energies = performance_df['energy [MeV]']
             total_efficiencies = performance_df['total efficiency']
             

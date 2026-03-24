@@ -374,7 +374,7 @@ class SpectrometerPlotter:
         # signal units: [particles/source] (or [particles] with yield)
 
         # --- Background per channel ---
-        has_background = any(p is not None for p in [
+        has_background = any(p for p in [
             neutron_background_file, photon_background_file,
             neutron_energy, neutron_flux, photon_energy, photon_flux
         ])
@@ -388,7 +388,7 @@ class SpectrometerPlotter:
                 neutron_background_file=neutron_background_file,
                 photon_background_file=photon_background_file
             )
-            if incident_particle_yield is not None:
+            if incident_particle_yield:
                 total_background *= incident_particle_yield
             # background per channel: [particles/cm²] × bin_width [cm] × channel_height [cm]
             background = total_background * channel_widths * channel_heights
@@ -412,18 +412,18 @@ class SpectrometerPlotter:
         filename_coverage = f'{base}_coverage{ext}'
 
         particle_label = self.spectrometer.conversion_foil.particle
-        units = 'particles' if incident_particle_yield is not None else 'particles/source'
+        units = 'particles' if incident_particle_yield else 'particles/source'
 
         # Plot 1: counts
         fig, ax_counts = plt.subplots(figsize=(10, 4))
         ax_counts.bar(channel_centers, signal, width=channel_widths,
                       alpha=0.7, color=self.primary_color, edgecolor='black',
                       linewidth=0.5, label=particle_label)
-        if background is not None:
+        if background:
             ax_counts.bar(channel_centers, background, width=channel_widths,
                           alpha=0.5, color='gray', edgecolor='black',
                           linewidth=0.5, label='Background')
-        if self.dual_data and signal2 is not None:
+        if self.dual_data and signal2:
             ax_counts.bar(channel_centers2, signal2, width=channel_widths2,
                           alpha=0.5, color=self.dual_data['secondary_color'],
                           edgecolor='black', linewidth=0.5,
@@ -439,12 +439,12 @@ class SpectrometerPlotter:
         print(f'Position histogram saved to {filename_counts}')
 
         # Plot 2 (optional): S/B
-        if background is not None:
+        if background:
             fig, ax_sb = plt.subplots(figsize=(10, 4))
             sb = np.where(background > 0, signal / background, np.nan)
             ax_sb.bar(channel_centers, np.log10(sb), width=channel_widths,
                       color=self.primary_color, edgecolor='black', linewidth=0.5)
-            if self.dual_data and signal2 is not None and channel_widths2 is not None and channel_heights2 is not None:
+            if self.dual_data and signal2 and channel_widths2 and channel_heights2:
                 background2 = total_background * channel_widths2 * channel_heights2
                 sb2 = np.where(background2 > 0, signal2 / background2, np.nan)
                 ax_sb.bar(channel_centers2, np.log10(sb2), width=channel_widths2,
@@ -462,7 +462,7 @@ class SpectrometerPlotter:
         fig, ax_coverage = plt.subplots(figsize=(10, 4))
         ax_coverage.bar(channel_centers, coverage * 100, width=channel_widths,
                         color=self.primary_color, edgecolor='black', linewidth=0.5, alpha=0.7)
-        if self.dual_data and coverage2 is not None:
+        if self.dual_data and coverage2:
             ax_coverage.bar(channel_centers2, coverage2 * 100, width=channel_widths2,
                             color=self.dual_data['secondary_color'],
                             edgecolor='black', linewidth=0.5, alpha=0.5)
@@ -1213,7 +1213,7 @@ class PlotParameter:
         log_scale: bool = False
     ):
         self.name = name
-        self.label = label if label is not None else name
+        self.label = label if label else name
         self.log_scale = log_scale
     
     def get_values(self, df):
