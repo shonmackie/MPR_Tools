@@ -53,13 +53,13 @@ class Hodoscope:
             detector_material: The material of the detector. Only used for detector sensitivity calculation.
         """
         # Calculate detector centers
-        if channels is not None:
-            if channels_left is not None or channels_right is not None or detector_width is not None or detector_height is not None:
+        if channels:
+            if channels_left or channels_right or detector_width or detector_height:
                 raise ValueError('If channels is an array or filename, no other channel dimension arguments should be passed.')
             if type(channels) is str:
                 channels = np.loadtxt(channels, delimiter=',', encoding='utf-8')
             self._calculate_channel_edges_from_array(channels)
-        elif channels_left is not None and channels_right is not None and detector_width is not None and detector_height is not None:
+        elif channels_left and channels_right and detector_width and detector_height:
             self._calculate_channel_edges_from_parameters(channels_left, channels_right, detector_width, detector_height)
         else:
             raise ValueError("There isn't enough information to constrain the channel dimensions.  Please pass either `channels` or all four of the channel dimension parameters.")
@@ -77,6 +77,7 @@ class Hodoscope:
         # Extract channel x-coordinates from the left column
         self.channel_edges = data[:, 0] * 1e-2  # cm to m
         self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2
+        self.channel_widths = np.diff(self.channel_edges)
         self.detector_width = self.channel_edges[-1] - self.channel_edges[0]
 
         # Create array of channel heights from the right column (ignoring the last row)
@@ -110,8 +111,9 @@ class Hodoscope:
         # Create array of all channel edges (N+1 edges for N channels)
         self.channel_edges = np.linspace(leftmost_edge, leftmost_edge + self.detector_width, self.total_channels + 1)
         
-        # Calculate channel centers for convenience
+        # Calculate channel centers and widths for convenience
         self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2
+        self.channel_widths = np.diff(self.channel_edges)
 
         # Channel heights are all the same
         self.channel_heights = np.full(self.total_channels, detector_height)
@@ -228,14 +230,14 @@ class Hodoscope:
 
         total = 0.0
 
-        if neutron_background_file is not None:
+        if neutron_background_file:
             total += _contribution_from_file('neutron', neutron_background_file)
-        elif neutron_energy is not None and neutron_flux is not None:
+        elif neutron_energy and neutron_flux:
             total += _contribution_from_scalar('neutron', neutron_energy, neutron_flux)
 
-        if photon_background_file is not None:
+        if photon_background_file:
             total += _contribution_from_file('gamma', photon_background_file)
-        elif photon_energy is not None and photon_flux is not None:
+        elif photon_energy and photon_flux:
             total += _contribution_from_scalar('gamma', photon_energy, photon_flux)
 
         return total
