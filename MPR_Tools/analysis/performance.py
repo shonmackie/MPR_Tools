@@ -370,7 +370,7 @@ class PerformanceAnalyzer:
 
         # Total background is in response/cm^2-source
         # Assume background is uniform across detector
-        total_background = self.spectrometer.hodoscope.get_total_background()
+        total_background = sum(self.spectrometer.hodoscope.get_background())
         # Integrate background over channel heights
         channel_heights_cm = hodoscope.channel_heights * 100
         total_background = np.sum(total_background * hodoscope.channel_widths * 100 * channel_heights_cm)
@@ -398,7 +398,7 @@ class PerformanceAnalyzer:
         Get the foil efficiency for a given set of incident particle energies.
         """
         performance_df = self._load_performance_curve()
-        if performance_df:
+        if performance_df is not None:
             incident_energies = performance_df['energy [MeV]']
             total_efficiencies = performance_df['total efficiency']
             
@@ -549,14 +549,15 @@ class PerformanceAnalyzer:
         weights = foil_efficiencies * sensitivity_efficiencies
 
         # Bin particles into x channels; track total and within-y-acceptance separately
+        # np.digitize returns 1-based indices; subtract 1 to get 0-based bin indices
+        bin_indices = np.digitize(x_positions, bin_edges_cm) - 1  # -1 and n_bins are out of range
         signal_per_bin = np.zeros(n_bins)
         total_per_bin = np.zeros(n_bins)
-        for i in range(total_particles):
-            bin_idx = int(np.searchsorted(bin_edges_cm, x_positions[i], side='right') - 1)
-            if 0 <= bin_idx < n_bins:
-                total_per_bin[bin_idx] += weights[i]
-                if abs(y_positions[i]) <= bin_heights_cm[bin_idx] / 2:
-                    signal_per_bin[bin_idx] += weights[i]
+        for b in range(n_bins):
+            in_bin = bin_indices == b
+            total_per_bin[b] = np.sum(weights[in_bin])
+            y_accepted = np.abs(y_positions) <= bin_heights_cm[b] / 2
+            signal_per_bin[b] = np.sum(weights[in_bin & y_accepted])
 
         # Normalise to particles/source
         signal_per_bin /= total_particles

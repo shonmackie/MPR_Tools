@@ -17,6 +17,7 @@ import pandas as pd
 plt.rcParams['font.size'] = 16
 plt.rcParams['xtick.labelsize'] = 16
 plt.rcParams['ytick.labelsize'] = 16
+plt.rcParams['lines.linewidth'] = 3
 
 from ..core.spectrometer import MPRSpectrometer
 from ..core.dual_foil_spectrometer import DualFoilSpectrometer
@@ -367,20 +368,23 @@ class SpectrometerPlotter:
         signal, coverage = self.performance_analyzer.get_recoil_x_map(
             foil_distance=foil_distance, particle_yield=incident_particle_yield
         )
-        channel_centers = hodoscope.channel_centers * 100  # m to cm
+        channel_edges = hodoscope.channel_edges * 100  # m to cm
         channel_widths = hodoscope.channel_widths * 100  # m to cm
         channel_heights = hodoscope.channel_heights * 100  # m to cm
-        
+
         # signal units: [particles/source] (or [particles] with yield)
 
-        # --- Background per channel ---
+        # --- Background per channel (neutron and photon separately) ---
         has_background = any(p for p in [
             neutron_background_file, photon_background_file,
             neutron_energy, neutron_flux, photon_energy, photon_flux
         ])
-        background: Optional[np.ndarray] = None
+        
+        # Initialize background
+        background = neutron_background = photon_background = None
+        
         if has_background and hodoscope.detector_used:
-            total_background = hodoscope.get_total_background(
+            neutron_bg_density, photon_bg_density = hodoscope.get_background(
                 neutron_energy=neutron_energy,
                 photon_energy=photon_energy,
                 neutron_flux=neutron_flux,
@@ -388,20 +392,21 @@ class SpectrometerPlotter:
                 neutron_background_file=neutron_background_file,
                 photon_background_file=photon_background_file
             )
-            if incident_particle_yield:
-                total_background *= incident_particle_yield
-            # background per channel: [particles/cm²] × bin_width [cm] × channel_height [cm]
-            background = total_background * channel_widths * channel_heights
+            scale = (incident_particle_yield if incident_particle_yield else 1.0)
+            # per channel: [particles/cm²] × bin_width [cm] × channel_height [cm]
+            neutron_background = neutron_bg_density * scale * channel_widths * channel_heights
+            photon_background = photon_bg_density * scale * channel_widths * channel_heights
+            background = neutron_background + photon_background
 
         # --- Dual spectrometer ---
-        signal2 = coverage2 = channel_centers2 = channel_widths2 = channel_heights2 = None
+        signal2 = coverage2 = channel_edges2 = channel_widths2 = channel_heights2 = None
         if self.dual_data:
             signal2, coverage2 = (
                 self.dual_data['performance_analyzer'].get_recoil_x_map(
                     foil_distance=foil_distance, particle_yield=incident_particle_yield
                 )
             )
-            channel_centers2 = hodoscope.channel_centers * 100  # m to cm
+            channel_edges2 = hodoscope.channel_edges * 100  # m to cm
             channel_widths2 = hodoscope.channel_widths * 100  # m to cm
             channel_heights2 = hodoscope.channel_heights * 100  # m to cm
 
@@ -416,42 +421,45 @@ class SpectrometerPlotter:
 
         # Plot 1: counts
         fig, ax_counts = plt.subplots(figsize=(10, 4))
-        ax_counts.bar(channel_centers, signal, width=channel_widths,
-                      alpha=0.7, color=self.primary_color, edgecolor='black',
-                      linewidth=0.5, label=particle_label)
-        if background:
-            ax_counts.bar(channel_centers, background, width=channel_widths,
-                          alpha=0.5, color='gray', edgecolor='black',
-                          linewidth=0.5, label='Background')
-        if self.dual_data and signal2:
-            ax_counts.bar(channel_centers2, signal2, width=channel_widths2,
-                          alpha=0.5, color=self.dual_data['secondary_color'],
-                          edgecolor='black', linewidth=0.5,
-                          label=self.dual_data['secondary_label'])
+        ax_counts.stairs(signal, channel_edges, baseline=None,
+                         color=self.primary_color, label=particle_label,
+                         linewidth=3)
+        if neutron_background is not None:
+            ax_counts.stairs(neutron_background, channel_edges, baseline=None,
+                             color='steelblue', label='Neutron background', linewidth=3)
+        if photon_background is not None:
+            ax_counts.stairs(photon_background, channel_edges, baseline=None,
+                             color='darkorange', label='Photon background', linewidth=3)
+        if self.dual_data and signal2 is not None:
+            ax_counts.stairs(signal2, channel_edges2, baseline=None,
+                             color=self.dual_data['secondary_color'],
+                             label=self.dual_data['secondary_label'],
+                             linewidth=3)
         ax_counts.set_yscale('log')
         ax_counts.set_xlabel('Horizontal Position [cm]')
         ax_counts.set_ylabel(f'Counts [{units}]')
         ax_counts.legend()
         ax_counts.grid(True, alpha=0.3)
+        ax_counts.set_title(f'Yield: {incident_particle_yield:.0e}')
         fig.tight_layout()
         fig.savefig(filename_counts, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Position histogram saved to {filename_counts}')
 
-        # Plot 2 (optional): S/B
-        if background:
+        # Plot 2 (optional): S/B — separate lines for neutron and photon backgrounds
+        if background is not None:
             fig, ax_sb = plt.subplots(figsize=(10, 4))
-            sb = np.where(background > 0, signal / background, np.nan)
-            ax_sb.bar(channel_centers, np.log10(sb), width=channel_widths,
-                      color=self.primary_color, edgecolor='black', linewidth=0.5)
-            if self.dual_data and signal2 and channel_widths2 and channel_heights2:
-                background2 = total_background * channel_widths2 * channel_heights2
-                sb2 = np.where(background2 > 0, signal2 / background2, np.nan)
-                ax_sb.bar(channel_centers2, np.log10(sb2), width=channel_widths2,
-                          color=self.dual_data['secondary_color'],
-                          edgecolor='black', linewidth=0.5, alpha=0.5)
+            if neutron_background is not None:
+                sb_n = np.where(neutron_background > 0, signal / neutron_background, np.nan)
+                ax_sb.stairs(np.log10(sb_n), channel_edges, baseline=None,
+                             color='steelblue', label='S / neutron B', linewidth=3)
+            if photon_background is not None:
+                sb_p = np.where(photon_background > 0, signal / photon_background, np.nan)
+                ax_sb.stairs(np.log10(sb_p), channel_edges, baseline=None,
+                             color='darkorange', label='S / photon B', linewidth=3)
             ax_sb.set_xlabel('Horizontal Position [cm]')
             ax_sb.set_ylabel('log$_{10}$(S/B)')
+            ax_sb.legend()
             ax_sb.grid(True, alpha=0.3)
             fig.tight_layout()
             fig.savefig(filename_sb, dpi=150, bbox_inches='tight')
@@ -460,12 +468,11 @@ class SpectrometerPlotter:
 
         # Plot 3: signal coverage
         fig, ax_coverage = plt.subplots(figsize=(10, 4))
-        ax_coverage.bar(channel_centers, coverage * 100, width=channel_widths,
-                        color=self.primary_color, edgecolor='black', linewidth=0.5, alpha=0.7)
-        if self.dual_data and coverage2:
-            ax_coverage.bar(channel_centers2, coverage2 * 100, width=channel_widths2,
-                            color=self.dual_data['secondary_color'],
-                            edgecolor='black', linewidth=0.5, alpha=0.5)
+        ax_coverage.stairs(coverage * 100, channel_edges, baseline=None,
+                           color=self.primary_color, alpha=0.7, linewidth=3)
+        if self.dual_data and coverage2 is not None and channel_edges2 is not None:
+            ax_coverage.stairs(coverage2 * 100, channel_edges2, baseline=None,
+                               color=self.dual_data['secondary_color'], alpha=0.5, linewidth=3)
         ax_coverage.set_xlabel('Horizontal Position [cm]')
         ax_coverage.set_ylabel('Signal Coverage [%]')
         ax_coverage.set_ylim(0, 105)
@@ -497,7 +504,7 @@ class SpectrometerPlotter:
         aperture_radius = self.spectrometer.conversion_foil.aperture_radius * 100
         
         # Foil (vertical line at z=0)
-        ax.vlines(0, -foil_radius, foil_radius, color='tab:purple', linewidth=3, label='Conversion Foil')
+        ax.vlines(0, -foil_radius, foil_radius, color='tab:purple', label='Conversion Foil')
         # Add text label for foil
         ax.text(
             0,
@@ -511,7 +518,7 @@ class SpectrometerPlotter:
         
         # Aperture (vertical line at aperture distance)
         ax.vlines(aperture_distance, -aperture_radius, aperture_radius, 
-                color='tab:orange', linewidth=3, label='Aperture')
+                color='tab:orange', label='Aperture')
         # Add text label for aperture
         ax.text(
             aperture_distance,
@@ -683,8 +690,7 @@ class SpectrometerPlotter:
             energies,
             response,
             where='pre',
-            color=self.primary_color,
-            linewidth=3
+            color=self.primary_color
         )
         ax.fill_between(
             energies,
@@ -694,7 +700,7 @@ class SpectrometerPlotter:
             color=self.primary_color,
             alpha=0.3,
         )
-        # hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', linewidth=3, density=True)
+        # hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', density=True)
         # Add energy standard deviation
         # hist_std = self._get_histogram_std(bins, energies, energies_std)
         # ax.fill_between(
@@ -716,7 +722,6 @@ class SpectrometerPlotter:
                 response2,
                 where='pre',
                 color=self.dual_data['secondary_color'],
-                linewidth=3
             )
             ax.fill_between(
                 energies2,
@@ -762,7 +767,6 @@ class SpectrometerPlotter:
             arrowprops=dict(
                 arrowstyle='<->',
                 color='black',
-                linewidth=2,
                 shrinkA=0,
                 shrinkB=0,
             ),
@@ -810,7 +814,7 @@ class SpectrometerPlotter:
         
         # TODO: Add background contribution from neutrons and gammas
         if self.spectrometer.hodoscope.detector_used:
-            background_std = self.spectrometer.hodoscope.get_total_background()
+            background_std = sum(self.spectrometer.hodoscope.get_background())
             hist_std = np.sqrt(hist_std**2 + background_std**2)
         
         # Normalize if density is True
@@ -909,7 +913,7 @@ class SpectrometerPlotter:
             total_efficiencies = grp['total efficiency'].to_numpy()
 
             # Plot position curve (center of half-max interval) with ±width/2 band
-            position_line = ax1.plot(energies, positions * 100, color=color_position, linewidth=2,
+            position_line = ax1.plot(energies, positions * 100, color=color_position,
                     label=f'Position')
             ax1.fill_between(energies, (positions - position_width / 2) * 100,
                             (positions + position_width / 2) * 100,
@@ -917,12 +921,10 @@ class SpectrometerPlotter:
             ax1.grid(True, alpha=0.3)
             ax1.tick_params(axis='y', labelcolor=color_position)
             
-            resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution,
-                            linewidth=2, marker='o', markersize=4,
+            resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution, marker='o', markersize=4,
                             label=f'Resolution')
             
-            efficiency_line = ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency,
-                            linewidth=2, marker='s', markersize=4,
+            efficiency_line = ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency, marker='s', markersize=4,
                             label=f'Efficiency')
             
             # Label lines on their respective axes
@@ -991,7 +993,7 @@ class SpectrometerPlotter:
         for interaction in foil.interactions:
             if interaction.generates_recoil_particles:
                 diff_xs_lab = interaction.get_angle_distribution(energy_MeV).pdf(angles_rad)
-                axs[0].plot(angles_deg, diff_xs_lab, 'tab:blue', linewidth=2)
+                axs[0].plot(angles_deg, diff_xs_lab, 'tab:blue')
                 
         axs[0].set_xlabel('Angle [deg]')
         axs[0].set_ylabel('Angle probability density')
@@ -1001,7 +1003,7 @@ class SpectrometerPlotter:
         energies_MeV = np.linspace(1, 20, 1901)
         for interaction in foil.interactions:
             xs_inv_m = interaction.get_cross_section(energies_MeV)
-            axs[1].plot(energies_MeV, xs_inv_m, 'tab:blue', linewidth=2,
+            axs[1].plot(energies_MeV, xs_inv_m, 'tab:blue',
                     label=interaction.name)
         axs[1].axvline(energy_MeV, color='k', linestyle='--', alpha=0.7, 
                     label=f'Current energy: {energy_MeV:.1f} MeV')
@@ -1016,7 +1018,7 @@ class SpectrometerPlotter:
         srim_energies_MeV, srim_range_m = foil.integrated_stopping_data
         srim_range_mm = srim_range_m/1e-3
         
-        axs[2].plot(srim_energies_MeV, srim_range_mm, 'tab:blue', linewidth=2)
+        axs[2].plot(srim_energies_MeV, srim_range_mm, 'tab:blue')
         
         axs[2].set_xlabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
         axs[2].set_ylabel('Range in Foil Material [mm]')
@@ -1031,19 +1033,19 @@ class SpectrometerPlotter:
             for interaction in foil2.interactions:
                 if interaction.generates_recoil_particles:
                     diff_xs_lab2 = interaction.get_angle_distribution(energy_MeV).pdf(angles_rad)
-                    axs[0].plot(angles_deg, diff_xs_lab2, 'darkorange', linewidth=2)
+                    axs[0].plot(angles_deg, diff_xs_lab2, 'darkorange')
             
             # n-hydron cross section data
             for interaction in foil2.interactions:
                 xs_inv_m2 = interaction.get_cross_section(energies_MeV)
-                axs[1].plot(energies_MeV, xs_inv_m2, 'darkorange', linewidth=2,
+                axs[1].plot(energies_MeV, xs_inv_m2, 'darkorange',
                             label=interaction.name)
             
             # Stopping power for dual data
             srim_energies_MeV2, srim_range_m2 = foil2.integrated_stopping_data
             srim_range_mm2 = srim_range_m2/1e-3
             
-            axs[2].plot(srim_energies_MeV2, srim_range_mm2, 'darkorange', linewidth=2)
+            axs[2].plot(srim_energies_MeV2, srim_range_mm2, 'darkorange')
         
         fig.legend()
         filename = f'{filename_prefix}_E{energy_MeV:.1f}MeV_data.png'
@@ -1080,11 +1082,10 @@ class SpectrometerPlotter:
         # Draw foil boundary
         theta = np.linspace(0, 2*np.pi, 100)
         foil_r = spec_ch2.conversion_foil.foil_radius_cm
-        ax.plot(foil_r * np.cos(theta), foil_r * np.sin(theta), 'k-', 
-               linewidth=2, label='Foil boundary')
+        ax.plot(foil_r * np.cos(theta), foil_r * np.sin(theta), 'k-', label='Foil boundary')
         
         # Draw y=0 dividing line
-        ax.axhline(0, color='black', linestyle='--', linewidth=2, alpha=0.7, label='Y=0 divider')
+        ax.axhline(0, color='black', linestyle='--', alpha=0.7, label='Y=0 divider')
         
         # Add shaded regions to show foil halves
         from matplotlib.patches import Wedge

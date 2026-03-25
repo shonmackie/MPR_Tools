@@ -1,7 +1,7 @@
 """Hodoscope detector array implementation."""
 
 from pathlib import Path
-from typing import Optional, Union, Literal
+from typing import Optional, Tuple, Union, Literal
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
@@ -53,7 +53,7 @@ class Hodoscope:
             detector_material: The material of the detector. Only used for detector sensitivity calculation.
         """
         # Calculate detector centers
-        if channels:
+        if channels is not None:
             if channels_left or channels_right or detector_width or detector_height:
                 raise ValueError('If channels is an array or filename, no other channel dimension arguments should be passed.')
             if type(channels) is str:
@@ -185,7 +185,7 @@ class Hodoscope:
 
         return sensitivity_efficiencies
     
-    def get_total_background(
+    def get_background(
         self,
         neutron_energy: Optional[float] = None,
         photon_energy: Optional[float] = None,
@@ -193,9 +193,9 @@ class Hodoscope:
         photon_flux: Optional[float] = None,
         neutron_background_file: Optional[str] = None,
         photon_background_file: Optional[str] = None
-    ) -> float:
+    ) -> Tuple[float, float]:
         """
-        Calculate the total background signal deposited in the detector.
+        Calculate the background signal deposited in the detector, separated by particle type.
 
         Each particle type (neutron, photon) can be specified either as a scalar flux at a single
         energy, or as a background file containing an energy spectrum. If neither is provided for a
@@ -212,8 +212,9 @@ class Hodoscope:
                 (particles/cm^2-source) describing the photon flux spectrum.
 
         Returns:
-            float: Total background signal in weighted particles/cm^2-source, where each particle
-                is weighted by its detection sensitivity (mean_eDep / incident_energy).
+            Tuple[float, float]: (neutron_background, photon_background) in weighted
+                particles/cm^2-source, where each particle is weighted by its detection
+                sensitivity (mean_eDep / incident_energy).
         """
         if not self.detector_used:
             raise ValueError("Detector not used; cannot calculate background.")
@@ -228,16 +229,17 @@ class Hodoscope:
         def _contribution_from_scalar(particle: str, energy: float, flux: float) -> float:
             return flux * float(self.sensitivity[particle](energy))
 
-        total = 0.0
+        neutron_total = 0.0
+        photon_total = 0.0
 
         if neutron_background_file:
-            total += _contribution_from_file('neutron', neutron_background_file)
+            neutron_total = _contribution_from_file('neutron', neutron_background_file)
         elif neutron_energy and neutron_flux:
-            total += _contribution_from_scalar('neutron', neutron_energy, neutron_flux)
+            neutron_total = _contribution_from_scalar('neutron', neutron_energy, neutron_flux)
 
         if photon_background_file:
-            total += _contribution_from_file('gamma', photon_background_file)
+            photon_total = _contribution_from_file('gamma', photon_background_file)
         elif photon_energy and photon_flux:
-            total += _contribution_from_scalar('gamma', photon_energy, photon_flux)
+            photon_total = _contribution_from_scalar('gamma', photon_energy, photon_flux)
 
-        return total
+        return neutron_total, photon_total
