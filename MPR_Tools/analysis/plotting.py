@@ -419,32 +419,33 @@ class SpectrometerPlotter:
         particle_label = self.spectrometer.conversion_foil.particle
         detector_used = self.spectrometer.hodoscope.detector_used
         if detector_used:
-            units = 'MeV' if incident_particle_yield else 'MeV/source'
+            label = f'$E_{{dep}}$ [{"MeV" if incident_particle_yield else "MeV/source"}]'
         else:
-            units = 'particles' if incident_particle_yield else 'particles/source'
+            label = f'Counts [{"MeV" if incident_particle_yield else "MeV/source"}]'
+
+        def _step(ax, edges, values, **kwargs):
+            return ax.step(edges, np.append(values, values[-1]), where='pre', **kwargs)[0]
 
         # Plot 1: counts
         fig, ax_counts = plt.subplots(figsize=(10, 4))
-        ax_counts.stairs(signal, channel_edges, baseline=None,
-                         color=self.primary_color, label=particle_label,
-                         linewidth=3)
+        _step(ax_counts, channel_edges, signal,
+              color=self.primary_color, label=particle_label, linewidth=3)
         if neutron_background is not None:
-            ax_counts.stairs(neutron_background, channel_edges, baseline=None,
-                             color='steelblue', label='Neutron background', linewidth=3)
+            _step(ax_counts, channel_edges, neutron_background,
+                  color='steelblue', label='neutron', linewidth=3)
         if photon_background is not None:
-            ax_counts.stairs(photon_background, channel_edges, baseline=None,
-                             color='darkorange', label='Photon background', linewidth=3)
+            _step(ax_counts, channel_edges, photon_background,
+                  color='darkorange', label='photon', linewidth=3)
         if self.dual_data and signal2 is not None:
-            ax_counts.stairs(signal2, channel_edges2, baseline=None,
-                             color=self.dual_data['secondary_color'],
-                             label=self.dual_data['secondary_label'],
-                             linewidth=3)
+            _step(ax_counts, channel_edges2, signal2,
+                  color=self.dual_data['secondary_color'],
+                  label=self.dual_data['secondary_label'], linewidth=3)
         ax_counts.set_yscale('log')
         ax_counts.set_xlabel('Horizontal Position [cm]')
-        ax_counts.set_ylabel(f'Counts [{units}]')
-        ax_counts.legend()
+        ax_counts.set_ylabel(label)
         ax_counts.grid(True, alpha=0.3)
         ax_counts.set_title(f'Yield: {incident_particle_yield:.0e}')
+        labelLines(ax_counts.get_lines(), align=False)
         fig.tight_layout()
         fig.savefig(filename_counts, dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -455,16 +456,16 @@ class SpectrometerPlotter:
             fig, ax_sb = plt.subplots(figsize=(10, 4))
             if neutron_background is not None:
                 sb_n = np.where(neutron_background > 0, signal / neutron_background, np.nan)
-                ax_sb.stairs(np.log10(sb_n), channel_edges, baseline=None,
-                             color='steelblue', label='S / neutron B', linewidth=3)
+                _step(ax_sb, channel_edges, np.log10(sb_n),
+                      color='steelblue', label='neutron', linewidth=3)
             if photon_background is not None:
                 sb_p = np.where(photon_background > 0, signal / photon_background, np.nan)
-                ax_sb.stairs(np.log10(sb_p), channel_edges, baseline=None,
-                             color='darkorange', label='S / photon B', linewidth=3)
+                _step(ax_sb, channel_edges, np.log10(sb_p),
+                      color='darkorange', label='photon', linewidth=3)
             ax_sb.set_xlabel('Horizontal Position [cm]')
             ax_sb.set_ylabel('log$_{10}$(S/B)')
-            ax_sb.legend()
             ax_sb.grid(True, alpha=0.3)
+            labelLines(ax_sb.get_lines(), align=False)
             fig.tight_layout()
             fig.savefig(filename_sb, dpi=150, bbox_inches='tight')
             plt.close(fig)

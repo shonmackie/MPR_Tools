@@ -114,7 +114,7 @@ class Hodoscope:
         # Calculate channel centers and widths for convenience
         self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2
         self.channel_widths = np.diff(self.channel_edges)
-
+        
         # Channel heights are all the same
         self.channel_heights = np.full(self.total_channels, detector_height)
 
@@ -227,7 +227,7 @@ class Hodoscope:
         def _contribution_from_file(particle: str, filepath: str) -> float:
             df = pd.read_csv(filepath)
             energies = df['energy'].to_numpy()
-            flux = df['energy_mean'].to_numpy()  # [particles/cm^2-source] per energy bin
+            flux = df['mean'].to_numpy()  # [particles/cm^2-source] per energy bin
             mean_eDep = self.sensitivity[particle](energies) * energies  # [MeV]
             return float(np.dot(flux, mean_eDep))  # [MeV/cm^2-source]
 
