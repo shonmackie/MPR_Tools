@@ -176,14 +176,20 @@ class Hodoscope:
         particle: Literal['proton', 'deuteron', 'neutron', 'gamma']
     ) -> np.ndarray:
         """
-        Get the detector response for a given particle and energy.
+        Get the detector response for each particle.
+
+        Args:
+            energies: Absolute kinetic energies in MeV.
+            particle: Particle type.
+
+        Returns:
+            When detector_used is True: mean energy deposited per particle [MeV].
+            When detector_used is False: ones (particle count weight).
         """
         if self.detector_used:
-            sensitivity_efficiencies = self.sensitivity[particle](energies)
+            return self.sensitivity[particle](energies) * energies  # mean_eDep [MeV]
         else:
-            sensitivity_efficiencies = np.ones(len(energies))
-
-        return sensitivity_efficiencies
+            return np.ones(len(energies))
     
     def get_background(
         self,
@@ -212,9 +218,8 @@ class Hodoscope:
                 (particles/cm^2-source) describing the photon flux spectrum.
 
         Returns:
-            Tuple[float, float]: (neutron_background, photon_background) in weighted
-                particles/cm^2-source, where each particle is weighted by its detection
-                sensitivity (mean_eDep / incident_energy).
+            Tuple[float, float]: (neutron_background, photon_background) as mean energy
+                deposited per unit area per source particle [MeV/cm^2-source].
         """
         if not self.detector_used:
             raise ValueError("Detector not used; cannot calculate background.")
@@ -223,11 +228,12 @@ class Hodoscope:
             df = pd.read_csv(filepath)
             energies = df['energy'].to_numpy()
             flux = df['energy_mean'].to_numpy()  # [particles/cm^2-source] per energy bin
-            sens = self.sensitivity[particle](energies)
-            return float(np.dot(flux, sens))  # [weighted_particles/cm^2-source]
+            mean_eDep = self.sensitivity[particle](energies) * energies  # [MeV]
+            return float(np.dot(flux, mean_eDep))  # [MeV/cm^2-source]
 
         def _contribution_from_scalar(particle: str, energy: float, flux: float) -> float:
-            return flux * float(self.sensitivity[particle](energy))
+            mean_eDep = float(self.sensitivity[particle](energy)) * energy  # [MeV]
+            return flux * mean_eDep  # [MeV/cm^2-source]
 
         neutron_total = 0.0
         photon_total = 0.0

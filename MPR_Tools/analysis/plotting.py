@@ -393,7 +393,7 @@ class SpectrometerPlotter:
                 photon_background_file=photon_background_file
             )
             scale = (incident_particle_yield if incident_particle_yield else 1.0)
-            # per channel: [particles/cm²] × bin_width [cm] × channel_height [cm]
+            # per channel: [MeV/cm²-source] × bin_width [cm] × channel_height [cm] = [MeV/source]
             neutron_background = neutron_bg_density * scale * channel_widths * channel_heights
             photon_background = photon_bg_density * scale * channel_widths * channel_heights
             background = neutron_background + photon_background
@@ -417,7 +417,11 @@ class SpectrometerPlotter:
         filename_coverage = f'{base}_coverage{ext}'
 
         particle_label = self.spectrometer.conversion_foil.particle
-        units = 'particles' if incident_particle_yield else 'particles/source'
+        detector_used = self.spectrometer.hodoscope.detector_used
+        if detector_used:
+            units = 'MeV' if incident_particle_yield else 'MeV/source'
+        else:
+            units = 'particles' if incident_particle_yield else 'particles/source'
 
         # Plot 1: counts
         fig, ax_counts = plt.subplots(figsize=(10, 4))
@@ -652,20 +656,19 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Particle density heatmap saved to {filename}')
 
-        # If detector is used, also plot response map and signal-to-background
+        # If detector is used, also plot response map
         if self.spectrometer.hodoscope.detector_used:
             fig, ax = plt.subplots(figsize=(10, 8))
             im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(response), cmap=self.primary_cmap, shading='auto')
             cbar = fig.colorbar(im, ax=ax, shrink=0.6)
-            units = f'[response/cm$^2$-source]' if incident_particle_yield is None else f'[response/cm$^2$]'
-            cbar.set_label(f'log$_{{10}}$(Detector Response {units})')
+            response_units = '[MeV/cm$^2$-source]' if incident_particle_yield is None else '[MeV/cm$^2$]'
+            cbar.set_label(f'log$_{{10}}$(Energy Deposited {response_units})')
 
             # Add dual data if available
             if self.dual_data:
                 im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(response2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
                 cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-                units = f'[response/cm$^2$-source]' if incident_particle_yield is None else f'[response/cm$^2$]'
-                cbar2.set_label(f'log$_{{10}}$(Detector Response {units})')
+                cbar2.set_label(f'log$_{{10}}$(Energy Deposited {response_units})')
 
             ax.set_xlabel('X Position [cm]')
             ax.set_ylabel('Y Position [cm]')
