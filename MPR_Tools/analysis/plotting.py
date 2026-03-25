@@ -347,9 +347,9 @@ class SpectrometerPlotter:
             filename: Output filename for the plot.
             foil_distance: Distance from foil to detector in cm for solid-angle correction.
             incident_particle_yield: Total source yield; scales both signal and background.
-            neutron_background_file: CSV with 'energy' [MeV] and 'energy_mean'
+            neutron_background_file: CSV with 'energy' [MeV] and 'mean'
                 [particles/cm^2-source] columns for the neutron background spectrum.
-            photon_background_file: CSV with 'energy' [MeV] and 'energy_mean'
+            photon_background_file: CSV with 'energy' [MeV] and 'mean'
                 [particles/cm^2-source] columns for the photon background spectrum.
             neutron_energy: Single neutron energy in MeV (scalar background input).
             neutron_flux: Neutron flux in particles/cm^2-source (scalar background input).

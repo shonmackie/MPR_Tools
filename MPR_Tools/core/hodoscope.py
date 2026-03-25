@@ -212,9 +212,9 @@ class Hodoscope:
             photon_energy: Photon energy in MeV (used with photon_flux for scalar input).
             neutron_flux: Neutron flux in particles/cm^2-source (scalar).
             photon_flux: Photon flux in particles/cm^2-source (scalar).
-            neutron_background_file: Path to CSV with columns 'energy' (MeV) and 'energy_mean'
+            neutron_background_file: Path to CSV with columns 'energy' (MeV) and 'mean'
                 (particles/cm^2-source) describing the neutron flux spectrum.
-            photon_background_file: Path to CSV with columns 'energy' (MeV) and 'energy_mean'
+            photon_background_file: Path to CSV with columns 'energy' (MeV) and 'mean'
                 (particles/cm^2-source) describing the photon flux spectrum.
 
         Returns:
