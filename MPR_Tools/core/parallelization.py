@@ -4,8 +4,9 @@ It feels weird to have a whole file just for this, but I need to be able to impo
 """
 import time
 from collections.abc import Callable
-from concurrent.futures import Executor, ProcessPoolExecutor
+from concurrent.futures import Executor, ProcessPoolExecutor, Future
 import multiprocessing as mp
+from multiprocessing import SimpleQueue
 from typing import Optional
 
 from tqdm import tqdm
@@ -41,20 +42,29 @@ def run_concurrently(
     Returns:
         the result from calling function on each set of args, in a list
     """
-    # Create shared counter for progress tracking
-    manager = mp.Manager()
-    progress_counter = manager.Value('i', 0)
-    progress_lock = manager.Lock()
-    
-    # Initialize progress bar
-    pbar = tqdm(total=progress_counter_total, desc=task_title)
-    
     # Initialize executor, if we don't already have one
-    if executor is None:
-        executor = ProcessPoolExecutor(max_workers=len(args_list))
-        we_must_close_the_executor = True
-    else:
+    if executor is not None:
         we_must_close_the_executor = False
+    else:
+        if len(args_list) > 1:
+            executor = ProcessPoolExecutor(max_workers=len(args_list))
+            we_must_close_the_executor = True
+        else:
+            executor = SerialExecutor()
+            we_must_close_the_executor = False
+    
+    if type(executor) is not SerialExecutor:
+        # Create shared counter for progress tracking
+        manager = mp.Manager()
+        progress_counter = manager.Value('i', 0)
+        progress_lock = manager.Lock()
+        # Initialize progress bar
+        pbar = tqdm(total=progress_counter_total, desc=task_title)
+    else:
+        # Create dummy variables to fill in for the progress bar stuff
+        progress_counter = FakeCounter(0)
+        progress_lock = FakeLock()
+        pbar = FakeProgressBar()
     
     try:
         futures = []
@@ -93,3 +103,66 @@ def run_concurrently(
             executor.shutdown()
     
     return results
+
+
+class SerialExecutor(Executor):
+    """ an Executor for when you don't actually want to do multiprocessing """
+    def __init__(self):
+        self.tasks = SimpleQueue()
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
+        return False
+    
+    def shutdown(self, wait=True, cancel_futures=True):
+        pass
+    
+    def submit(self, function, *args, **kwargs):
+        return OnDemandFuture(function, *args, **kwargs)
+
+
+class OnDemandFuture(Future):
+    """ a return value that pretends to be concurrent but actually isn't """
+    def __init__(self, function, *args, **kwargs):
+        self.function = function
+        self.args = args
+        self.kwargs = kwargs
+    
+    def done(self):
+        return True
+    
+    def result(self, timeout=None):
+        return self.function(*self.args, **self.kwargs)
+
+
+class FakeLock:
+    """ for when you wrote your code to have a lock but you don't actually need a lock """
+    def __init__(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+
+class FakeCounter:
+    """ for when you wrote your code to have a counter but you don't actually need a counter """
+    def __init__(self, value: float):
+        self.value = value
+
+
+class FakeProgressBar:
+    """ for when you wrote your code to have a progress bar but progress bars don't actually work without multiprocessing """
+    def __init__(self):
+        pass
+    
+    def update(self, value):
+        pass
+    
+    def close(self):
+        pass
