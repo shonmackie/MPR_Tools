@@ -48,6 +48,7 @@ class HodoscopeCreator:
         peak_energy_min: Optional[float] = None,
         peak_energy_max: Optional[float] = None,
         n_peak_bins: Optional[int] = None,
+        plot: bool = True,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Generate hodoscope bin boundaries using the staircase algorithm.
@@ -61,6 +62,7 @@ class HodoscopeCreator:
             peak_energy_min: If provided, the lower bound of a signal peak region.
             peak_energy_max: If provided, the upper bound of a signal peak region.
             n_peak_bins: If provided along with the peak energy bounds, the number of narrow bins to place within the signal peak region.
+            plot: If True, plot the resulting bin boundaries.
 
         Returns:
             bin_energies  : Center energy of each bin [MeV], shape (N,).
@@ -155,6 +157,15 @@ class HodoscopeCreator:
         bottom_edge = bin_positions[0] - bin_widths[0] / 2
         upper_edges = bin_positions + bin_widths / 2
         bin_edges = np.concatenate([[bottom_edge], upper_edges])
+        
+        # Plot
+        if plot:
+            self.plot_bins(
+                bin_energies, bin_positions, 
+                performance_curve_file=performance_curve_file,
+                peak_energy_min=peak_energy_min, 
+                peak_energy_max=peak_energy_max
+            )
 
         return bin_energies, bin_positions, bin_edges
 

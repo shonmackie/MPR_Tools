@@ -515,7 +515,7 @@ class MPRSpectrometer:
         
         for x_position in self.output_beam[:, 0]:
             channel = self.hodoscope.get_channel_for_position(x_position)
-            if channel is not None:
+            if channel:
                 channel_counts[channel] += 1
         
         channel_numbers = np.arange(self.hodoscope.total_channels)

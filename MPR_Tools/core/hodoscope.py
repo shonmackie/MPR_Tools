@@ -1,9 +1,10 @@
 """Hodoscope detector array implementation."""
 
-from typing import Optional, Union, Literal
+from pathlib import Path
+from typing import Optional, Tuple, Union, Literal
 import numpy as np
-import os
 import pandas as pd
+from scipy.interpolate import interp1d
 
 class Hodoscope:
     """
@@ -19,7 +20,8 @@ class Hodoscope:
         channels_right: Optional[int] = None,
         detector_width: Optional[float] = None,
         detector_height: Optional[float] = None,
-        detector_sensitivity_dir: Optional[str] = None
+        detector_material: Optional[str] = None,
+        detector_thickness: Optional[float] = None
     ):
         """
         Initialize hodoscope detector array in one of three ways:
@@ -48,23 +50,23 @@ class Hodoscope:
                             If this is passed, then `channels` should not be passed.
             detector_height: Total detector height in cm.
                              If this is passed, then `channels` should not be passed.
-            detector_sensitivity_dir: Name of a directory containing data files for the sensitivity
-                                      of the individual detectors to radiation
+            detector_material: The material of the detector. Only used for detector sensitivity calculation.
         """
         # Calculate detector centers
         if channels is not None:
-            if channels_left is not None or channels_right is not None or detector_width is not None or detector_height is not None:
+            if channels_left or channels_right or detector_width or detector_height:
                 raise ValueError('If channels is an array or filename, no other channel dimension arguments should be passed.')
             if type(channels) is str:
                 channels = np.loadtxt(channels, delimiter=',', encoding='utf-8')
             self._calculate_channel_edges_from_array(channels)
-        elif channels_left is not None and channels_right is not None and detector_width is not None and detector_height is not None:
+        elif channels_left and channels_right and detector_width and detector_height:
             self._calculate_channel_edges_from_parameters(channels_left, channels_right, detector_width, detector_height)
         else:
             raise ValueError("There isn't enough information to constrain the channel dimensions.  Please pass either `channels` or all four of the channel dimension parameters.")
 
-        if detector_sensitivity_dir is not None:
-            self.detector_sensitivity_dir = detector_sensitivity_dir
+        if detector_material and detector_thickness:
+            self.detector_material = detector_material
+            self.detector_thickness = detector_thickness
             self._build_detector_sensitivity()
             self.detector_used = True
         else:
@@ -75,6 +77,7 @@ class Hodoscope:
         # Extract channel x-coordinates from the left column
         self.channel_edges = data[:, 0] * 1e-2  # cm to m
         self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2
+        self.channel_widths = np.diff(self.channel_edges)
         self.detector_width = self.channel_edges[-1] - self.channel_edges[0]
 
         # Create array of channel heights from the right column (ignoring the last row)
@@ -108,9 +111,10 @@ class Hodoscope:
         # Create array of all channel edges (N+1 edges for N channels)
         self.channel_edges = np.linspace(leftmost_edge, leftmost_edge + self.detector_width, self.total_channels + 1)
         
-        # Calculate channel centers for convenience
+        # Calculate channel centers and widths for convenience
         self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2
-
+        self.channel_widths = np.diff(self.channel_edges)
+        
         # Channel heights are all the same
         self.channel_heights = np.full(self.total_channels, detector_height)
 
@@ -139,59 +143,32 @@ class Hodoscope:
     
     def _build_detector_sensitivity(self) -> None:
         """
-        Build detector sensitivity from files in the specified directory. Sensitivity files should
-        include the detector type and the sensitivity for protons, deuterons, neutrons, and photons at various energies.
+        Build detector sensitivity from a CSV in data/detector_sensitivity/.
+        The sensitivity matrices are pre-generated in a Geant4 simulation.
+        The file is named '{detector_material}_sensitivity.csv' and must have columns:
+        particle, energy_MeV, detector_material, detector_thickness_mm, mean_eDep_MeV.
+        Sensitivity is defined as mean_eDep_MeV / energy_MeV (fraction of incident energy deposited).
+        Each particle is stored as a scipy interp1d object over energy, with thickness interpolated
+        from the available values in the CSV.
         """
-        # Parse directory name
-        self.detector_type, self.thickness = self.detector_sensitivity_dir.split("/")[-1].split('_')[:2]
-        
+        data_dir = Path(__file__).parent.parent / "data"
+        csv_path = data_dir / "detector_sensitivity" / f"{self.detector_material}_sensitivity.csv"
+        df = pd.read_csv(csv_path)
+        df['sensitivity'] = df['mean_eDep_MeV'] / df['energy_MeV']
+
         self.sensitivity = {}
-        
-        if self.detector_type == 'EJ262':
-            # Thickness will be in mm, get it as a float
-            self.thickness = float(self.thickness.replace("mm", ""))
-            
-            # Parse the detector sensitivity files
-            for file in os.listdir(self.detector_sensitivity_dir):
-                if file.endswith(".txt"):
-                    # Parse the file name to get the detector type and energy
-                    particle = file.split("_")[0]
-                    
-                    # Load the sensitivity data
-                    sensitivity_data = np.loadtxt(f'{self.detector_sensitivity_dir}/{file}', delimiter=',')
-                    energy = sensitivity_data[:, 0] # in MeV
-                    yields = sensitivity_data[:, 1] # in # photons/particle
-                    
-                    self.sensitivity[particle] = {
-                        'energy': energy,
-                        'yields': yields
-                    }
-                    
-        elif self.detector_type == 'silicon':
-            # Set thickness to specific value in mm
-            self.thickness = 5.0
-            
-            # Parse the detector sensitivity file generated by OpenMC
-            sensitivity_df = pd.read_csv(f'{self.detector_sensitivity_dir}/simulation_results.csv')
-            sensitivity_df = sensitivity_df[sensitivity_df['thickness'] == self.thickness / 10]  # Convert mm to cm
-            sensitivity_df = sensitivity_df[sensitivity_df['material'] == 'silicon']
-            for particle in ['neutron', 'gamma']:
-                particle_df = sensitivity_df[sensitivity_df['particle_type'] == particle]
-                self.sensitivity[particle] = {
-                    'energy': particle_df['energy'].values / 1e6,  # Convert eV to MeV
-                    'yields': particle_df['heating_mean'].values / 1e6 # Assume yield is proportional to energy deposited
-                }
-            # For protons and deuterons, assume all the energy is deposited
-            self.sensitivity['proton'] = {
-                'energy': self.sensitivity['neutron']['energy'],  # Example energies in MeV
-                'yields': self.sensitivity['neutron']['energy']  # Assume yield is proportional to energy deposited
-            }
-            self.sensitivity['deuteron'] = {
-                'energy': self.sensitivity['neutron']['energy'],  # Example energies in MeV
-                'yields': self.sensitivity['neutron']['energy']  # Assume yield is proportional to energy deposited
-            }
-        else:
-            raise ValueError(f"Unknown detector type: {self.detector_type}")
+        for particle, particle_df in df.groupby('particle'):
+            energies = np.sort(particle_df['energy_MeV'].unique())
+            sensitivities = np.empty(len(energies))
+            for i, energy in enumerate(energies):
+                energy_df = particle_df[particle_df['energy_MeV'] == energy].sort_values('detector_thickness_mm')
+                thicknesses = energy_df['detector_thickness_mm'].values
+                sens_values = energy_df['sensitivity'].values
+                if self.detector_thickness is None or len(thicknesses) == 1:
+                    sensitivities[i] = sens_values[0]
+                else:
+                    sensitivities[i] = np.interp(self.detector_thickness, thicknesses, sens_values)
+            self.sensitivity[particle] = interp1d(energies, sensitivities, bounds_error=False, fill_value=(sensitivities[0], sensitivities[-1]))
               
     def get_detector_response(
         self,
@@ -199,42 +176,76 @@ class Hodoscope:
         particle: Literal['proton', 'deuteron', 'neutron', 'gamma']
     ) -> np.ndarray:
         """
-        Get the detector response for a given particle and energy.
+        Get the detector response for each particle.
+
+        Args:
+            energies: Absolute kinetic energies in MeV.
+            particle: Particle type.
+
+        Returns:
+            When detector_used is True: mean energy deposited per particle [MeV].
+            When detector_used is False: ones (particle count weight).
         """
         if self.detector_used:
-            # Interpolate detector sensitivity for each particle
-            sensitivity = self.sensitivity[particle]
-            sensitivity_energies = sensitivity['energy']
-            sensitivity_yields = sensitivity['yields']
-            sensitivity_efficiencies = np.interp(energies, sensitivity_energies, sensitivity_yields)
+            return self.sensitivity[particle](energies) * energies  # mean_eDep [MeV]
         else:
-            sensitivity_efficiencies = np.ones(len(energies))
-            
-        return sensitivity_efficiencies
+            return np.ones(len(energies))
     
-    def get_total_background(self) -> float:
+    def get_background(
+        self,
+        neutron_energy: Optional[float] = None,
+        photon_energy: Optional[float] = None,
+        neutron_flux: Optional[float] = None,
+        photon_flux: Optional[float] = None,
+        neutron_background_file: Optional[str] = None,
+        photon_background_file: Optional[str] = None
+    ) -> Tuple[float, float]:
         """
-        Calculate the density of background photons generated in the detector.
-            
+        Calculate the background signal deposited in the detector, separated by particle type.
+
+        Each particle type (neutron, photon) can be specified either as a scalar flux at a single
+        energy, or as a background file containing an energy spectrum. If neither is provided for a
+        particle type, its contribution is zero.
+
+        Args:
+            neutron_energy: Neutron energy in MeV (used with neutron_flux for scalar input).
+            photon_energy: Photon energy in MeV (used with photon_flux for scalar input).
+            neutron_flux: Neutron flux in particles/cm^2-source (scalar).
+            photon_flux: Photon flux in particles/cm^2-source (scalar).
+            neutron_background_file: Path to CSV with columns 'energy' (MeV) and 'mean'
+                (particles/cm^2-source) describing the neutron flux spectrum.
+            photon_background_file: Path to CSV with columns 'energy' (MeV) and 'mean'
+                (particles/cm^2-source) describing the photon flux spectrum.
+
         Returns:
-            float: Total background density in photons/cm^2-source
+            Tuple[float, float]: (neutron_background, photon_background) as mean energy
+                deposited per unit area per source particle [MeV/cm^2-source].
         """
-        # Assume background neutrons and gammas are uniformly distributed across the detector
         if not self.detector_used:
-            raise ValueError("Detector not used; cannot calculate background density map.")
-        
-        # TODO: implement actual background with energy distribution
-        total_photons = 1.4e-14 # Photons/cm^2-source
-        total_neutrons = 1.1e-14 # Neutrons/cm^2-source
-        
-        # Randomly sample background neutrons and gammas across the detector area with uniform distribution across energy range
-        neutron_sensitivity = self.sensitivity['neutron']
-        gamma_sensitivity = self.sensitivity['gamma']
-        
-        average_neutron_yield = np.trapezoid(neutron_sensitivity['yields'], neutron_sensitivity['energy']) / (neutron_sensitivity['energy'][-1] - neutron_sensitivity['energy'][0])
-        average_gamma_yield = np.trapezoid(gamma_sensitivity['yields'], gamma_sensitivity['energy']) / (gamma_sensitivity['energy'][-1] - gamma_sensitivity['energy'][0])
-        
-        # Calculate total background in units of photons/cm^2-source
-        total_background = total_neutrons * average_neutron_yield + total_photons * average_gamma_yield
-        
-        return total_background
+            raise ValueError("Detector not used; cannot calculate background.")
+
+        def _contribution_from_file(particle: str, filepath: str) -> float:
+            df = pd.read_csv(filepath)
+            energies = df['energy'].to_numpy()
+            flux = df['mean'].to_numpy()  # [particles/cm^2-source] per energy bin
+            mean_eDep = self.sensitivity[particle](energies) * energies  # [MeV]
+            return float(np.dot(flux, mean_eDep))  # [MeV/cm^2-source]
+
+        def _contribution_from_scalar(particle: str, energy: float, flux: float) -> float:
+            mean_eDep = float(self.sensitivity[particle](energy)) * energy  # [MeV]
+            return flux * mean_eDep  # [MeV/cm^2-source]
+
+        neutron_total = 0.0
+        photon_total = 0.0
+
+        if neutron_background_file:
+            neutron_total = _contribution_from_file('neutron', neutron_background_file)
+        elif neutron_energy and neutron_flux:
+            neutron_total = _contribution_from_scalar('neutron', neutron_energy, neutron_flux)
+
+        if photon_background_file:
+            photon_total = _contribution_from_file('gamma', photon_background_file)
+        elif photon_energy and photon_flux:
+            photon_total = _contribution_from_scalar('gamma', photon_energy, photon_flux)
+
+        return neutron_total, photon_total

@@ -100,7 +100,7 @@ class FoilSweeper:
             
             result = self._evaluate_parameter_combination(params.to_dict(), incident_energy, num_recoil_particles, num_incident_particles)
             
-            if result is not None:
+            if result:
                 all_results[i] = result
         
         # Raise error if no results
@@ -217,30 +217,30 @@ class FoilSweeper:
         current_foil = self.spectrometer.conversion_foil
         
         # Set up ranges or fixed values for each parameter
-        if foil_radius_range is not None:
+        if foil_radius_range:
             self.optimization_ranges['foil_radius'] = foil_radius_range
         else:
             self.fixed_parameters['foil_radius'] = current_foil.foil_radius_cm
         
-        if thickness_range is not None:
+        if thickness_range:
             self.optimization_ranges['thickness'] = thickness_range
         else:
             self.fixed_parameters['thickness'] = current_foil.thickness_um
         
-        if aperture_radius_range is not None:
+        if aperture_radius_range:
             self.optimization_ranges['aperture_radius'] = aperture_radius_range
         else:
             self.fixed_parameters['aperture_radius'] = current_foil.aperture_radius_cm
         
-        if aperture_distance_range is not None:
+        if aperture_distance_range:
             self.optimization_ranges['aperture_distance'] = aperture_distance_range
         else:
             self.fixed_parameters['aperture_distance'] = current_foil.aperture_distance_cm
         
-        if study_name is not None:
+        if study_name:
             self.study_name = study_name
             
-        if storage_path is not None:
+        if storage_path:
             self.storage_path = storage_path
         else:
             self.storage_path = f'{self.spectrometer.data_directory}/optuna.db'
@@ -348,7 +348,7 @@ class FoilSweeper:
         if self.storage_path is None:
             raise ValueError("Must call setup_optimization() before load_study()")
         
-        name = study_name if study_name is not None else self.study_name
+        name = study_name if study_name else self.study_name
         storage_url = f'sqlite:///{self.storage_path}'
         
         self.study = optuna.load_study(
