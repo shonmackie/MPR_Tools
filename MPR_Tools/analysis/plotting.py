@@ -324,7 +324,7 @@ class SpectrometerPlotter:
     def plot_position_histogram(
         self,
         filename: Optional[str] = None,
-        foil_distance: Optional[float] = None,
+        foil_solid_angle_fraction: Optional[float] = None,
         incident_particle_yield: Optional[float] = None,
         neutron_background_file: Optional[str] = None,
         photon_background_file: Optional[str] = None,
@@ -345,7 +345,7 @@ class SpectrometerPlotter:
 
         Args:
             filename: Output filename for the plot.
-            foil_distance: Distance from foil to detector in cm for solid-angle correction.
+            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
             incident_particle_yield: Total source yield; scales both signal and background.
             neutron_background_file: CSV with 'energy' [MeV] and 'mean'
                 [particles/cm^2-source] columns for the neutron background spectrum.
@@ -366,7 +366,7 @@ class SpectrometerPlotter:
 
         # --- Signal via get_recoil_x_map ---
         signal, coverage = self.performance_analyzer.get_recoil_x_map(
-            foil_distance=foil_distance, particle_yield=incident_particle_yield
+            foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield
         )
         channel_edges = hodoscope.channel_edges * 100  # m to cm
         channel_widths = hodoscope.channel_widths * 100  # m to cm
@@ -403,7 +403,7 @@ class SpectrometerPlotter:
         if self.dual_data:
             signal2, coverage2 = (
                 self.dual_data['performance_analyzer'].get_recoil_x_map(
-                    foil_distance=foil_distance, particle_yield=incident_particle_yield
+                    foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield
                 )
             )
             channel_edges2 = hodoscope.channel_edges * 100  # m to cm
@@ -610,7 +610,7 @@ class SpectrometerPlotter:
         dx: float = 0.5,
         dy: float = 0.5,
         incident_particle_yield: Optional[float] = None,
-        foil_distance: Optional[float] = None,
+        foil_solid_angle_fraction: Optional[float] = None,
     ) -> None:
         """
         Plot a heatmap of focal particle density in the detector plane.
@@ -620,13 +620,13 @@ class SpectrometerPlotter:
             dx: X-direction resolution in cm.
             dy: Y-direction resolution in cm.
             incident_particle_yield: Total particle yield (particles/source). Scales the density map.
-            foil_distance: Distance from the foil to the detector in cm.
+            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
         """
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/particle_density_heatmap.png'
 
         particle = self.spectrometer.conversion_foil.particle
-        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_distance=foil_distance, particle_yield=incident_particle_yield)
+        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -642,7 +642,7 @@ class SpectrometerPlotter:
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_distance=foil_distance, particle_yield=incident_particle_yield)
+            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
             units = f'[{particle2}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle2}/cm$^2$]'

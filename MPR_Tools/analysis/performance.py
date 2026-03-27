@@ -351,19 +351,19 @@ class PerformanceAnalyzer:
         
     def _get_incident_spectrum(
         self,
-        foil_distance: Optional[float] = None,
+        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
         """
         Get incident particle mean energy based on the binned response.
-        
+
         Returns:
             response: np.ndarray of detector response values
             background: float of total background contribution
             incident_energies: np.ndarray of incident energies
             incident_energies_std: np.ndarray of incident energy uncertainties
         """
-        signal_per_bin, _ = self.get_recoil_x_map(foil_distance, particle_yield)
+        signal_per_bin, _ = self.get_recoil_x_map(foil_solid_angle_fraction, particle_yield)
         hodoscope = self.spectrometer.hodoscope
         x_positions = hodoscope.channel_centers  # meters
         response_values = signal_per_bin
@@ -411,18 +411,18 @@ class PerformanceAnalyzer:
     
     def get_recoil_density_map(
         self,
-        dx: float = 0.5, 
+        dx: float = 0.5,
         dy: float = 0.5,
-        foil_distance: Optional[float] = None,
+        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Calculate the density of recoil particle impact sites and detector response (if available) in the focal plane.
-        
+
         Args:
             dx: X-direction resolution in cm
             dy: Y-direction resolution in cm
-            foil_distance, optional: Distance between foil and target in meters
+            foil_solid_angle_fraction, optional: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source
             particle_yield, optional: Input particle yield
             
         Returns:
@@ -485,9 +485,8 @@ class PerformanceAnalyzer:
         density_map /= (cell_area_cm2 * total_recoils)
         response_map /= (cell_area_cm2 * total_recoils)
         
-        # Calculate foil solid angle fraction
-        if foil_distance:
-            foil_solid_angle_fraction = self.spectrometer.conversion_foil.foil_radius**2 / (4 * foil_distance**2)
+        # Add source-to-foil geometric factor
+        if foil_solid_angle_fraction:
             density_map *= foil_solid_angle_fraction
             response_map *= foil_solid_angle_fraction
             
@@ -505,7 +504,7 @@ class PerformanceAnalyzer:
     
     def get_recoil_x_map(
         self,
-        foil_distance: Optional[float] = None,
+        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -513,13 +512,12 @@ class PerformanceAnalyzer:
         By default the hodoscope channel edges and heights are used for binning.
 
         The y-acceptance cut is applied symmetrically around y=0 (the reference ray).
-        The y-acceptance cut is applied symmetrically around y=0 (the reference ray).
         When detector_used is False, signal is in [particles/source] per channel.
         When detector_used is True, signal is in [MeV deposited/source] per channel.
         Scaling by particle_yield gives [particles] or [MeV deposited] respectively.
 
         Args:
-            foil_distance: Distance from foil to detector in cm for solid-angle correction.
+            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
             particle_yield: Total source yield; scales the returned signal.
 
         Returns:
@@ -565,11 +563,7 @@ class PerformanceAnalyzer:
         signal_per_bin /= total_particles
         total_per_bin /= total_particles
 
-        # Solid-angle correction for finite foil distance
-        if foil_distance:
-            foil_solid_angle_fraction = (
-                self.spectrometer.conversion_foil.foil_radius ** 2 / (4 * foil_distance ** 2)
-            )
+        if foil_solid_angle_fraction:
             signal_per_bin *= foil_solid_angle_fraction
             total_per_bin *= foil_solid_angle_fraction
 
