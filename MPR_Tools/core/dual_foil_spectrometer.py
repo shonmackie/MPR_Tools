@@ -135,7 +135,7 @@ class DualFoilSpectrometer:
     def generate_monte_carlo_rays(
         self,
         incident_energies: np.ndarray,
-        energy_distribution: np.ndarray,
+        probability_distribution: np.ndarray,
         num_recoil_particles: int,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -149,7 +149,7 @@ class DualFoilSpectrometer:
         
         Args:
             incident_energies: Array of incident particle energies in MeV
-            energy_distribution: Relative probability distribution
+            probability_distribution: Relative probability distribution
             num_recoil_particles: Total number of recoil particles to simulate
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include SRIM energy loss
@@ -158,10 +158,10 @@ class DualFoilSpectrometer:
             executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes
         """
-        # Split recoil events between foils based on energy_distribution
+        # Split recoil events between foils based on probability_distribution
         ch2_idx = (incident_energies >= self.ch2_min_energy) & (incident_energies <= self.ch2_max_energy)
         cd2_idx = (incident_energies >= self.cd2_min_energy) & (incident_energies <= self.cd2_max_energy)
-        ch2_fraction = np.sum(energy_distribution[ch2_idx]) / (np.sum(energy_distribution[ch2_idx]) + np.sum(energy_distribution[cd2_idx]))
+        ch2_fraction = np.sum(probability_distribution[ch2_idx]) / (np.sum(probability_distribution[ch2_idx]) + np.sum(probability_distribution[cd2_idx]))
         num_ch2 = int(num_recoil_particles * ch2_fraction)
         num_cd2 = num_recoil_particles - num_ch2
         
@@ -169,7 +169,7 @@ class DualFoilSpectrometer:
         print(f'\nGenerating {num_ch2} CH2 (proton) rays with positive y restriction...')
         self.spec_ch2.generate_monte_carlo_rays(
             incident_energies=incident_energies,
-            energy_distribution=energy_distribution,
+            probability_distribution=probability_distribution,
             num_recoil_particles=num_ch2,
             include_kinematics=include_kinematics,
             include_stopping_power_loss=include_stopping_power_loss,
@@ -183,7 +183,7 @@ class DualFoilSpectrometer:
         print(f'\nGenerating {num_cd2} CD2 (deuteron) rays with negative y restriction...')
         self.spec_cd2.generate_monte_carlo_rays(
             incident_energies=incident_energies,
-            energy_distribution=energy_distribution,
+            probability_distribution=probability_distribution,
             num_recoil_particles=num_cd2,
             include_kinematics=include_kinematics,
             include_stopping_power_loss=include_stopping_power_loss,
@@ -336,7 +336,7 @@ class DualFoilSpectrometer:
             'y0': self.combined_input_beam[:, 2],
             'p_y_relative': self.combined_input_beam[:, 3],
             'energy_relative': self.combined_input_beam[:, 4],
-            'incident_energy': self.combined_input_beam[:, 5],
+            'arrival_time_at_foil': self.combined_input_beam[:, 5],
             'particle_type': self.combined_input_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)
@@ -353,7 +353,8 @@ class DualFoilSpectrometer:
             'y0': self.combined_output_beam[:, 2],
             'p_y_relative': self.combined_output_beam[:, 3],
             'energy_relative': self.combined_output_beam[:, 4],
-            'particle_type': self.combined_output_beam[:, 5].astype(int)  # 1=proton, 2=deuteron
+            'arrival_time_at_detector': self.combined_output_beam[:, 5],
+            'particle_type': self.combined_output_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)
         print(f'Combined output beam saved to {filepath}')
@@ -389,10 +390,11 @@ class DualFoilSpectrometer:
         self.spec_ch2.input_beam = self.combined_input_beam[proton_mask_in, :6]
         self.spec_cd2.input_beam = self.combined_input_beam[deuteron_mask_in, :6]
         
-        proton_mask_out = self.combined_output_beam[:, 5] == 1
-        deuteron_mask_out = self.combined_output_beam[:, 5] == 2
-        
-        self.spec_ch2.output_beam = self.combined_output_beam[proton_mask_out, :5]
-        self.spec_cd2.output_beam = self.combined_output_beam[deuteron_mask_out, :5]
+        # Split by particle type
+        proton_mask_out = self.combined_output_beam[:, 6] == 1
+        deuteron_mask_out = self.combined_output_beam[:, 6] == 2
+
+        self.spec_ch2.output_beam = self.combined_output_beam[proton_mask_out, :6]
+        self.spec_cd2.output_beam = self.combined_output_beam[deuteron_mask_out, :6]
         
         print(f'Read {len(self.spec_ch2.input_beam)} protons and {len(self.spec_cd2.input_beam)} deuterons from combined beams')

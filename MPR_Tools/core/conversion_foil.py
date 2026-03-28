@@ -328,59 +328,73 @@ class ConversionFoil:
 
     
     def generate_recoil_particle(
-        self, 
+        self,
         incident_energies: np.ndarray,
-        energy_distribution: np.ndarray,
+        probability_distribution: np.ndarray,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
-        y_restriction: Optional[Literal['positive', 'negative']] = None
-    ) -> Tuple[float, float, float, float, float, float]:
+        y_restriction: Optional[Literal['positive', 'negative']] = None,
+        incident_times: Optional[np.ndarray] = None,
+    ) -> Tuple[float, float, float, float, float, float, float]:
         """
         Generate a scattered charged particle from incident particle interaction.
-        
+
         Args:
-            incident_energies: Array of incident particle energies in MeV
-            energy_distribution: Distribution of incident particle energies
-                                 (each energy will have an equal chance to generate a ray, so
-                                 make sure you weight it by the scattering efficiency first)
-            include_kinematics: Include energy loss from non-perpendicular scattering
-            include_stopping_power_loss: Include SRIM energy loss calculation
-            z_sampling: Depth sampling method ('exp' or 'uni')
-            rng: Random number generator to use (for thread safety)
-            
+            incident_energies: Array of incident particle energies in MeV. When using a
+                               2-D (energy, time) spectrum, this array has one entry per
+                               (energy, time) bin; repeated energies at different times are allowed.
+            probability_distribution: Probability weight for each bin in incident_energies (normalised
+                                 internally). Must include cross-section weighting before calling.
+            include_kinematics: Include energy loss from non-perpendicular scattering.
+            include_stopping_power_loss: Include SRIM energy loss calculation.
+            z_sampling: Depth sampling method ('exp' for exponential, 'uni' for uniform).
+            rng: Random number generator (pass the worker's RNG for thread safety).
+            y_restriction: Restrict sampled y position to 'positive' or 'negative' half of foil.
+            incident_times: Optional array of foil arrival times in seconds, parallel to
+                            incident_energies. When provided, the sampled bin index is used to
+                            read the corresponding arrival time, so energy and time are drawn
+                            as a joint pair from the distribution. If None, arrival time defaults
+                            to 0 for all particles.
+
         Returns:
-            Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy)
+            Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy, arrival_time_at_foil)
         """
-        # Use provided RNG or default
+        # Use provided RNG or create a default one
         if rng is None:
             rng = np.random.default_rng()
-            
+
         # Limit scattering angles for computational efficiency
         max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        
-        # Limit scattering to the interactions that actually scatter
+
+        # Collect only the interactions that produce recoil particles
         recoil_interactions = []
         for interaction in self.interactions:
             if interaction.generates_recoil_particles:
                 recoil_interactions.append(interaction)
-        
-        # Keep track of some energy-dependent things, as we may not need to recalculate them every time
+
+        # Cache energy-dependent quantities to avoid recomputing them when the same energy is
+        # sampled twice in a row (i.e. for monoenergetic inputs).
         previous_incident_energy = None
         angle_distributions = None
         interaction_weights = None
-        attenuation = None
-        
+        attenuation = 0.0
+
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
         rejected = 0
         while not accepted and rejected < 100:
-            # Sample incident particle energy from weighted distribution
-            incident_energy = np.random.choice(incident_energies, p=energy_distribution)
+            # Draw one index from the joint probability distribution.
+            # This simultaneously selects the incident energy and (if incident_times is provided)
+            # the corresponding foil arrival time, keeping the two quantities correlated.
+            sampled_idx = rng.choice(len(incident_energies), p=probability_distribution)
+            incident_energy = incident_energies[sampled_idx]
+            arrival_time_at_foil = incident_times[sampled_idx] if incident_times else 0.0
             
-            # This part is a little expensive, so only do it if the incident energy is different from last time...
+            # Only recompute energy-dependent cross sections and angle distributions when the
+            # incident energy changes
             if incident_energy != previous_incident_energy:
                 # Do the cross section calculations
                 angle_distributions = {}
@@ -390,18 +404,19 @@ class ConversionFoil:
                     weight = (interaction.get_cross_section(incident_energy) *
                               angle_distributions[interaction].integral(0, max_angle))
                     interaction_weights.append(weight)
-                interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
-                
-                # Set up z-sampling probability
-                if z_sampling == 'exp':  # exponential
-                    attenuation = 0
-                    for interaction in self.interactions:
-                        attenuation += interaction.get_cross_section(incident_energy)
-                else:  # uniform
-                    attenuation = 0
-                
+                interaction_weights = np.array(interaction_weights) / sum(interaction_weights)
+
+                # Attenuation coefficient for exponential depth sampling; 0 gives uniform sampling
+                if z_sampling == 'exp':
+                    attenuation = float(sum(
+                        interaction.get_cross_section(incident_energy)
+                        for interaction in self.interactions
+                    ))
+                else:
+                    attenuation = 0.0
+
                 previous_incident_energy = incident_energy
-                
+
             interaction = rng.choice(recoil_interactions, p=interaction_weights)
             x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
                 rng, angle_distributions[interaction], attenuation, max_angle, y_restriction,
@@ -419,15 +434,15 @@ class ConversionFoil:
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
                     recoil_energy = self.calculate_stopping_power_loss(recoil_energy, path_length)
-                
+
                 accepted = True
             else:
                 rejected += 1
-                
+
         if not accepted:
             raise ValueError("Unable to generate a recoil particle that passes through the aperture.")
-                
-        return x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy
+
+        return x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy, arrival_time_at_foil
     
     def _check_aperture_acceptance(
         self, 
@@ -644,7 +659,7 @@ class ConversionFoil:
         
         for i in tqdm(range(num_recoil_particles), desc='Calculating proton energy distribution...'):
             # Generate scattered recoil particle and extract final energy
-            _, _, _, _, _, recoil_energy = self.generate_recoil_particle(
+            _, _, _, _, _, recoil_energy, _ = self.generate_recoil_particle(
                 incident_energies,
                 weighted_distribution,
                 include_kinematics=True, 

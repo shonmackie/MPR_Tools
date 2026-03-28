@@ -363,19 +363,14 @@ class PerformanceAnalyzer:
             incident_energies: np.ndarray of incident energies
             incident_energies_std: np.ndarray of incident energy uncertainties
         """
-        signal_per_bin, _ = self.get_recoil_x_map(foil_solid_angle_fraction, particle_yield)
+        signal_per_bin, _, _ = self.get_recoil_x_map(foil_solid_angle_fraction, particle_yield)
         hodoscope = self.spectrometer.hodoscope
         x_positions = hodoscope.channel_centers  # meters
         response_values = signal_per_bin
 
-        # Total background is in response/cm^2-source
-        # Assume background is uniform across detector
-        total_background = sum(self.spectrometer.hodoscope.get_background())
-        # Integrate background over channel heights
-        channel_heights_cm = hodoscope.channel_heights * 100
-        total_background = np.sum(total_background * hodoscope.channel_widths * 100 * channel_heights_cm)
-        if particle_yield:
-            total_background *= particle_yield
+        # TODO: Background calculation requires background CSV files.
+        # Call hodoscope.get_background(neutron_file, photon_file) and sum per-channel arrays.
+        total_background = 0.0
         
         # Load comprehensive performance curve
         performance_df = self._load_performance_curve()
@@ -505,24 +500,36 @@ class PerformanceAnalyzer:
     def get_recoil_x_map(
         self,
         foil_solid_angle_fraction: Optional[float] = None,
-        particle_yield: Optional[float] = None
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        particle_yield: Optional[float] = None,
+        time_gate_percentiles: Tuple[float, float] = (5, 95)
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Bin the recoil beam into 1-D x channels and compute signal and y-coverage per channel.
-        By default the hodoscope channel edges and heights are used for binning.
+        Bin the recoil beam into 1-D x channels and compute signal, y-coverage, and per-channel
+        signal arrival-time windows.
 
         The y-acceptance cut is applied symmetrically around y=0 (the reference ray).
         When detector_used is False, signal is in [particles/source] per channel.
         When detector_used is True, signal is in [MeV deposited/source] per channel.
         Scaling by particle_yield gives [particles] or [MeV deposited] respectively.
 
+        Per-channel time windows are computed when hodoscope.use_time_gating is True.  For each
+        channel the window spans the requested percentile range of detector arrival times of
+        signal particles accepted into that channel.  When use_time_gating is False, the returned
+        channel_time_windows array is filled with NaN.
+
         Args:
-            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
+            foil_solid_angle_fraction: Geometric factor normalizing the response to account for
+                                       solid angle subtended by the foil from the source.
             particle_yield: Total source yield; scales the returned signal.
+            time_gate_percentiles: (low_percentile, high_percentile) pair defining the signal
+                                   time window per channel.  Defaults to (5, 95) to reject
+                                   outlier arrival times.
 
         Returns:
-            Tuple of (signal_per_bin, coverage_per_bin) where
-            signal_per_bin [particles/source or MeV/source], coverage_per_bin [0-1].
+            Tuple of (signal_per_bin, coverage_per_bin, channel_time_windows) where
+            signal_per_bin [particles/source or MeV/source],
+            coverage_per_bin [0-1],
+            channel_time_windows of shape (n_channels, 2) [s] — columns are [t_min, t_max].
         """
         if len(self.spectrometer.output_beam) == 0:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
@@ -548,16 +555,29 @@ class PerformanceAnalyzer:
         )
         weights = foil_efficiencies * sensitivities
 
-        # Bin particles into x channels; track total and within-y-acceptance separately
-        # np.digitize returns 1-based indices; subtract 1 to get 0-based bin indices
+        # Bin particles into x channels; track total and within-y-acceptance separately.
+        # Simultaneously compute per-channel signal arrival-time windows when time gating is enabled.
+        # np.digitize returns 1-based indices; subtract 1 to get 0-based bin indices.
         bin_indices = np.digitize(x_positions, bin_edges_cm) - 1  # -1 and n_bins are out of range
         signal_per_bin = np.zeros(n_bins)
         total_per_bin = np.zeros(n_bins)
+        channel_time_windows = np.full((n_bins, 2), np.nan)
+        
         for b in range(n_bins):
             in_bin = bin_indices == b
             total_per_bin[b] = np.sum(weights[in_bin])
             y_accepted = np.abs(y_positions) <= bin_heights_cm[b] / 2
-            signal_per_bin[b] = np.sum(weights[in_bin & y_accepted])
+            accepted = in_bin & y_accepted
+            signal_per_bin[b] = np.sum(weights[accepted])
+
+            # Compute the signal arrival-time window for this channel from the percentile range
+            # of detector arrival times of all accepted signal particles.
+            if hodoscope.use_time_gating:
+                arrival_times = self.spectrometer.output_beam[:, 5]
+                times_in_channel = arrival_times[accepted]
+                if len(times_in_channel) > 0:
+                    channel_time_windows[b, 0] = np.percentile(times_in_channel, time_gate_percentiles[0])
+                    channel_time_windows[b, 1] = np.percentile(times_in_channel, time_gate_percentiles[1])
 
         # Normalise to particles/source
         signal_per_bin /= total_particles
@@ -574,5 +594,5 @@ class PerformanceAnalyzer:
 
         coverage_per_bin = np.where(total_per_bin > 0, signal_per_bin / total_per_bin, 0.0)
 
-        return signal_per_bin, coverage_per_bin
+        return signal_per_bin, coverage_per_bin, channel_time_windows
         
