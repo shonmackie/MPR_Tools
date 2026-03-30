@@ -395,19 +395,24 @@ class SpectrometerPlotter:
             )
             neutron_bg_per_channel = np.zeros(len(channel_widths))
             photon_bg_per_channel = np.zeros(len(channel_widths))
+            # Background bin width (assumed uniform); used for fractional overlap calculation.
+            dt = float(np.median(np.diff(time_bins))) if len(time_bins) > 1 else 1.0
             for i in range(len(channel_widths)):
                 if hodoscope.use_time_gating and not np.isnan(channel_time_windows[i, 0]):
-                    # Restrict the time integral to the signal arrival window for this channel
-                    # so only background coincident with signal particles is counted.
-                    time_mask = (
-                        (time_bins >= channel_time_windows[i, 0]) &
-                        (time_bins <= channel_time_windows[i, 1])
-                    )
+                    # Weight each background bin by the fraction of that bin that overlaps the
+                    # signal arrival window.  This correctly handles windows narrower than the
+                    # bin width (which a binary mask would miss entirely) as well as partial
+                    # overlaps at the edges.
+                    t_min = channel_time_windows[i, 0]
+                    t_max = channel_time_windows[i, 1]
+                    bin_left = time_bins - dt / 2
+                    bin_right = time_bins + dt / 2
+                    overlap = np.maximum(0.0, np.minimum(bin_right, t_max) - np.maximum(bin_left, t_min)) / dt
                 else:
-                    time_mask = np.ones(len(time_bins), dtype=bool)
+                    overlap = np.ones(len(time_bins))
                 channel_area = channel_widths[i] * channel_heights[i]  # cm^2
-                neutron_bg_per_channel[i] = np.sum(neutron_background_vs_time[time_mask]) * scale * channel_area
-                photon_bg_per_channel[i] = np.sum(photon_background_vs_time[time_mask]) * scale * channel_area
+                neutron_bg_per_channel[i] = np.dot(neutron_background_vs_time, overlap) * scale * channel_area
+                photon_bg_per_channel[i] = np.dot(photon_background_vs_time, overlap) * scale * channel_area
 
             total_background = neutron_bg_per_channel + photon_bg_per_channel
 
@@ -471,7 +476,7 @@ class SpectrometerPlotter:
         if total_background is not None:
             fig, ax_sb = plt.subplots(figsize=(10, 4))
 
-            if hodoscope.use_time_gating and neutron_background_vs_time and photon_background_vs_time:
+            if hodoscope.use_time_gating and neutron_background_vs_time is not None and photon_background_vs_time is not None:
                 # Gated S/B (solid): use the per-channel time-windowed background.
                 # Non-gated S/B (dashed): full time-axis integral, same channel-area scaling.
                 neutron_bg_nogating = np.sum(neutron_background_vs_time) * scale * channel_widths * channel_heights
@@ -522,9 +527,6 @@ class SpectrometerPlotter:
         print(f'Coverage plot saved to {filename_coverage}')
 
         # Plot 4 (time-gating only): per-channel signal arrival-time windows as horizontal bars.
-        # Each bar spans [t_min, t_max] for the signal particles accepted into that channel.
-        # Only generated when hodoscope.use_time_gating is True so the channel_time_windows
-        # array is populated (it contains NaN for all channels when use_time_gating is False).
         if hodoscope.use_time_gating:
             filename_time_windows = f'{base}_time_windows{ext}'
             fig, ax_tw = plt.subplots(figsize=(10, 4))
@@ -544,43 +546,24 @@ class SpectrometerPlotter:
             plt.close(fig)
             print(f'Time windows plot saved to {filename_time_windows}')
 
-    def plot_background_vs_time(
-        self,
-        neutron_background_file: str,
-        photon_background_file: str,
-        filename: Optional[str] = None,
-    ) -> None:
-        """
-        Plot the background energy deposited in the detector as a function of arrival time.
-
-        Args:
-            neutron_background_file: Path to a CSV with columns 'energy' [MeV], 'mean'
-                                     [particles/cm²/source], and optionally 'time' [s].
-            photon_background_file:  Same format as neutron_background_file.
-            filename: Output filename.  Defaults to '<figure_directory>/background_vs_time.png'.
-        """
-        hodoscope = self.spectrometer.hodoscope
-        time_bins, neutron_background, photon_background = hodoscope.get_background(
-            neutron_background_file, photon_background_file
-        )
-
-        # Convert time from seconds to nanoseconds for the plot axis.
-        time_ns = time_bins * 1e9
-
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.step(time_ns, neutron_background, where='mid', color='steelblue', label='neutron', linewidth=3)
-        ax.step(time_ns, photon_background, where='mid', color='darkorange', label='photon', linewidth=3)
-        labelLines(ax.get_lines(), align=False)
-        ax.set_xlabel('Time [ns]')
-        ax.set_ylabel('$E_{dep}$ [MeV / cm² / source / time-bin]')
-        ax.grid(True, alpha=0.3)
-
-        if filename is None:
-            filename = f'{self.spectrometer.figure_directory}/background_vs_time.png'
-        fig.tight_layout()
-        fig.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f'Background vs time plot saved to {filename}')
+        # Plot 5 (time-gating only, background data required): background E_dep vs time.
+        if hodoscope.use_time_gating and time_bins is not None and neutron_background_vs_time is not None and photon_background_vs_time is not None:
+            filename_bg_time = f'{base}_background_vs_time{ext}'
+            fig, ax_bgt = plt.subplots(figsize=(10, 4))
+            time_ns_bg = time_bins * 1e9
+            ax_bgt.step(time_ns_bg, neutron_background_vs_time, where='mid',
+                        color='steelblue', linewidth=3, label='neutron')
+            ax_bgt.step(time_ns_bg, photon_background_vs_time, where='mid',
+                        color='darkorange', linewidth=3, label='photon')
+            labelLines(ax_bgt.get_lines(), align=False)
+            ax_bgt.set_xlabel('Time [ns]')
+            ax_bgt.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
+            ax_bgt.set_yscale('log')
+            ax_bgt.grid(True, alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(filename_bg_time, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f'Background vs time plot saved to {filename_bg_time}')
 
     def plot_input_ray_geometry(self, filename: Optional[str] = None) -> None:
         """

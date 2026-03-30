@@ -12,7 +12,7 @@ from tqdm import tqdm
 from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction, \
     ProbabilityDistribution
 from .parallelization import run_concurrently
-from ..config.constants import AVOGADRO, FOIL_MATERIALS
+from ..config.constants import AVOGADRO, FOIL_MATERIALS, NEUTRON_MASS
 
 
 class ConversionFoil:
@@ -31,11 +31,13 @@ class ConversionFoil:
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
         foil_material: Literal['CH2', 'CD2', 'LiH', 'Be', 'B'] = 'CH2',
-        aperture_type: Literal['circ', 'rect'] = 'circ'
+        aperture_type: Literal['circ', 'rect'] = 'circ',
+        target_to_foil_distance: Optional[float] = None,
+        burn_duration: Optional[float] = None,
     ):
         """
         Initialize conversion foil system.
-        
+
         Args:
             foil_radius: Foil radius in cm
             thickness: Foil thickness in μm
@@ -45,10 +47,17 @@ class ConversionFoil:
             aperture_height: Aperture height (in non-dispersion direction [y]) in cm (for rectangular apertures)
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
+            target_to_foil_distance: Distance from neutron source to foil in meters. When provided,
+                                     the arrival time at the foil is calculated from the incident
+                                     particle's energy and mass. If None, arrival time is set to 0.
+            burn_duration: FWHM duration of the neutron source in seconds. When provided (along with
+                           target_to_foil_distance), Gaussian timing noise is added to each particle's foil arrival time.
         """
         print('Initializing conversion foil...')
         
         # Convert units and store geometry
+        self.target_to_foil_distance = target_to_foil_distance  # cm to m
+        self.burn_duration = burn_duration  # s
         self.foil_radius = foil_radius * 1e-2  # cm to m
         self.thickness = thickness * 1e-6      # μm to m
         self.aperture_distance = aperture_distance * 1e-2  # cm to m
@@ -336,15 +345,13 @@ class ConversionFoil:
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None,
-        incident_times: Optional[np.ndarray] = None,
     ) -> Tuple[float, float, float, float, float, float, float]:
         """
         Generate a scattered charged particle from incident particle interaction.
 
         Args:
-            incident_energies: Array of incident particle energies in MeV. When using a
-                               2-D (energy, time) spectrum, this array has one entry per
-                               (energy, time) bin; repeated energies at different times are allowed.
+            incident_energies: Array of incident particle energies in MeV. One energy value per bin;
+                               the particle energy is sampled from this 1-D distribution.
             probability_distribution: Probability weight for each bin in incident_energies (normalised
                                  internally). Must include cross-section weighting before calling.
             include_kinematics: Include energy loss from non-perpendicular scattering.
@@ -352,11 +359,6 @@ class ConversionFoil:
             z_sampling: Depth sampling method ('exp' for exponential, 'uni' for uniform).
             rng: Random number generator (pass the worker's RNG for thread safety).
             y_restriction: Restrict sampled y position to 'positive' or 'negative' half of foil.
-            incident_times: Optional array of foil arrival times in seconds, parallel to
-                            incident_energies. When provided, the sampled bin index is used to
-                            read the corresponding arrival time, so energy and time are drawn
-                            as a joint pair from the distribution. If None, arrival time defaults
-                            to 0 for all particles.
 
         Returns:
             Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy, arrival_time_at_foil)
@@ -386,12 +388,8 @@ class ConversionFoil:
         # Limit number of rejections to avoid infinite loops
         rejected = 0
         while not accepted and rejected < 100:
-            # Draw one index from the joint probability distribution.
-            # This simultaneously selects the incident energy and (if incident_times is provided)
-            # the corresponding foil arrival time, keeping the two quantities correlated.
-            sampled_idx = rng.choice(len(incident_energies), p=probability_distribution)
-            incident_energy = incident_energies[sampled_idx]
-            arrival_time_at_foil = incident_times[sampled_idx] if incident_times else 0.0
+            # Sample incident particle energy from weighted distribution
+            incident_energy = rng.choice(incident_energies, p=probability_distribution)
             
             # Only recompute energy-dependent cross sections and angle distributions when the
             # incident energy changes
@@ -434,6 +432,22 @@ class ConversionFoil:
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
                     recoil_energy = self.calculate_stopping_power_loss(recoil_energy, path_length)
+                    
+                # Calculate foil arrival time from incident particle kinematics
+                if self.target_to_foil_distance is not None:
+                    if self.incident_particle == 'photon':
+                        velocity = 2.998e8  # m/s
+                    else:
+                        # Non-relativistic: neutron (or other massive incident particle)
+                        incident_mass_kg = NEUTRON_MASS * 1.6605e-27
+                        velocity = np.sqrt(2 * incident_energy * 1e6 * 1.602e-19 / incident_mass_kg)
+                    arrival_time_at_foil = self.target_to_foil_distance / velocity
+                    if self.burn_duration is not None:
+                        # burn_duration is FWHM; convert to sigma for Gaussian sampling
+                        sigma = self.burn_duration / (2 * np.sqrt(2 * np.log(2)))
+                        arrival_time_at_foil += rng.normal(0, sigma)
+                else:
+                    arrival_time_at_foil = 0.0
 
                 accepted = True
             else:

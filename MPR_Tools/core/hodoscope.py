@@ -261,8 +261,8 @@ class Hodoscope:
 
         Returns:
             time_bins: 1-D array; length 1 (value 0.0) when use_time_gating=False
-            neutron_background: 1-D array same length as time_bins [MeV / cm² / source / time-bin]
-            photon_background: 1-D array same length as time_bins [MeV / cm² / source / time-bin]
+            neutron_background: 1-D array same length as time_bins [MeV / cm² / source]
+            photon_background: 1-D array same length as time_bins [MeV / cm² / source]
 
         Raises:
             ValueError: If the detector has not been configured, if use_time_gating=True but a

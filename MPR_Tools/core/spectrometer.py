@@ -179,7 +179,6 @@ class MPRSpectrometer:
         incident_energies: np.ndarray,
         probability_distribution: np.ndarray,
         num_recoil_particles: int,
-        incident_times: Optional[np.ndarray] = None,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
@@ -192,25 +191,16 @@ class MPRSpectrometer:
         Generate recoil rays from incident particle energy distribution using Monte Carlo with multiprocessing.
 
         Args:
-            incident_energies:   Array of incident particle energies in MeV. When using a 2-D
-                                 (energy, time) spectrum CSV, this array contains one entry per
-                                 (energy, time) bin — i.e. repeated energies are allowed when the
-                                 same energy appears at different times.
-            probability_distribution: Relative joint probability for each (energy, time) bin.
-                                 Normalized automatically. Only includes time when incident_times is not None.
+            incident_energies:   Array of incident particle energies in MeV.
+            probability_distribution: Relative probability for each energy bin. Normalized automatically.
             num_recoil_particles: Number of recoil particles to simulate.
-            incident_times:      Optional array of foil arrival times in seconds, one per bin,
-                                 parallel to incident_energies.  When the spectrum CSV includes a
-                                 'time' column, pass that column here so each sampled particle
-                                 receives the correct foil arrival time.
-                                 If None (1-D spectrum with no time column), all particles are
-                                 assigned arrival_time_at_foil = 0 (delta function at t = 0).
             include_kinematics: Include kinematic energy transfer.
             include_stopping_power_loss: Include stopping power energy loss via SRIM.
             z_sampling: Depth sampling method ('exp' or 'uni').
             save_beam: Whether to save input beam to CSV.
             executor: Pool of workers to use (if None, a new pool is created).
             max_workers: Maximum number of worker processes (None -> CPU count).
+            y_restriction: Restrict sampled foil y position to 'positive' or 'negative' half.
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
@@ -221,10 +211,6 @@ class MPRSpectrometer:
         particles_per_process = num_recoil_particles // max_workers
         remaining_particles = num_recoil_particles % max_workers
         
-        # If no time array was provided, treat all incident particles as arriving at t = 0
-        if incident_times is None:
-            incident_times = np.zeros(len(incident_energies))
-
         # Narrow energy distribution unless doing monoenergetic performance analysis.
         if len(incident_energies) > 1:
             # Only use incident energies that can possibly produce recoil energies within acceptance range.
@@ -232,7 +218,6 @@ class MPRSpectrometer:
             idx = (incident_energies >= self.min_energy) & (incident_energies <= self.max_energy)
             incident_energies = incident_energies[idx]
             probability_distribution = probability_distribution[idx]
-            incident_times = incident_times[idx]
 
         # Weight energy distribution by scattering cross section
         interaction_probability = np.zeros_like(probability_distribution)
@@ -253,7 +238,6 @@ class MPRSpectrometer:
                     12345 + i * 1000,  # seed_offset
                     incident_energies,
                     weighted_distribution,
-                    incident_times,
                     include_kinematics,
                     include_stopping_power_loss,
                     z_sampling,
@@ -282,7 +266,6 @@ class MPRSpectrometer:
         seed_offset: int,
         incident_energies: np.ndarray,
         weighted_distribution: np.ndarray,
-        incident_times: np.ndarray,
         include_kinematics: bool,
         include_stopping_power_loss: bool,
         z_sampling: Literal['exp', 'uni'],
@@ -308,8 +291,6 @@ class MPRSpectrometer:
 
         while len(batch_results) < batch_size:
             try:
-                # generate_recoil_particle draws jointly from (incident_energies, incident_times)
-                # using the weighted_distribution
                 x0, y0, theta_s, phi_s, incident_energy, recoil_energy, arrival_time_at_foil = (
                     conversion_foil.generate_recoil_particle(
                         incident_energies,
@@ -319,7 +300,6 @@ class MPRSpectrometer:
                         z_sampling=z_sampling,
                         rng=rng,
                         y_restriction=y_restriction,
-                        incident_times=incident_times,
                     )
                 )
 
@@ -492,7 +472,10 @@ class MPRSpectrometer:
         # TODO: Replace transit_time below with the COSY-map-based calculation
         #       once the path-length integral from the map is available.
         # -----------------------------------------------------------------------
-        transit_time = np.zeros(batch_size)
+        path_length = 2.5 # m
+        energy_absolute = self.reference_energy * (1.0 + input_batch[:, 4])
+        velocity = np.sqrt(2 * energy_absolute * 1e6 * 1.602e-19 / (self.conversion_foil.particle_mass * 1.6605e-27))
+        transit_time = path_length / velocity
 
         # arrival_time_at_detector = time the incident particle reached the foil
         #                            + time the recoil particle spent in the spectrometer
