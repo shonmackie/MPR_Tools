@@ -22,6 +22,7 @@ plt.rcParams['lines.linewidth'] = 3
 from ..core.spectrometer import MPRSpectrometer
 from ..core.dual_foil_spectrometer import DualFoilSpectrometer
 from ..analysis.performance import PerformanceAnalyzer
+from ..config.constants import MASS_TO_MEV
 
 if TYPE_CHECKING:
     from ..analysis.parameter_sweep import FoilSweeper
@@ -613,7 +614,7 @@ class SpectrometerPlotter:
             fontsize=12
         )
         
-        particle_rest_energy = self.spectrometer.conversion_foil.particle_mass * 931.494  # MeV
+        particle_rest_energy = self.spectrometer.conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1 + self.spectrometer.reference_energy / particle_rest_energy  # Lorentz factor of the reference particle
 
         # Draw sample of input rays

@@ -8,7 +8,8 @@ from tqdm import tqdm
 from concurrent.futures import Executor
 import multiprocessing as mp
 
-from .conversion_foil import ConversionFoil, NEUTRON_MASS
+from ..config.constants import NEUTRON_MASS, LIGHT_SPEED, MASS_TO_MEV
+from .conversion_foil import ConversionFoil
 from .hodoscope import Hodoscope
 from .parallelization import run_concurrently
 
@@ -124,7 +125,7 @@ class MPRSpectrometer:
         )
         energy_offset_values = energy_values - self.reference_energy
         
-        particle_rest_energy = self.conversion_foil.particle_mass * 931.494  # MeV
+        particle_rest_energy = self.conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1 + self.reference_energy/particle_rest_energy  # Lorentz factor of the central ray
 
         # 6 columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative
@@ -301,7 +302,7 @@ class MPRSpectrometer:
         # Create an independent RNG for this worker to ensure reproducibility
         rng = np.random.default_rng(seed_offset)
 
-        particle_rest_energy = conversion_foil.particle_mass * 931.494  # MeV
+        particle_rest_energy = conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1 + reference_energy / particle_rest_energy   # Lorentz factor of the central ray
 
         batch_results = np.empty((0, 6), dtype=float)
@@ -336,12 +337,12 @@ class MPRSpectrometer:
                 
                 # Calculate foil arrival time
                 if conversion_foil.incident_particle == 'photon':
-                    velocity = 2.99792458e8  # m/s
+                    velocity = LIGHT_SPEED  # m/s
                 elif conversion_foil.incident_particle == 'neutron':
                     # Calculate velocity of the incident particle with its own relativistic correction
-                    incident_rest_energy = NEUTRON_MASS * 931.494 # MeV
+                    incident_rest_energy = NEUTRON_MASS * MASS_TO_MEV # MeV
                     incident_gamma = 1 + incident_energy / incident_rest_energy
-                    velocity = 2.99792458e8 * np.sqrt(1.0 - 1.0 / incident_gamma**2)  # m/s
+                    velocity = LIGHT_SPEED * np.sqrt(1.0 - 1.0 / incident_gamma**2)  # m/s
                 else:
                     raise ValueError(f"Unsupported incident particle type: {conversion_foil.incident_particle}")
                 foil_time = target_to_foil_distance / velocity if target_to_foil_distance else 0.0
@@ -398,9 +399,9 @@ class MPRSpectrometer:
 
         # Precompute reference-particle constants for COSY l -> transit time conversion.
         # COSY Eq. 1: l = -(t - t0) * v0 * gamma / (1 + gamma)
-        particle_rest_energy = self.conversion_foil.particle_mass * 931.494  # MeV
+        particle_rest_energy = self.conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1.0 + self.reference_energy / particle_rest_energy
-        reference_velocity = 2.99792458e8 * np.sqrt(1.0 - 1.0 / reference_gamma**2)        # m/s
+        reference_velocity = LIGHT_SPEED * np.sqrt(1.0 - 1.0 / reference_gamma**2)        # m/s
         reference_detector_time = (
             self.central_ray_length / reference_velocity if self.central_ray_length is not None else 0.0
         )
