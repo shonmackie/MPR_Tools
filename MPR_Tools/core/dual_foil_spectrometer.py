@@ -335,8 +335,8 @@ class DualFoilSpectrometer:
             'p_x_relative': self.combined_input_beam[:, 1],
             'y0': self.combined_input_beam[:, 2],
             'p_y_relative': self.combined_input_beam[:, 3],
-            'energy_relative': self.combined_input_beam[:, 4],
-            'arrival_time_at_foil': self.combined_input_beam[:, 5],
+            'foil_time': self.combined_input_beam[:, 4],
+            'energy_relative': self.combined_input_beam[:, 5],
             'particle_type': self.combined_input_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)
@@ -352,8 +352,8 @@ class DualFoilSpectrometer:
             'p_x_relative': self.combined_output_beam[:, 1],
             'y0': self.combined_output_beam[:, 2],
             'p_y_relative': self.combined_output_beam[:, 3],
-            'energy_relative': self.combined_output_beam[:, 4],
-            'arrival_time_at_detector': self.combined_output_beam[:, 5],
+            'detector_time': self.combined_output_beam[:, 4],
+            'energy_relative': self.combined_output_beam[:, 5],
             'particle_type': self.combined_output_beam[:, 6].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)

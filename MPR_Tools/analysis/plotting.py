@@ -92,7 +92,7 @@ class SpectrometerPlotter:
             ax.plot(x, -y, color='black', linewidth=1.0)
 
         # Scatter plot of focal particle positions
-        particle_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        particle_energies = self.spectrometer.input_beam[:, 5] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         scatter = ax.scatter(
             self.spectrometer.output_beam[:, 0]*100, 
             self.spectrometer.output_beam[:, 2]*100,
@@ -110,7 +110,7 @@ class SpectrometerPlotter:
         
         if self.dual_data:
             spec2: MPRSpectrometer = self.dual_data['spectrometer']
-            recoil_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
+            recoil_energies2 = spec2.input_beam[:, 5] * spec2.reference_energy + spec2.reference_energy
             scatter2 = ax.scatter(
                 spec2.output_beam[:, 0]*100, 
                 spec2.output_beam[:, 2]*100,
@@ -145,7 +145,7 @@ class SpectrometerPlotter:
         x_moment = self.spectrometer.output_beam[:, 1] * 1000  # Convert to mrad
         y_pos = self.spectrometer.output_beam[:, 2] * 100 # Convert to cm
         y_moment = self.spectrometer.output_beam[:, 3] * 1000  # Convert to mrad
-        particle_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        particle_energies = self.spectrometer.input_beam[:, 5] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         
         # X-Y position plot
         scatter1 = axes[0, 0].scatter(
@@ -197,7 +197,7 @@ class SpectrometerPlotter:
             x_moment2 = spec2.output_beam[:, 1] * 1000 # Convert to mrad
             y_pos2 = spec2.output_beam[:, 2] * 100 # Convert to cm
             y_moment2 = spec2.output_beam[:, 3] * 1000 # Convert to mrad
-            recoil_energies2 = spec2.input_beam[:, 4] * spec2.reference_energy + spec2.reference_energy
+            recoil_energies2 = spec2.input_beam[:, 5] * spec2.reference_energy + spec2.reference_energy
             
             # X-Y position plot
             scatter1 = axes[0, 0].scatter(
@@ -289,7 +289,7 @@ class SpectrometerPlotter:
         
         # Focal plane distribution        
         # Scatter plot colored by energy
-        output_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        output_energies = self.spectrometer.input_beam[:, 5] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         scatter = ax.scatter(
             self.spectrometer.output_beam[:, 0] * 100,  # Convert to cm
             self.spectrometer.output_beam[:, 2] * 100,  # Convert to cm
@@ -613,8 +613,8 @@ class SpectrometerPlotter:
             fontsize=12
         )
         
-        particle_rest_energy = self.spectrometer.conversion_foil.particle_mass*931.494  # MeV
-        reference_gamma = 1 + self.spectrometer.reference_energy/particle_rest_energy  # Lorentz factor of the reference particle
+        particle_rest_energy = self.spectrometer.conversion_foil.particle_mass * 931.494  # MeV
+        reference_gamma = 1 + self.spectrometer.reference_energy / particle_rest_energy  # Lorentz factor of the reference particle
 
         # Draw sample of input rays
         num_rays_to_plot = min(len(self.spectrometer.input_beam), 200)  # Limit for clarity
@@ -930,7 +930,7 @@ class SpectrometerPlotter:
         axes[0].legend()
         
         # Scatter plot
-        recoil_energies = self.spectrometer.input_beam[:, 4] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
+        recoil_energies = self.spectrometer.input_beam[:, 5] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
         scatter = axes[1].scatter(
             self.spectrometer.output_beam[:, 0]*100,
             self.spectrometer.output_beam[:, 2]*100,

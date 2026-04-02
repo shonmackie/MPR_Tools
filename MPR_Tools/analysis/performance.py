@@ -428,8 +428,8 @@ class PerformanceAnalyzer:
         
         x_positions = self.spectrometer.output_beam[:, 0] * 100
         y_positions = self.spectrometer.output_beam[:, 2] * 100
-        input_energies = self.spectrometer.input_beam[:, 4]
-        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 4])
+        input_energies = self.spectrometer.input_beam[:, 5]
+        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
 
         # Define grid boundaries
         x_min, x_max = np.min(x_positions), np.max(x_positions)
@@ -501,7 +501,7 @@ class PerformanceAnalyzer:
         self,
         foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None,
-        time_gate_percentiles: Tuple[float, float] = (5, 95)
+        time_gate_percentiles: Tuple[float, float] = (0, 100)
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Bin the recoil beam into 1-D x channels and compute signal, y-coverage, and per-channel
@@ -522,8 +522,8 @@ class PerformanceAnalyzer:
                                        solid angle subtended by the foil from the source.
             particle_yield: Total source yield; scales the returned signal.
             time_gate_percentiles: (low_percentile, high_percentile) pair defining the signal
-                                   time window per channel.  Defaults to (5, 95) to reject
-                                   outlier arrival times.
+                                   time window per channel.  Defaults to (0, 100) to accept
+                                   all arrival times.
 
         Returns:
             Tuple of (signal_per_bin, coverage_per_bin, channel_time_windows) where
@@ -537,8 +537,8 @@ class PerformanceAnalyzer:
         hodoscope = self.spectrometer.hodoscope
         x_positions = self.spectrometer.output_beam[:, 0] * 100  # m to cm
         y_positions = self.spectrometer.output_beam[:, 2] * 100  # m to cm
-        input_energies = self.spectrometer.input_beam[:, 4]
-        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 4])
+        input_energies = self.spectrometer.input_beam[:, 5]
+        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
         total_particles = len(x_positions)
 
         # Determine bin edges and channel heights
@@ -573,7 +573,7 @@ class PerformanceAnalyzer:
             # Compute the signal arrival-time window for this channel from the percentile range
             # of detector arrival times of all accepted signal particles.
             if hodoscope.use_time_gating:
-                arrival_times = self.spectrometer.output_beam[:, 5]
+                arrival_times = self.spectrometer.output_beam[:, 4]
                 times_in_channel = arrival_times[accepted]
                 if len(times_in_channel) > 0:
                     channel_time_windows[b, 0] = np.percentile(times_in_channel, time_gate_percentiles[0])

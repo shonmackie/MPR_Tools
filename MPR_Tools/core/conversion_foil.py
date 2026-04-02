@@ -32,8 +32,6 @@ class ConversionFoil:
         aperture_height: Optional[float] = None,
         foil_material: Literal['CH2', 'CD2', 'LiH', 'Be', 'B'] = 'CH2',
         aperture_type: Literal['circ', 'rect'] = 'circ',
-        target_to_foil_distance: Optional[float] = None,
-        burn_duration: Optional[float] = None,
     ):
         """
         Initialize conversion foil system.
@@ -47,17 +45,10 @@ class ConversionFoil:
             aperture_height: Aperture height (in non-dispersion direction [y]) in cm (for rectangular apertures)
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
-            target_to_foil_distance: Distance from neutron source to foil in meters. When provided,
-                                     the arrival time at the foil is calculated from the incident
-                                     particle's energy and mass. If None, arrival time is set to 0.
-            burn_duration: FWHM duration of the neutron source in seconds. When provided (along with
-                           target_to_foil_distance), Gaussian timing noise is added to each particle's foil arrival time.
         """
         print('Initializing conversion foil...')
         
         # Convert units and store geometry
-        self.target_to_foil_distance = target_to_foil_distance  # cm to m
-        self.burn_duration = burn_duration  # s
         self.foil_radius = foil_radius * 1e-2  # cm to m
         self.thickness = thickness * 1e-6      # μm to m
         self.aperture_distance = aperture_distance * 1e-2  # cm to m
@@ -345,7 +336,7 @@ class ConversionFoil:
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None,
-    ) -> Tuple[float, float, float, float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float, float]:
         """
         Generate a scattered charged particle from incident particle interaction.
 
@@ -361,7 +352,7 @@ class ConversionFoil:
             y_restriction: Restrict sampled y position to 'positive' or 'negative' half of foil.
 
         Returns:
-            Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy, arrival_time_at_foil)
+            Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy)
         """
         # Use provided RNG or create a default one
         if rng is None:
@@ -432,22 +423,6 @@ class ConversionFoil:
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
                     recoil_energy = self.calculate_stopping_power_loss(recoil_energy, path_length)
-                    
-                # Calculate foil arrival time from incident particle kinematics
-                if self.target_to_foil_distance is not None:
-                    if self.incident_particle == 'photon':
-                        velocity = 2.998e8  # m/s
-                    else:
-                        # Non-relativistic: neutron (or other massive incident particle)
-                        incident_mass_kg = NEUTRON_MASS * 1.6605e-27
-                        velocity = np.sqrt(2 * incident_energy * 1e6 * 1.602e-19 / incident_mass_kg)
-                    arrival_time_at_foil = self.target_to_foil_distance / velocity
-                    if self.burn_duration is not None:
-                        # burn_duration is FWHM; convert to sigma for Gaussian sampling
-                        sigma = self.burn_duration / (2 * np.sqrt(2 * np.log(2)))
-                        arrival_time_at_foil += rng.normal(0, sigma)
-                else:
-                    arrival_time_at_foil = 0.0
 
                 accepted = True
             else:
@@ -456,7 +431,7 @@ class ConversionFoil:
         if not accepted:
             raise ValueError("Unable to generate a recoil particle that passes through the aperture.")
 
-        return x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy, arrival_time_at_foil
+        return x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy
     
     def _check_aperture_acceptance(
         self, 
@@ -673,7 +648,7 @@ class ConversionFoil:
         
         for i in tqdm(range(num_recoil_particles), desc='Calculating proton energy distribution...'):
             # Generate scattered recoil particle and extract final energy
-            _, _, _, _, _, recoil_energy, _ = self.generate_recoil_particle(
+            _, _, _, _, _, recoil_energy = self.generate_recoil_particle(
                 incident_energies,
                 weighted_distribution,
                 include_kinematics=True, 
