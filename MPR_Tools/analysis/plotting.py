@@ -9,7 +9,7 @@ from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from scipy.stats import norm
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, interp1d
 from labellines import labelLines
 import pandas as pd
 
@@ -329,6 +329,7 @@ class SpectrometerPlotter:
         incident_particle_yield: Optional[float] = None,
         neutron_background_file: Optional[str] = None,
         photon_background_file: Optional[str] = None,
+        performance_curve_file: Optional[str] = None,
     ) -> None:
         """
         Plot signal and background counts per hodoscope channel, with S/B and coverage panels.
@@ -442,6 +443,43 @@ class SpectrometerPlotter:
         else:
             label = f'Counts [{"MeV" if incident_particle_yield else "MeV/source"}]'
 
+        # Build position→energy interpolant from the performance curve (optional).
+        # x_to_en: cm → MeV,  en_to_x: MeV → cm
+        _x_to_en = _en_to_x = None
+        perf_df = self.performance_analyzer._load_performance_curve(performance_curve_file)
+        if perf_df is not None:
+            _pos_cm = perf_df['position [m]'].values * 100  # m → cm
+            _en_mev = perf_df['energy [MeV]'].values
+            # keep only the CH2 foil rows if dual-foil data is present
+            if 'foil' in perf_df.columns:
+                primary_foil = self.spectrometer.conversion_foil.foil_material
+                mask = perf_df['foil'] == primary_foil
+                if mask.any():
+                    _pos_cm = _pos_cm[mask.values]
+                    _en_mev = _en_mev[mask.values]
+            _x_to_en = interp1d(_pos_cm, _en_mev, bounds_error=False, fill_value='extrapolate')
+            _en_to_x = interp1d(_en_mev, _pos_cm, bounds_error=False, fill_value='extrapolate')
+
+        def _add_energy_axis(ax):
+            """Add a twin top x-axis showing incident neutron energy in MeV."""
+            if _x_to_en is None or _en_to_x is None:
+                return
+            x_lo, x_hi = ax.get_xlim()
+            e_lo, e_hi = float(_x_to_en(x_lo)), float(_x_to_en(x_hi))
+            # Place ticks at round MeV values within the energy range
+            e_min, e_max = min(e_lo, e_hi), max(e_lo, e_hi)
+            e_span = e_max - e_min
+            step = 10 ** np.floor(np.log10(e_span / 4))
+            tick_energies = np.arange(np.ceil(e_min / step) * step,
+                                      np.floor(e_max / step) * step + step * 0.5,
+                                      step)
+            tick_positions = _en_to_x(tick_energies)
+            ax_top = ax.twiny()
+            ax_top.set_xlim(ax.get_xlim())
+            ax_top.set_xticks(tick_positions)
+            ax_top.set_xticklabels([f'{e:.3g}' for e in tick_energies])
+            ax_top.set_xlabel(f'{self.spectrometer.conversion_foil.incident_particle.capitalize()} Energy [MeV]')
+
         def _step(ax, edges, values, **kwargs):
             return ax.step(edges, np.append(values, values[-1]), where='pre', **kwargs)[0]
 
@@ -465,6 +503,7 @@ class SpectrometerPlotter:
         ax_counts.grid(True, alpha=0.3)
         ax_counts.set_title(f'Yield: {incident_particle_yield:.0e}')
         labelLines(ax_counts.get_lines(), align=False)
+        _add_energy_axis(ax_counts)
         fig.tight_layout()
         fig.savefig(filename_counts, dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -506,6 +545,7 @@ class SpectrometerPlotter:
             ax_sb.set_ylabel('log$_{10}$(S/B)')
             ax_sb.grid(True, alpha=0.3)
             labelLines(ax_sb.get_lines(), align=False)
+            _add_energy_axis(ax_sb)
             fig.tight_layout()
             fig.savefig(filename_sb, dpi=150, bbox_inches='tight')
             plt.close(fig)
@@ -522,6 +562,7 @@ class SpectrometerPlotter:
         ax_coverage.set_ylabel('Signal Coverage [%]')
         ax_coverage.set_ylim(0, 105)
         ax_coverage.grid(True, alpha=0.3)
+        _add_energy_axis(ax_coverage)
         fig.tight_layout()
         fig.savefig(filename_coverage, dpi=150, bbox_inches='tight')
         plt.close(fig)
