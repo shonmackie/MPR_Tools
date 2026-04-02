@@ -527,25 +527,10 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Coverage plot saved to {filename_coverage}')
 
-        # Plot 4 (time-gating only): per-channel signal arrival-time windows as horizontal bars.
+        # Plot 4 (time-gating only): ridgeline PDF of per-channel detector arrival times.
         if hodoscope.use_time_gating:
             filename_time_windows = f'{base}_time_windows{ext}'
-            fig, ax_tw = plt.subplots(figsize=(10, 4))
-            n_channels = hodoscope.total_channels
-            t_min_ns = channel_time_windows[:, 0] * 1e9  # seconds to nanoseconds for display
-            t_max_ns = channel_time_windows[:, 1] * 1e9
-            for i in range(n_channels):
-                if not np.isnan(t_min_ns[i]):
-                    ax_tw.barh(i, t_max_ns[i] - t_min_ns[i], left=t_min_ns[i],
-                               height=0.6, color='tab:blue', alpha=0.7)
-            ax_tw.set_xlabel('Time [ns]')
-            ax_tw.set_ylabel('Channel index')
-            ax_tw.set_yticks(np.arange(n_channels)[::max(1, n_channels // 10)])
-            ax_tw.grid(True, alpha=0.3, axis='x')
-            fig.tight_layout()
-            fig.savefig(filename_time_windows, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            print(f'Time windows plot saved to {filename_time_windows}')
+            self._plot_time_ridgeline(filename_time_windows)
 
         # Plot 5 (time-gating only, background data required): background E_dep vs time.
         if hodoscope.use_time_gating and time_bins is not None and neutron_background_vs_time is not None and photon_background_vs_time is not None:
@@ -565,6 +550,81 @@ class SpectrometerPlotter:
             fig.savefig(filename_bg_time, dpi=150, bbox_inches='tight')
             plt.close(fig)
             print(f'Background vs time plot saved to {filename_bg_time}')
+
+    def _plot_time_ridgeline(self, filename: str, n_kde_points: int = 300) -> None:
+        """Ridgeline plot of the detector arrival-time PDF for each hodoscope channel.
+
+        Each channel's PDF is estimated with kernel density estimation (KDE) and drawn
+        as a smooth filled curve offset vertically by its channel index, so timing shifts
+        and distribution shapes can be compared across the focal plane at a glance.
+
+        Args:
+            filename: Output path for the saved figure.
+            n_kde_points: Number of points on the evaluation grid (default 300).
+        """
+        from scipy.stats import gaussian_kde
+
+        hodoscope = self.spectrometer.hodoscope
+        n_channels = hodoscope.total_channels
+
+        arrival_times_s = self.spectrometer.output_beam[:, 4]
+        x_positions_cm = self.spectrometer.output_beam[:, 0] * 100
+        y_positions_cm = self.spectrometer.output_beam[:, 2] * 100
+        bin_edges_cm = hodoscope.channel_edges * 100
+        bin_heights_cm = hodoscope.channel_heights * 100
+        bin_indices = np.digitize(x_positions_cm, bin_edges_cm) - 1
+
+        # Collect accepted arrival times (ns) per channel.
+        channel_times_ns = []
+        for i in range(n_channels):
+            in_bin = bin_indices == i
+            y_ok = np.abs(y_positions_cm) <= bin_heights_cm[i] / 2
+            channel_times_ns.append(arrival_times_s[in_bin & y_ok] * 1e9)
+
+        all_times = np.concatenate([t for t in channel_times_ns if len(t) > 0])
+        global_t_min, global_t_max = all_times.min(), all_times.max()
+        t_grid = np.linspace(global_t_min, global_t_max, n_kde_points)
+
+        pdfs = []
+        for times in channel_times_ns:
+            if len(times) > 1:
+                kde = gaussian_kde(times)  # bandwidth via Scott's rule
+                pdfs.append(kde(t_grid))
+            else:
+                pdfs.append(np.zeros(n_kde_points))
+
+        max_pdf = max((p.max() for p in pdfs if p.max() > 0), default=1.0)
+        # Overlap: each ridge can grow up to 3 channel-index units tall.
+        ridge_scale = 3.0 / max_pdf
+
+        # Alternating light/dark blue for adjacent channels.
+        colors = ['#2166ac', '#6baed6']  # dark blue, light blue
+
+        # fig, ax = plt.subplots(figsize=(14, max(4, n_channels * 0.25)))
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for i in range(n_channels):
+            baseline = i
+            pdf_scaled = pdfs[i] * ridge_scale
+            color = colors[i % 2]
+            if pdf_scaled.max() == 0:
+                continue
+            # Clip near-zero tails (KDE has infinite support, so without this the fill
+            # would span the full time axis for every channel at near-zero height).
+            active = pdf_scaled > pdf_scaled.max() * 1e-3
+            x_fill = np.concatenate([[t_grid[active][0]], t_grid[active], [t_grid[active][-1]]])
+            y_fill = np.concatenate([[baseline], baseline + pdf_scaled[active], [baseline]])
+            ax.fill_between(x_fill, baseline, y_fill, alpha=0.5, color=color)
+            ax.plot(x_fill, y_fill, color=color, linewidth=0.8)
+
+        ax.set_xlabel('Detector arrival time [ns]')
+        ax.set_ylabel('Channel index')
+        # ax.set_yticks(np.arange(n_channels)[::max(1, n_channels // 10)])
+        ax.set_ylim(-0.5, n_channels - 0.5 + ridge_scale)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f'Time windows plot saved to {filename}')
 
     def plot_input_ray_geometry(self, filename: Optional[str] = None) -> None:
         """
