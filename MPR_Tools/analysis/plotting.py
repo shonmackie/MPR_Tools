@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
-from scipy.stats import norm
+from scipy.stats import gaussian_kde
 from scipy.interpolate import griddata, interp1d
 from labellines import labelLines
 import pandas as pd
@@ -569,9 +569,15 @@ class SpectrometerPlotter:
         print(f'Coverage plot saved to {filename_coverage}')
 
         # Plot 4 (time-gating only): ridgeline PDF of per-channel detector arrival times.
+        # Pass background arrays if available so they are overlaid on the twin y-axis.
         if hodoscope.use_time_gating:
             filename_time_windows = f'{base}_time_windows{ext}'
-            self._plot_time_ridgeline(filename_time_windows)
+            self._plot_time_ridgeline(
+                filename_time_windows,
+                time_bins=time_bins,
+                neutron_background_vs_time=neutron_background_vs_time,
+                photon_background_vs_time=photon_background_vs_time,
+            )
 
         # Plot 5 (time-gating only, background data required): background E_dep vs time.
         if hodoscope.use_time_gating and time_bins is not None and neutron_background_vs_time is not None and photon_background_vs_time is not None:
@@ -592,19 +598,30 @@ class SpectrometerPlotter:
             plt.close(fig)
             print(f'Background vs time plot saved to {filename_bg_time}')
 
-    def _plot_time_ridgeline(self, filename: str, n_kde_points: int = 300) -> None:
+    def _plot_time_ridgeline(
+        self,
+        filename: str,
+        n_kde_points: int = 300,
+        time_bins: Optional[np.ndarray] = None,
+        neutron_background_vs_time: Optional[np.ndarray] = None,
+        photon_background_vs_time: Optional[np.ndarray] = None,
+    ) -> None:
         """Ridgeline plot of the detector arrival-time PDF for each hodoscope channel.
 
         Each channel's PDF is estimated with kernel density estimation (KDE) and drawn
         as a smooth filled curve offset vertically by its channel index, so timing shifts
         and distribution shapes can be compared across the focal plane at a glance.
 
+        Optionally overlays neutron and photon background E_dep vs time on a second
+        log y-axis (right), sharing the same time x-axis.
+
         Args:
             filename: Output path for the saved figure.
             n_kde_points: Number of points on the evaluation grid (default 300).
+            time_bins: 1-D array of background time bin centres in seconds.
+            neutron_background_vs_time: Background neutron E_dep per bin [MeV/cm^2/source].
+            photon_background_vs_time: Background photon E_dep per bin [MeV/cm^2/source].
         """
-        from scipy.stats import gaussian_kde
-
         hodoscope = self.spectrometer.hodoscope
         n_channels = hodoscope.total_channels
 
@@ -639,7 +656,7 @@ class SpectrometerPlotter:
         ridge_scale = 3.0 / max_pdf
 
         # Alternating light/dark blue for adjacent channels.
-        colors = ['#2166ac', '#6baed6']  # dark blue, light blue
+        colors = ['darkred', 'salmon']  # dark blue, light blue
 
         # fig, ax = plt.subplots(figsize=(14, max(4, n_channels * 0.25)))
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -662,6 +679,28 @@ class SpectrometerPlotter:
         # ax.set_yticks(np.arange(n_channels)[::max(1, n_channels // 10)])
         ax.set_ylim(-0.5, n_channels - 0.5 + ridge_scale)
         ax.grid(True, alpha=0.3)
+        ax.text(0.52, 0.55, self.spectrometer.conversion_foil.particle,
+                transform=ax.transAxes, color=colors[0],
+                va='top', ha='left')
+
+        # Overlay background E_dep vs time on a twin log y-axis (right),
+        # restricted to the signal arrival window [global_t_min, global_t_max].
+        if time_bins is not None and neutron_background_vs_time is not None and photon_background_vs_time is not None:
+            time_ns_bg = time_bins * 1e9
+            dt = float(np.median(np.diff(time_ns_bg))) if len(time_ns_bg) > 1 else 1.0
+            bin_left = time_ns_bg - dt / 2
+            bin_right = time_ns_bg + dt / 2
+            overlap = np.maximum(0.0, np.minimum(bin_right, global_t_max) - np.maximum(bin_left, global_t_min)) / dt
+            mask = overlap > 0
+            ax_bg = ax.twinx()
+            ax_bg.step(time_ns_bg[mask], neutron_background_vs_time[mask] * overlap[mask], where='mid',
+                       color='steelblue', linewidth=2, label='neutron', alpha=0.8)
+            ax_bg.step(time_ns_bg[mask], photon_background_vs_time[mask] * overlap[mask], where='mid',
+                       color='darkorange', linewidth=2, label='photon', alpha=0.8)
+            ax_bg.set_yscale('log')
+            ax_bg.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
+            labelLines(ax_bg.get_lines(), align=False)
+
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
