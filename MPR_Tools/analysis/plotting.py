@@ -1179,7 +1179,8 @@ class SpectrometerPlotter:
         
     def plot_data(
         self,
-        energy_MeV: float, 
+        energy_MeV: float,
+        dual_energy_MeV: Optional[float] = None,
         figure_directory: Optional[str] = None,
         filename_prefix: Optional[str] = None,
         angle_range: Tuple[float, float] = (0, np.pi/2),
@@ -1190,6 +1191,7 @@ class SpectrometerPlotter:
         
         Args:
             energy_MeV: Specific energy in MeV for differential cross section plot
+            dual_energy_MeV: Specific energy in MeV for secondary foil's differential cross section plot (optional, only for dual foil spectrometers)
             figure_directory: Directory to save figures (optional)
             filename_prefix: Prefix for output filenames (optional)
             angle_range: Angular range (min, max) in radians for differential cross section
@@ -1240,7 +1242,6 @@ class SpectrometerPlotter:
         srim_range_mm = srim_range_m/1e-3
         
         axs[2].plot(srim_energies_MeV, srim_range_mm, 'tab:blue')
-        
         axs[2].set_xlabel(f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
         axs[2].set_ylabel('Range in Foil Material [mm]')
         axs[2].grid(True, alpha=0.3)
@@ -1249,11 +1250,13 @@ class SpectrometerPlotter:
         if self.dual_data:
             spec2: MPRSpectrometer = self.dual_data['spectrometer']
             foil2 = spec2.conversion_foil
-            title = f'{foil.particle} and {foil2.particle} at {energy_MeV:.2f} MeV'
+            if dual_energy_MeV is None:
+                dual_energy_MeV = energy_MeV
+            title = f'{foil.particle} and {foil2.particle} at {dual_energy_MeV:.2f} MeV'
             
             for interaction in foil2.interactions:
                 if interaction.generates_recoil_particles:
-                    diff_xs_lab2 = interaction.get_angle_distribution(energy_MeV).pdf(angles_rad)
+                    diff_xs_lab2 = interaction.get_angle_distribution(dual_energy_MeV).pdf(angles_rad)
                     axs[0].plot(angles_deg, diff_xs_lab2, 'darkorange')
             
             # n-hydron cross section data

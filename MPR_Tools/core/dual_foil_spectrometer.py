@@ -26,7 +26,8 @@ class DualFoilSpectrometer:
         aperture_radius: float,
         proton_transfer_map_path: str,
         deuteron_transfer_map_path: str,
-        reference_energy: float,
+        proton_reference_energy: float,
+        deuteron_reference_energy: float,
         ch2_min_energy: float,
         ch2_max_energy: float,
         cd2_min_energy: float,
@@ -49,7 +50,8 @@ class DualFoilSpectrometer:
             aperture_radius: Aperture radius in cm (for circular)
             proton_transfer_map_path: Path to COSY transfer map file for protons
             deuteron_transfer_map_path: Path to COSY transfer map file for deuterons
-            reference_energy: Reference energy in MeV
+            proton_reference_energy: Reference energy in MeV for protons
+            deuteron_reference_energy: Reference energy in MeV for deuterons
             ch2_min_energy: Minimum acceptance energy in MeV for CH2 foil
             ch2_max_energy: Maximum acceptance energy in MeV for CH2 foil
             cd2_min_energy: Minimum acceptance energy in MeV for CD2 foil
@@ -66,7 +68,8 @@ class DualFoilSpectrometer:
         print('='*70)
         
         self.data_directory = f'{run_directory}/data'
-        self.reference_energy = reference_energy
+        self.proton_reference_energy = proton_reference_energy
+        self.deuteron_reference_energy = deuteron_reference_energy
         self.ch2_min_energy = ch2_min_energy
         self.ch2_max_energy = ch2_max_energy
         self.cd2_min_energy = cd2_min_energy
@@ -93,7 +96,7 @@ class DualFoilSpectrometer:
         self.spec_ch2 = MPRSpectrometer(
             conversion_foil=foil_ch2,
             transfer_map_path=proton_transfer_map_path,
-            reference_energy=reference_energy,
+            reference_energy=self.proton_reference_energy,
             min_energy=ch2_min_energy,
             max_energy=ch2_max_energy,
             hodoscope=hodoscope,
@@ -117,7 +120,7 @@ class DualFoilSpectrometer:
         self.spec_cd2 = MPRSpectrometer(
             conversion_foil=foil_cd2,
             transfer_map_path=deuteron_transfer_map_path,
-            reference_energy=reference_energy,
+            reference_energy=self.deuteron_reference_energy,
             min_energy=cd2_min_energy,
             max_energy=cd2_max_energy,
             hodoscope=hodoscope,

@@ -422,7 +422,6 @@ class MPRSpectrometer:
                 worker_args.append((
                     self.input_beam[start_idx:end_idx],
                     self.transfer_map,
-                    self.conversion_foil.relative_mass,
                     map_order,
                 ))
                 
@@ -454,7 +453,6 @@ class MPRSpectrometer:
         self,
         input_batch: np.ndarray,
         transfer_map: np.ndarray,
-        relative_mass: float,
         map_order: int,
         progress_counter,
         progress_lock
@@ -465,8 +463,6 @@ class MPRSpectrometer:
         Args:
             input_batch: Input rays [N x 6]: x0, p_x_rel, y0, p_y_rel, foil_time, energy_rel.
             transfer_map: COSY transfer map coefficients.
-            relative_mass: Recoil particle mass relative to reference particle mass; only used when the
-                           transfer map term indices have 7 digits (mass-dependent map).
             map_order: Maximum polynomial order of terms to include.
             progress_counter: Shared counter for progress tracking.
             progress_lock: Lock for thread-safe progress updates.
@@ -482,7 +478,6 @@ class MPRSpectrometer:
 
         # Find maximum number of digits
         max_digits = len(str(np.max(term_indices)))
-        mass_included = max_digits >= 7 # Only 6 digits if mass is not included
 
         # Convert to zero-padded strings
         term_indices_str = np.array([str(x).zfill(max_digits) for x in term_indices])
@@ -509,8 +504,6 @@ class MPRSpectrometer:
                     * 0**term_powers[4] # Assume l_i = 0 for all particles since they all arrive at the foil at the same time (t0)
                     * input_batch[:, 5]**term_powers[5]
                 )
-                if mass_included:
-                    monomial *= relative_mass**term_powers[6]
 
                 # Add contributions to each COSY output coordinate: x, p_x, y, p_y, l
                 for coord in range(5):
