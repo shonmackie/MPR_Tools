@@ -70,9 +70,6 @@ class ConversionFoil:
         self.particle_mass = FOIL_MATERIALS[foil_material]['particle_mass'] # amu
         self.stopping_data_path = FOIL_MATERIALS[foil_material]['stopping_power']
         self.interaction_info = FOIL_MATERIALS[self.foil_material]['interactions']
-    
-        # Calculate relative mass, either 0 for protons or ~1 for deuterons
-        self.relative_mass = (self.particle_mass - FOIL_MATERIALS['CH2']['particle_mass']) / FOIL_MATERIALS['CH2']['particle_mass']
         
         # Load cross section and stopping power data
         self._load_data_files()
