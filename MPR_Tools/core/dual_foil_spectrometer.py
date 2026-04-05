@@ -33,6 +33,9 @@ class DualFoilSpectrometer:
         cd2_min_energy: float,
         cd2_max_energy: float,
         hodoscope: Hodoscope,
+        target_to_foil_distance: Optional[float] = None,
+        burn_duration: Optional[float] = None,
+        central_ray_length: Optional[float] = None,
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
         run_directory: str = '.',
@@ -57,6 +60,9 @@ class DualFoilSpectrometer:
             cd2_min_energy: Minimum acceptance energy in MeV for CD2 foil
             cd2_max_energy: Maximum acceptance energy in MeV for CD2 foil
             hodoscope: Hodoscope detector system
+            target_to_foil_distance: Distance from neutron source to foil in meters
+            burn_duration: FWHM duration of the neutron source in seconds
+            central_ray_length: Path length of the reference ray through the spectrometer in meters
             aperture_width: Aperture width in cm (for rectangular)
             aperture_height: Aperture height in cm (for rectangular)
             run_directory: Directory for saving run data and figures
@@ -79,52 +85,43 @@ class DualFoilSpectrometer:
         if not os.path.exists(self.data_directory):
             os.makedirs(self.data_directory)
         
-        # Create CH2 foil and spectrometer (positive y half)
-        print('\n--- Initializing CH2 (Proton) Spectrometer ---')
-        foil_ch2 = ConversionFoil(
+        shared_foil_args = dict(
             foil_radius=foil_radius,
-            thickness=thickness_ch2,
             aperture_distance=aperture_distance,
             aperture_radius=aperture_radius,
             aperture_width=aperture_width,
             aperture_height=aperture_height,
-            foil_material='CH2',
             aperture_type=aperture_type,
             **shared_foil_kwargs
         )
-        
+        shared_spec_kwargs = dict(
+            hodoscope=hodoscope,
+            run_directory=run_directory,
+            target_to_foil_distance=target_to_foil_distance,
+            burn_duration=burn_duration,
+            central_ray_length=central_ray_length,
+        )
+
+        # Create CH2 foil and spectrometer (positive y half)
+        print('\n--- Initializing CH2 (Proton) Spectrometer ---')
         self.spec_ch2 = MPRSpectrometer(
-            conversion_foil=foil_ch2,
+            conversion_foil=ConversionFoil(**shared_foil_args, thickness=thickness_ch2, foil_material='CH2'),
             transfer_map_path=proton_transfer_map_path,
             reference_energy=self.proton_reference_energy,
             min_energy=ch2_min_energy,
             max_energy=ch2_max_energy,
-            hodoscope=hodoscope,
-            run_directory=run_directory
+            **shared_spec_kwargs
         )
-        
+
         # Create CD2 foil and spectrometer (negative y half)
         print('\n--- Initializing CD2 (Deuteron) Spectrometer ---')
-        foil_cd2 = ConversionFoil(
-            foil_radius=foil_radius,
-            thickness=thickness_cd2,
-            aperture_distance=aperture_distance,
-            aperture_radius=aperture_radius,
-            aperture_width=aperture_width,
-            aperture_height=aperture_height,
-            foil_material='CD2',
-            aperture_type=aperture_type,
-            **shared_foil_kwargs
-        )
-        
         self.spec_cd2 = MPRSpectrometer(
-            conversion_foil=foil_cd2,
+            conversion_foil=ConversionFoil(**shared_foil_args, thickness=thickness_cd2, foil_material='CD2'),
             transfer_map_path=deuteron_transfer_map_path,
             reference_energy=self.deuteron_reference_energy,
             min_energy=cd2_min_energy,
             max_energy=cd2_max_energy,
-            hodoscope=hodoscope,
-            run_directory=run_directory
+            **shared_spec_kwargs
         )
         
         # Combined beam storage
@@ -169,33 +166,22 @@ class DualFoilSpectrometer:
         num_cd2 = num_recoil_particles - num_ch2
         
         
+        shared_mc_kwargs = dict(
+            incident_energies=incident_energies,
+            probability_distribution=probability_distribution,
+            include_kinematics=include_kinematics,
+            include_stopping_power_loss=include_stopping_power_loss,
+            z_sampling=z_sampling,
+            save_beam=False,
+            executor=executor,
+            max_workers=max_workers,
+        )
+
         print(f'\nGenerating {num_ch2} CH2 (proton) rays with positive y restriction...')
-        self.spec_ch2.generate_monte_carlo_rays(
-            incident_energies=incident_energies,
-            probability_distribution=probability_distribution,
-            num_recoil_particles=num_ch2,
-            include_kinematics=include_kinematics,
-            include_stopping_power_loss=include_stopping_power_loss,
-            z_sampling=z_sampling,
-            save_beam=False,
-            executor=executor,
-            max_workers=max_workers,
-            y_restriction='positive'
-        )
-        
+        self.spec_ch2.generate_monte_carlo_rays(**shared_mc_kwargs, num_recoil_particles=num_ch2, y_restriction='positive')
+
         print(f'\nGenerating {num_cd2} CD2 (deuteron) rays with negative y restriction...')
-        self.spec_cd2.generate_monte_carlo_rays(
-            incident_energies=incident_energies,
-            probability_distribution=probability_distribution,
-            num_recoil_particles=num_cd2,
-            include_kinematics=include_kinematics,
-            include_stopping_power_loss=include_stopping_power_loss,
-            z_sampling=z_sampling,
-            save_beam=False,
-            executor=executor,
-            max_workers=max_workers,
-            y_restriction='negative',
-        )
+        self.spec_cd2.generate_monte_carlo_rays(**shared_mc_kwargs, num_recoil_particles=num_cd2, y_restriction='negative')
         
         # Combine beams
         self._combine_input_beams()
