@@ -324,8 +324,8 @@ class SpectrometerPlotter:
     def plot_position_histogram(
         self,
         filename: Optional[str] = None,
-        foil_solid_angle_fraction: Optional[float] = None,
-        incident_particle_yield: Optional[float] = None,
+        foil_solid_angle_fraction: float = 1.0,
+        incident_particle_yield: float = 1.0,
         neutron_background_file: Optional[str] = None,
         photon_background_file: Optional[str] = None,
         neutron_energy: Optional[float] = None,
