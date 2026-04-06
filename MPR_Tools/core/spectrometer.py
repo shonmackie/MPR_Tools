@@ -144,14 +144,17 @@ class MPRSpectrometer:
                                             np.sin(phi) * ar_idx / aperture_radial_points)
                                 
                                 # Calculate angles
-                                angle_x = np.arctan((x_aperture - x_foil) / self.conversion_foil.aperture_distance)
-                                angle_y = np.arctan((y_aperture - y_foil) / self.conversion_foil.aperture_distance)
+                                total_distance = np.sqrt(
+                                    (x_aperture - x_foil)**2 + (y_aperture - y_foil)**2 +
+                                    self.conversion_foil.aperture_distance**2)
+                                sin_angle_x = (x_aperture - x_foil) / total_distance
+                                sin_angle_y = (y_aperture - y_foil) / total_distance
                                 
                                 # Calculate relative transverse momenta since that's what COSY uses instead of angle fsr
                                 gamma = 1 + energy/particle_rest_energy  # lorentz factor of the ray
                                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
-                                p_x_relative = p_relative * np.sin(angle_x)
-                                p_y_relative = p_relative * np.sin(angle_y)
+                                p_x_relative = p_relative * sin_angle_x
+                                p_y_relative = p_relative * sin_angle_y
 
                                 # Check for duplicates
                                 ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, energy_offset, energy]
@@ -285,7 +288,7 @@ class MPRSpectrometer:
                 x0, y0, theta_s, phi_s, incident_energy, recoil_energy = conversion_foil.generate_recoil_particle(
                     incident_energies,
                     weighted_distribution,
-                    include_kinematics, 
+                    include_kinematics,
                     include_stopping_power_loss,
                     z_sampling=z_sampling,
                     rng=rng,  # Pass the worker's RNG
@@ -296,13 +299,16 @@ class MPRSpectrometer:
                 x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
                 y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
                 
-                angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
-                angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
+                total_distance = np.sqrt(
+                    (x_aperture - x0)**2 + (y_aperture - y0)**2 +
+                    conversion_foil.aperture_distance**2)
+                sin_angle_x = (x_aperture - x0) / total_distance
+                sin_angle_y = (y_aperture - y0) / total_distance
                 
                 gamma = 1 + recoil_energy/particle_rest_energy  # Lorentz factor of the ray
                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
-                p_x_relative = p_relative * np.sin(angle_x)
-                p_y_relative = p_relative * np.sin(angle_y)
+                p_x_relative = p_relative * sin_angle_x
+                p_y_relative = p_relative * sin_angle_y
                 
                 energy_relative = (recoil_energy - reference_energy) / reference_energy
                 
