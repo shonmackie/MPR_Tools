@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Executor
-from typing import Tuple, Optional, Union, Literal
+from typing import Tuple, Optional, Union
 import warnings
 import numpy as np
 import pandas as pd
@@ -498,17 +498,15 @@ class PerformanceAnalyzer:
         self,
         particle_yield: Optional[float] = None,
         time_gate_percentiles: Tuple[float, float] = (0, 100),
-        y_restriction: Optional[Literal['lower', 'upper']] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Bin the recoil beam into 1-D x channels and compute signal, y-coverage, and per-channel
         signal arrival-time windows.
 
-        In a dual-foil spectrometer the hodoscope is split at y=0: CH2 protons land at y<0
-        and CD2 deuterons at y>0.  Use y_restriction to restrict the y-acceptance to the
-        appropriate half.  Each dual-foil hodoscope stores its physical half-height, so the
-        full channel height is used as the acceptance boundary (e.g. 0 to +H for 'upper').
-        When y_restriction is None the acceptance is ±channel_height/2 (single-foil default).
+        The y-acceptance of each channel is determined entirely by the hodoscope: particles are
+        accepted when |y - hodoscope.y_center| <= channel_height/2.  In a dual-foil setup each
+        hodoscope's y_center and channel_height together define its physical half of the detector
+        with no additional restriction parameter required.
 
         When detector_used is False, signal is in [particles/source] per channel.
         When detector_used is True, signal is in [MeV deposited/source] per channel.
@@ -524,9 +522,6 @@ class PerformanceAnalyzer:
             time_gate_percentiles: (low_percentile, high_percentile) pair defining the signal
                                    time window per channel.  Defaults to (0, 100) to accept
                                    all arrival times.
-            y_restriction: Which y-half of the detector to accept.  ``'lower'`` accepts y < 0
-                           (CH2/proton side), ``'upper'`` accepts y > 0 (CD2/deuteron side),
-                           ``None`` (default) accepts the full channel height symmetrically.
 
         Returns:
             Tuple of (signal_per_bin, coverage_per_bin, channel_time_windows) where
@@ -544,9 +539,10 @@ class PerformanceAnalyzer:
         output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
         total_particles = len(x_positions)
 
-        # Determine bin edges and channel heights
+        # Determine bin edges, channel heights, and detector y-center
         bin_edges_cm = hodoscope.channel_edges * 100   # m to cm
         bin_heights_cm = hodoscope.channel_heights * 100  # m to cm
+        y_center_cm = hodoscope.y_center * 100  # m to cm
 
         n_bins = len(bin_edges_cm) - 1
 
@@ -569,22 +565,12 @@ class PerformanceAnalyzer:
         for b in range(n_bins):
             in_bin = bin_indices == b
 
-            # Restrict to a y-half when requested (dual-foil: CH2 at y<0, CD2 at y>0).
-            # total_per_bin counts all particles on the correct y-side within the x-bin;
-            # signal_per_bin further requires they fall within the channel height.
-            # For dual-foil each hodoscope carries its physical half-height, so the full
-            # channel height (not half) is the correct acceptance boundary.
-            if y_restriction == 'lower':
-                in_half = in_bin & (y_positions < 0)
-                accepted = in_half & (y_positions >= -bin_heights_cm[b])
-            elif y_restriction == 'upper':
-                in_half = in_bin & (y_positions > 0)
-                accepted = in_half & (y_positions <= bin_heights_cm[b])
-            else:
-                in_half = in_bin
-                accepted = in_bin & (np.abs(y_positions) <= bin_heights_cm[b] / 2)
+            # Accept particles within [y_center - height/2, y_center + height/2].
+            # For dual-foil, each hodoscope's y_center and channel_height place it in its
+            # physical half of the detector.
+            accepted = in_bin & (np.abs(y_positions - y_center_cm) <= bin_heights_cm[b] / 2)
 
-            total_per_bin[b] = np.sum(weights[in_half])
+            total_per_bin[b] = np.sum(weights[in_bin])
             signal_per_bin[b] = np.sum(weights[accepted])
 
             # Compute the signal arrival-time window for this channel from the percentile range

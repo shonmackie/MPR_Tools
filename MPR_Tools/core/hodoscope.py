@@ -22,7 +22,8 @@ class Hodoscope:
         detector_height: Optional[float] = None,
         detector_material: Optional[str] = None,
         detector_thickness: Optional[float] = None,
-        use_time_gating: bool = False
+        use_time_gating: bool = False,
+        y_center: float = 0.0,
     ):
         """
         Initialize hodoscope detector array in one of three ways:
@@ -53,8 +54,10 @@ class Hodoscope:
                              If this is passed, then `channels` should not be passed.
             detector_material: The material of the detector. Only used for detector sensitivity calculation.
             use_time_gating: When True, background CSV files are expected to contain a 'time' column,
-                             and get_background() will get the energy deposited as a function of time.  
+                             and get_background() will get the energy deposited as a function of time.
                              When False (default), all background calculations integrate over the full time axis.
+            y_center: Vertical center of the detector in cm (default 0). The y-acceptance of each channel is
+                      [y_center - channel_height/2, y_center + channel_height/2].
         """
         # Calculate detector centers
         if channels is not None:
@@ -78,6 +81,9 @@ class Hodoscope:
 
         # Whether to use time-resolved background data for per-channel time gating.
         self.use_time_gating = use_time_gating
+
+        # Vertical center of the detector (meters). Channel y-acceptance is [y_center ± height/2].
+        self.y_center = y_center * 1e-2  # cm to m
 
     def _calculate_channel_edges_from_array(self, data: np.ndarray) -> None:
         """Calculate the dimensions and center positions of all channels"""

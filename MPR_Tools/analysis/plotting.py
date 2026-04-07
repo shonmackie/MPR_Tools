@@ -77,20 +77,28 @@ class SpectrometerPlotter:
         
         # Draw hodoscope if requested
         if include_hodoscope:
-            # Convert to cm
-            heights = self.spectrometer.hodoscope.channel_heights * 100
-            edges = self.spectrometer.hodoscope.channel_edges * 100
-            
-            # Draw detector boundaries
-            edge_lengths = np.minimum(heights[0:-1], heights[1:])
-            ax.vlines(edges[1:-1], -edge_lengths/2, edge_lengths/2,
-                      color='black', linestyle='--', linewidth=0.5)
+            def _draw_hodoscope(hod, color='black'):
+                """Draw the full envelope and channel boundaries for one hodoscope."""
+                heights = hod.channel_heights * 100  # cm
+                edges = hod.channel_edges * 100       # cm
+                y_ctr = hod.y_center * 100            # cm
+                edge_lengths = np.minimum(heights[:-1], heights[1:])
 
-            # Draw detector envelope
-            x = np.repeat(edges, 2)
-            y = np.concatenate([[0], np.repeat(heights/2, 2), [0]])
-            ax.plot(x, y, color='black', linewidth=1.0)
-            ax.plot(x, -y, color='black', linewidth=1.0)
+                # Internal channel-edge lines (span ±half the shorter adjacent channel)
+                ax.vlines(edges[1:-1],
+                          y_ctr - edge_lengths / 2, y_ctr + edge_lengths / 2,
+                          color=color, linestyle='--', linewidth=0.5)
+
+                # Outer envelope (top + bottom step function + left/right edges)
+                x = np.repeat(edges, 2)
+                y_half = np.concatenate([[0], np.repeat(heights / 2, 2), [0]])
+                ax.plot(x, y_ctr + y_half, color=color, linewidth=1.0)
+                ax.plot(x, y_ctr - y_half, color=color, linewidth=1.0)
+
+            
+            _draw_hodoscope(self.spectrometer.hodoscope)
+            if self.dual_data:
+                _draw_hodoscope(self.dual_data['spectrometer'].hodoscope)
 
         # Scatter plot of focal particle positions
         particle_energies = self.spectrometer.input_beam[:, 5] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
@@ -393,15 +401,12 @@ class SpectrometerPlotter:
         hodoscope = self.spectrometer.hodoscope
 
         # --- Signal via get_recoil_x_map ---
-        # In dual-foil mode the hodoscope is split at y=0: CH2 protons at y<0, CD2 deuterons
-        # at y>0.  Each half is treated as an independent detector with half the channel area.
+        # Each hodoscope's y_center and channel_height define its acceptance window.
         # channel_time_windows shape (n_channels, 2): per-channel [t_min, t_max] of signal
         # arrival times.  Filled with NaN when hodoscope.use_time_gating is False.
         is_dual = self.dual_data is not None
-        y_restriction_ch2 = 'lower' if is_dual else None
         signal, coverage, channel_time_windows = self.performance_analyzer.get_recoil_x_map(
             particle_yield=incident_particle_yield,
-            y_restriction=y_restriction_ch2,
         )
         channel_edges = hodoscope.channel_edges * 100  # m to cm
         channel_widths = hodoscope.channel_widths * 100  # m to cm
@@ -415,7 +420,6 @@ class SpectrometerPlotter:
             signal2, coverage2, channel_time_windows2 = (
                 self.dual_data['performance_analyzer'].get_recoil_x_map(
                     particle_yield=incident_particle_yield,
-                    y_restriction='upper',
                 )
             )
             hodoscope2 = self.dual_data['spectrometer'].hodoscope
@@ -748,34 +752,32 @@ class SpectrometerPlotter:
         """
         hodoscope = self.spectrometer.hodoscope
         n_channels = hodoscope.total_channels
-        bin_edges_cm = hodoscope.channel_edges * 100
-        bin_heights_cm = hodoscope.channel_heights * 100
         is_dual = self.dual_data is not None
 
-        def _collect_times(beam, y_restriction: Optional[str]) -> list:
+        def _collect_times(beam, hod) -> list:
             """Return per-channel accepted arrival times (ns) for one foil's output beam."""
             arr_s = beam[:, 4]
             x_cm = beam[:, 0] * 100
             y_cm = beam[:, 2] * 100
-            idx = np.digitize(x_cm, bin_edges_cm) - 1
+            y_ctr_cm = hod.y_center * 100
+            local_heights_cm = hod.channel_heights * 100
+            local_edges_cm = hod.channel_edges * 100
+            idx = np.digitize(x_cm, local_edges_cm) - 1
             times_per_channel = []
-            for i in range(n_channels):
+            for i in range(hod.total_channels):
                 in_bin = idx == i
-                if y_restriction == 'lower':
-                    y_ok = (y_cm < 0) & (y_cm >= -bin_heights_cm[i] / 2)
-                elif y_restriction == 'upper':
-                    y_ok = (y_cm > 0) & (y_cm <= bin_heights_cm[i] / 2)
-                else:
-                    y_ok = np.abs(y_cm) <= bin_heights_cm[i] / 2
+                y_ok = np.abs(y_cm - y_ctr_cm) <= local_heights_cm[i] / 2
                 times_per_channel.append(arr_s[in_bin & y_ok] * 1e9)
             return times_per_channel
 
-        # Collect arrival times for each foil, restricting to the appropriate y-half.
-        y_restriction_ch2 = 'lower' if is_dual else None
-        channel_times_ch2 = _collect_times(self.spectrometer.output_beam, y_restriction_ch2)
+        # Collect arrival times for each foil using each hodoscope's own y_center + channel_height.
+        channel_times_ch2 = _collect_times(self.spectrometer.output_beam, hodoscope)
         channel_times_cd2: list = []
         if self.dual_data is not None:
-            channel_times_cd2 = _collect_times(self.dual_data['spectrometer'].output_beam, 'upper')
+            channel_times_cd2 = _collect_times(
+                self.dual_data['spectrometer'].output_beam,
+                self.dual_data['spectrometer'].hodoscope,
+            )
 
         # Build a common time grid spanning all accepted arrival times.
         all_lists = channel_times_ch2 + channel_times_cd2
