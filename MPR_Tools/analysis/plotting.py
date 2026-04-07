@@ -352,7 +352,6 @@ class SpectrometerPlotter:
     def plot_position_histogram(
         self,
         filename: Optional[str] = None,
-        foil_solid_angle_fraction: Optional[float] = None,
         incident_particle_yield: Optional[float] = None,
         neutron_background_file: Optional[str] = None,
         photon_background_file: Optional[str] = None,
@@ -375,7 +374,6 @@ class SpectrometerPlotter:
 
         Args:
             filename: Output filename for the plot.
-            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
             incident_particle_yield: Total source yield; scales both signal and background.
             neutron_background_file: Path to a time-resolved CSV with columns 'time' [s],
                 'energy' [MeV], and 'mean' [particles/cm²/source] — used when
@@ -402,7 +400,7 @@ class SpectrometerPlotter:
         is_dual = self.dual_data is not None
         y_restriction_ch2 = 'lower' if is_dual else None
         signal, coverage, channel_time_windows = self.performance_analyzer.get_recoil_x_map(
-            foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield,
+            particle_yield=incident_particle_yield,
             y_restriction=y_restriction_ch2,
         )
         channel_edges = hodoscope.channel_edges * 100  # m to cm
@@ -416,17 +414,19 @@ class SpectrometerPlotter:
         if is_dual:
             signal2, coverage2, channel_time_windows2 = (
                 self.dual_data['performance_analyzer'].get_recoil_x_map(
-                    foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield,
+                    particle_yield=incident_particle_yield,
                     y_restriction='upper',
                 )
             )
-            channel_edges2 = hodoscope.channel_edges * 100  # m to cm
-            channel_widths2 = hodoscope.channel_widths * 100  # m to cm
-            channel_heights2 = hodoscope.channel_heights * 100  # m to cm
+            hodoscope2 = self.dual_data['spectrometer'].hodoscope
+            channel_edges2 = hodoscope2.channel_edges * 100  # m to cm
+            channel_widths2 = hodoscope2.channel_widths * 100  # m to cm
+            channel_heights2 = hodoscope2.channel_heights * 100  # m to cm
 
         # --- Background per channel (neutron and photon separately) ---
-        # In dual-foil mode each half-detector has half the channel area and its own time windows,
-        # so background is computed independently for CH2 and CD2.
+        # Each hodoscope stores its own physical height, so channel_area = width * height is
+        # correct without any extra area factor.  For dual-foil, CH2 and CD2 are computed
+        # independently using their respective hodoscopes and time windows.
 
         # Initialize per-channel background arrays and the time-resolved arrays used for
         # the gated vs. non-gated S/B overlay (only populated when use_time_gating=True).
@@ -434,6 +434,29 @@ class SpectrometerPlotter:
         neutron_bg_per_channel2 = photon_bg_per_channel2 = None
         time_bins = neutron_background_vs_time = photon_background_vs_time = None
         scale = (incident_particle_yield if incident_particle_yield else 1.0)
+
+        def _compute_bg(time_windows, chan_widths, chan_heights, t_bins, n_bg_ts, ph_bg_ts, use_tg):
+            """Compute per-channel neutron/photon background for the given hodoscope half."""
+            dt_local = float(np.median(np.diff(t_bins))) if len(t_bins) > 1 else 1.0
+            neutron_bg = np.zeros(len(chan_widths))
+            photon_bg = np.zeros(len(chan_widths))
+            for i in range(len(chan_widths)):
+                if use_tg and not np.isnan(time_windows[i, 0]):
+                    # Weight each background bin by the fraction of that bin that overlaps the
+                    # signal arrival window.  This correctly handles windows narrower than the
+                    # bin width (which a binary mask would miss entirely) as well as partial
+                    # overlaps at the edges.
+                    t_min = time_windows[i, 0]
+                    t_max = time_windows[i, 1]
+                    bin_left = t_bins - dt_local / 2
+                    bin_right = t_bins + dt_local / 2
+                    overlap = np.maximum(0.0, np.minimum(bin_right, t_max) - np.maximum(bin_left, t_min)) / dt_local
+                else:
+                    overlap = np.ones(len(t_bins))
+                channel_area = chan_widths[i] * chan_heights[i]  # cm^2 — each hodoscope carries its own height
+                neutron_bg[i] = np.dot(n_bg_ts, overlap) * scale * channel_area
+                photon_bg[i] = np.dot(ph_bg_ts, overlap) * scale * channel_area
+            return neutron_bg, photon_bg
 
         if neutron_background_file and photon_background_file and hodoscope.detector_used:
             # get_background() always returns a 3-tuple of arrays regardless of use_time_gating.
@@ -443,37 +466,23 @@ class SpectrometerPlotter:
             time_bins, neutron_background_vs_time, photon_background_vs_time = hodoscope.get_background(
                 neutron_background_file, photon_background_file
             )
-            # Background bin width (assumed uniform); used for fractional overlap calculation.
-            dt = float(np.median(np.diff(time_bins))) if len(time_bins) > 1 else 1.0
-            # In dual-foil mode each half subtends half the full channel area.
-            area_factor = 0.5 if is_dual else 1.0
+            neutron_bg_per_channel, photon_bg_per_channel = _compute_bg(
+                channel_time_windows, channel_widths, channel_heights,
+                time_bins, neutron_background_vs_time, photon_background_vs_time,
+                hodoscope.use_time_gating,
+            )
 
-            def _compute_bg(time_windows):
-                """Compute per-channel neutron/photon background for the given time windows."""
-                neutron_bg = np.zeros(len(channel_widths))
-                photon_bg = np.zeros(len(channel_widths))
-                for i in range(len(channel_widths)):
-                    if hodoscope.use_time_gating and not np.isnan(time_windows[i, 0]):
-                        # Weight each background bin by the fraction of that bin that overlaps the
-                        # signal arrival window.  This correctly handles windows narrower than the
-                        # bin width (which a binary mask would miss entirely) as well as partial
-                        # overlaps at the edges.
-                        t_min = time_windows[i, 0]
-                        t_max = time_windows[i, 1]
-                        bin_left = time_bins - dt / 2
-                        bin_right = time_bins + dt / 2
-                        overlap = np.maximum(0.0, np.minimum(bin_right, t_max) - np.maximum(bin_left, t_min)) / dt
-                    else:
-                        overlap = np.ones(len(time_bins))
-                    channel_area = channel_widths[i] * channel_heights[i] * area_factor  # cm^2
-                    neutron_bg[i] = np.dot(neutron_background_vs_time, overlap) * scale * channel_area
-                    photon_bg[i] = np.dot(photon_background_vs_time, overlap) * scale * channel_area
-                return neutron_bg, photon_bg
-
-            neutron_bg_per_channel, photon_bg_per_channel = _compute_bg(channel_time_windows)
-
-            if is_dual and channel_time_windows2 is not None:
-                neutron_bg_per_channel2, photon_bg_per_channel2 = _compute_bg(channel_time_windows2)
+        if self.dual_data is not None and channel_time_windows2 is not None and neutron_background_file and photon_background_file:
+            hodoscope2 = self.dual_data['spectrometer'].hodoscope
+            if hodoscope2.detector_used:
+                time_bins2, neutron_bg_vs_time2, photon_bg_vs_time2 = hodoscope2.get_background(
+                    neutron_background_file, photon_background_file
+                )
+                neutron_bg_per_channel2, photon_bg_per_channel2 = _compute_bg(
+                    channel_time_windows2, channel_widths2, channel_heights2,
+                    time_bins2, neutron_bg_vs_time2, photon_bg_vs_time2,
+                    hodoscope2.use_time_gating,
+                )
 
         # --- Derive per-plot filenames from base filename ---
         base, ext = os.path.splitext(filename)
@@ -977,7 +986,6 @@ class SpectrometerPlotter:
         dx: float = 0.5,
         dy: float = 0.5,
         incident_particle_yield: Optional[float] = None,
-        foil_solid_angle_fraction: Optional[float] = None,
     ) -> None:
         """
         Plot a heatmap of focal particle density in the detector plane.
@@ -987,13 +995,12 @@ class SpectrometerPlotter:
             dx: X-direction resolution in cm.
             dy: Y-direction resolution in cm.
             incident_particle_yield: Total particle yield (particles/source). Scales the density map.
-            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
         """
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/particle_density_heatmap.png'
 
         particle = self.spectrometer.conversion_foil.particle
-        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield)
+        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, particle_yield=incident_particle_yield)
 
         fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -1009,7 +1016,7 @@ class SpectrometerPlotter:
         if self.dual_data:
             performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, foil_solid_angle_fraction=foil_solid_angle_fraction, particle_yield=incident_particle_yield)
+            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, particle_yield=incident_particle_yield)
             im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
             units = f'[{particle2}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle2}/cm$^2$]'

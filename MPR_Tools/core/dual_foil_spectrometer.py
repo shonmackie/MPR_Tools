@@ -32,7 +32,9 @@ class DualFoilSpectrometer:
         ch2_max_energy: float,
         cd2_min_energy: float,
         cd2_max_energy: float,
-        hodoscope: Hodoscope,
+        hodoscope_ch2: Hodoscope,
+        hodoscope_cd2: Hodoscope,
+        foil_solid_angle_fraction: Optional[float] = None,
         target_to_foil_distance: Optional[float] = None,
         burn_duration: Optional[float] = None,
         central_ray_length: Optional[float] = None,
@@ -59,7 +61,10 @@ class DualFoilSpectrometer:
             ch2_max_energy: Maximum acceptance energy in MeV for CH2 foil
             cd2_min_energy: Minimum acceptance energy in MeV for CD2 foil
             cd2_max_energy: Maximum acceptance energy in MeV for CD2 foil
-            hodoscope: Hodoscope detector system
+            hodoscope_ch2: Hodoscope for the CH2 (proton) spectrometer
+            hodoscope_cd2: Hodoscope for the CD2 (deuteron) spectrometer
+            foil_solid_angle_fraction: Fraction of solid angle covered by conversion foil as seen from the neutron source.
+                Used for yield calculations and plotting. Divided by 2 for each foil since they share the same radius.
             target_to_foil_distance: Distance from neutron source to foil in meters
             burn_duration: FWHM duration of the neutron source in seconds
             central_ray_length: Path length of the reference ray through the spectrometer in meters
@@ -95,8 +100,8 @@ class DualFoilSpectrometer:
             **shared_foil_kwargs
         )
         shared_spec_kwargs = dict(
-            hodoscope=hodoscope,
             run_directory=run_directory,
+            foil_solid_angle_fraction=foil_solid_angle_fraction / 2 if foil_solid_angle_fraction is not None else None,  # Divide by 2 since each foil covers half the area
             target_to_foil_distance=target_to_foil_distance,
             burn_duration=burn_duration,
             central_ray_length=central_ray_length,
@@ -110,6 +115,7 @@ class DualFoilSpectrometer:
             reference_energy=self.proton_reference_energy,
             min_energy=ch2_min_energy,
             max_energy=ch2_max_energy,
+            hodoscope=hodoscope_ch2,
             **shared_spec_kwargs
         )
 
@@ -121,17 +127,18 @@ class DualFoilSpectrometer:
             reference_energy=self.deuteron_reference_energy,
             min_energy=cd2_min_energy,
             max_energy=cd2_max_energy,
+            hodoscope=hodoscope_cd2,
             **shared_spec_kwargs
         )
         
         # Combined beam storage
         self.combined_incident_beam = np.zeros(0)
         self.combined_output_beam = np.zeros(0)
-        
+
         print('\n' + '='*70)
         print('Dual-Foil MPR Spectrometer initialization complete!')
         print('='*70 + '\n')
-    
+
     def generate_monte_carlo_rays(
         self,
         incident_energies: np.ndarray,

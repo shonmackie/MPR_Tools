@@ -351,7 +351,6 @@ class PerformanceAnalyzer:
         
     def _get_incident_spectrum(
         self,
-        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
         """
@@ -363,7 +362,7 @@ class PerformanceAnalyzer:
             incident_energies: np.ndarray of incident energies
             incident_energies_std: np.ndarray of incident energy uncertainties
         """
-        signal_per_bin, _, _ = self.get_recoil_x_map(foil_solid_angle_fraction, particle_yield)
+        signal_per_bin, _, _ = self.get_recoil_x_map(particle_yield)
         hodoscope = self.spectrometer.hodoscope
         x_positions = hodoscope.channel_centers  # meters
         response_values = signal_per_bin
@@ -408,7 +407,6 @@ class PerformanceAnalyzer:
         self,
         dx: float = 0.5,
         dy: float = 0.5,
-        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -417,7 +415,6 @@ class PerformanceAnalyzer:
         Args:
             dx: X-direction resolution in cm
             dy: Y-direction resolution in cm
-            foil_solid_angle_fraction, optional: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source
             particle_yield, optional: Input particle yield
             
         Returns:
@@ -481,9 +478,9 @@ class PerformanceAnalyzer:
         response_map /= (cell_area_cm2 * total_recoils)
         
         # Add source-to-foil geometric factor
-        if foil_solid_angle_fraction:
-            density_map *= foil_solid_angle_fraction
-            response_map *= foil_solid_angle_fraction
+        if self.spectrometer.foil_solid_angle_fraction:
+            density_map *= self.spectrometer.foil_solid_angle_fraction
+            response_map *= self.spectrometer.foil_solid_angle_fraction
             
         # Add yield multiplier
         if particle_yield:
@@ -499,7 +496,6 @@ class PerformanceAnalyzer:
     
     def get_recoil_x_map(
         self,
-        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None,
         time_gate_percentiles: Tuple[float, float] = (0, 100),
         y_restriction: Optional[Literal['lower', 'upper']] = None,
@@ -510,8 +506,9 @@ class PerformanceAnalyzer:
 
         In a dual-foil spectrometer the hodoscope is split at y=0: CH2 protons land at y<0
         and CD2 deuterons at y>0.  Use y_restriction to restrict the y-acceptance to the
-        appropriate half.  When y_restriction is None the full channel height is used
-        (single-foil default).
+        appropriate half.  Each dual-foil hodoscope stores its physical half-height, so the
+        full channel height is used as the acceptance boundary (e.g. 0 to +H for 'upper').
+        When y_restriction is None the acceptance is ±channel_height/2 (single-foil default).
 
         When detector_used is False, signal is in [particles/source] per channel.
         When detector_used is True, signal is in [MeV deposited/source] per channel.
@@ -523,8 +520,6 @@ class PerformanceAnalyzer:
         channel_time_windows array is filled with NaN.
 
         Args:
-            foil_solid_angle_fraction: Geometric factor normalizing the response to account for
-                                       solid angle subtended by the foil from the source.
             particle_yield: Total source yield; scales the returned signal.
             time_gate_percentiles: (low_percentile, high_percentile) pair defining the signal
                                    time window per channel.  Defaults to (0, 100) to accept
@@ -576,13 +571,15 @@ class PerformanceAnalyzer:
 
             # Restrict to a y-half when requested (dual-foil: CH2 at y<0, CD2 at y>0).
             # total_per_bin counts all particles on the correct y-side within the x-bin;
-            # signal_per_bin further requires they fall within the channel's half-height.
+            # signal_per_bin further requires they fall within the channel height.
+            # For dual-foil each hodoscope carries its physical half-height, so the full
+            # channel height (not half) is the correct acceptance boundary.
             if y_restriction == 'lower':
                 in_half = in_bin & (y_positions < 0)
-                accepted = in_half & (y_positions >= -bin_heights_cm[b] / 2)
+                accepted = in_half & (y_positions >= -bin_heights_cm[b])
             elif y_restriction == 'upper':
                 in_half = in_bin & (y_positions > 0)
-                accepted = in_half & (y_positions <= bin_heights_cm[b] / 2)
+                accepted = in_half & (y_positions <= bin_heights_cm[b])
             else:
                 in_half = in_bin
                 accepted = in_bin & (np.abs(y_positions) <= bin_heights_cm[b] / 2)
@@ -603,9 +600,9 @@ class PerformanceAnalyzer:
         signal_per_bin /= total_particles
         total_per_bin /= total_particles
 
-        if foil_solid_angle_fraction:
-            signal_per_bin *= foil_solid_angle_fraction
-            total_per_bin *= foil_solid_angle_fraction
+        if self.spectrometer.foil_solid_angle_fraction:
+            signal_per_bin *= self.spectrometer.foil_solid_angle_fraction
+            total_per_bin *= self.spectrometer.foil_solid_angle_fraction
 
         # Yield scaling
         if particle_yield:
