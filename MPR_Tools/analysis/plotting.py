@@ -636,22 +636,13 @@ class SpectrometerPlotter:
                         _step(ax_sb, channel_edges2, np.log10(sb_photon_cd2),
                               color='tab:purple', linestyle='--', label='photon (d)', linewidth=3)
                 else:
-                    # Gated S/B (solid): use the per-channel time-windowed background.
-                    # Non-gated S/B (dashed): full time-axis integral, same channel-area scaling.
-                    neutron_bg_nogating = np.sum(neutron_background_vs_time) * scale * channel_widths * channel_heights
-                    photon_bg_nogating = np.sum(photon_background_vs_time) * scale * channel_widths * channel_heights
-                    sb_neutron_nogating = np.where(neutron_bg_nogating > 0, signal / neutron_bg_nogating, np.nan)
-                    _step(ax_sb, channel_edges, np.log10(sb_neutron_nogating),
-                          color='tab:green', linestyle='--', label='neutron (no gate)', linewidth=3)
+                    # Gated S/B: use the per-channel time-windowed background.
                     sb_neutron = np.where(neutron_bg_per_channel > 0, signal / neutron_bg_per_channel, np.nan)
                     _step(ax_sb, channel_edges, np.log10(sb_neutron),
-                          color='tab:green', linestyle='-', label='neutron (gated)', linewidth=3)
-                    sb_photon_nogating = np.where(photon_bg_nogating > 0, signal / photon_bg_nogating, np.nan)
-                    _step(ax_sb, channel_edges, np.log10(sb_photon_nogating),
-                          color='tab:purple', linestyle='--', label='photon (no gate)', linewidth=3)
+                          color='tab:green', linestyle='-', label='neutron', linewidth=3)
                     sb_photon_gating = np.where(photon_bg_per_channel > 0, signal / photon_bg_per_channel, np.nan)
                     _step(ax_sb, channel_edges, np.log10(sb_photon_gating),
-                          color='tab:purple', linestyle='-', label='photon (gated)', linewidth=3)
+                          color='tab:purple', linestyle='-', label='photon', linewidth=3)
             else:
                 sb_neutron = np.where(neutron_bg_per_channel > 0, signal / neutron_bg_per_channel, np.nan)
                 _step(ax_sb, channel_edges, np.log10(sb_neutron),
