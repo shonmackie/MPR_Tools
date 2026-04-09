@@ -370,6 +370,12 @@ class ConversionFoil:
         angle_distributions = None
         interaction_weights = None
         attenuation = 0.0
+        
+        # Precompute inverse CDF for continuous energy sampling (multi-energy case only).
+        _cdf = None
+        if len(incident_energies) > 1:
+            _cdf = np.concatenate([[0.0], np.cumsum(probability_distribution[:-1] * np.diff(incident_energies))])
+            _cdf /= _cdf[-1]
 
         # Generate rays until one passes through aperture
         accepted = False
@@ -377,7 +383,11 @@ class ConversionFoil:
         rejected = 0
         while not accepted and rejected < 100:
             # Sample incident particle energy from weighted distribution
-            incident_energy = rng.choice(incident_energies, p=probability_distribution)
+            # Sample incident energy continuously with CDF, discrete for monoenergetic case
+            if _cdf is not None:
+                incident_energy = float(np.interp(rng.uniform(), _cdf, incident_energies))
+            else:
+                incident_energy = float(incident_energies[0])
             
             # Only recompute energy-dependent cross sections and angle distributions when the
             # incident energy changes
