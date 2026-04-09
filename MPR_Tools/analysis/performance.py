@@ -425,7 +425,7 @@ class PerformanceAnalyzer:
         
         x_positions = self.spectrometer.output_beam[:, 0] * 100
         y_positions = self.spectrometer.output_beam[:, 2] * 100
-        input_energies = self.spectrometer.input_beam[:, 5]
+        input_energies = self.spectrometer.input_beam[:, 6]
         output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
 
         # Define grid boundaries
@@ -535,7 +535,7 @@ class PerformanceAnalyzer:
         hodoscope = self.spectrometer.hodoscope
         x_positions = self.spectrometer.output_beam[:, 0] * 100  # m to cm
         y_positions = self.spectrometer.output_beam[:, 2] * 100  # m to cm
-        input_energies = self.spectrometer.input_beam[:, 5]
+        input_energies = self.spectrometer.input_beam[:, 6]
         output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
         total_particles = len(x_positions)
 

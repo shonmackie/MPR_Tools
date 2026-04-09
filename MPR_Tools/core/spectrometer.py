@@ -86,7 +86,7 @@ class MPRSpectrometer:
         print(f'Loaded COSY transfer map from {transfer_map_path}\n')
         
         # Initialize recoil beam arrays
-        # columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative
+        # columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy
         self.input_beam: np.ndarray = np.zeros(0)
         # columns: x0, p_x_relative, y0, p_y_relative, detector_time, energy_relative
         self.output_beam: np.ndarray = np.zeros(0)
@@ -131,9 +131,10 @@ class MPRSpectrometer:
         particle_rest_energy = self.conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1 + self.reference_energy/particle_rest_energy  # Lorentz factor of the central ray
 
-        # 6 columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative
+        # 7 columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy
         # Characteristic rays carry no time information, so foil_time is set to 0.
-        self.input_beam = np.zeros((num_rays, 6))
+        # incident_energy is set to 0 (no single incident energy for characteristic rays).
+        self.input_beam = np.zeros((num_rays, 7))
         print(f'Characteristic ray energy range: {min_energy:.3f}-{max_energy:.3f} MeV')
         
         ray_index = 0
@@ -144,7 +145,7 @@ class MPRSpectrometer:
             
             if radial_points == 0:
                 # On-axis ray only; foil_time = 0 (no time info for characteristic rays)
-                self.input_beam[ray_index] = [0, 0, 0, 0, 0, energy_offset]
+                self.input_beam[ray_index] = [0, 0, 0, 0, 0, energy_offset, 0]
                 ray_index += 1
             else:
                 # Full phase space grid
@@ -174,8 +175,8 @@ class MPRSpectrometer:
                                 p_x_relative = p_relative * np.sin(angle_x)
                                 p_y_relative = p_relative * np.sin(angle_y)
 
-                                # foil_time = 0 (no time info for characteristic rays)
-                                ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, 0, energy_offset]
+                                # foil_time = 0 (no time info for characteristic rays); incident_energy = 0
+                                ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, 0, energy_offset, 0]
                                 is_duplicate = False
                                 
                                 for prev_idx in range(ray_index):
@@ -300,7 +301,7 @@ class MPRSpectrometer:
         Generate a batch of recoil particles in a separate process.
 
         Each row of the returned array is:
-            [x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative]
+            [x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy]
         """
         # Create an independent RNG for this worker to ensure reproducibility
         rng = np.random.default_rng(seed_offset)
@@ -308,7 +309,7 @@ class MPRSpectrometer:
         particle_rest_energy = conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1 + reference_energy / particle_rest_energy   # Lorentz factor of the central ray
 
-        batch_results = np.empty((0, 6), dtype=float)
+        batch_results = np.empty((0, 7), dtype=float)
 
         while len(batch_results) < batch_size:
             try:
@@ -356,10 +357,10 @@ class MPRSpectrometer:
                     timing_noise = rng.normal(0, burn_duration / (2 * np.sqrt(2 * np.log(2))))
                     foil_time += timing_noise
 
-                # Row: [x0, px, y0, py, foil_time, energy_relative]
+                # Row: [x0, px, y0, py, foil_time, energy_relative, incident_energy]
                 batch_results = np.vstack((
                     batch_results,
-                    np.array([x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative])
+                    np.array([x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy])
                 ))
                 
                 # Update progress counter thread-safely
@@ -464,7 +465,7 @@ class MPRSpectrometer:
         Worker method to apply the COSY transfer map to a batch of recoil particles.
 
         Args:
-            input_batch: Input rays [N x 6]: x0, p_x_rel, y0, p_y_rel, foil_time, energy_rel.
+            input_batch: Input rays [N x 7]: x0, p_x_rel, y0, p_y_rel, foil_time, energy_rel, incident_energy.
             transfer_map: COSY transfer map coefficients.
             map_order: Maximum polynomial order of terms to include.
             progress_counter: Shared counter for progress tracking.
@@ -529,7 +530,8 @@ class MPRSpectrometer:
             'y0': self.input_beam[:, 2],
             'p_y_relative': self.input_beam[:, 3],
             'foil_time': self.input_beam[:, 4],
-            'energy_relative': self.input_beam[:, 5]
+            'energy_relative': self.input_beam[:, 5],
+            'incident_energy': self.input_beam[:, 6],
         })
         df.to_csv(filepath, index=False)
         print(f'Input beam saved to {filepath}')

@@ -908,7 +908,7 @@ class SpectrometerPlotter:
         
         for i in range(0, len(self.spectrometer.input_beam), max(1, len(self.spectrometer.input_beam) // num_rays_to_plot)):
             ray = self.spectrometer.input_beam[i]
-            x0, p_x_relative, y0, p_y_relative, _, energy_relative = ray
+            x0, p_x_relative, y0, p_y_relative, _, energy_relative, _ = ray
             y0 *= 100 # cm
 
             # Calculate ray trajectory
@@ -927,7 +927,7 @@ class SpectrometerPlotter:
             reference_gamma_cd2 = 1 + spec2.reference_energy / particle_rest_energy_cd2
             for i in range(0, len(spec2.input_beam), max(1, len(spec2.input_beam) // num_rays_to_plot)):
                 ray = spec2.input_beam[i]
-                x0, p_x_relative, y0, p_y_relative, _, energy_relative = ray
+                x0, p_x_relative, y0, p_y_relative, _, energy_relative, _ = ray
                 y0 *= 100 # cm
 
                 # Calculate ray trajectory (same rigorous relativistic calculation as CH2)
