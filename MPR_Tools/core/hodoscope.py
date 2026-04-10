@@ -21,10 +21,12 @@ class Hodoscope:
         detector_width: Optional[float] = None,
         detector_height: Optional[float] = None,
         detector_material: Optional[str] = None,
-        detector_thickness: Optional[float] = None
+        detector_thickness: Optional[float] = None,
+        tilt_angle=0.0,
+        arc_radius=np.inf,
     ):
         """
-        Initialize hodoscope detector array in one of three ways:
+        Initialize a linear or arc-shaped array of recoil particle detectors in one of three ways:
             as an array of identical detectors on either side of x=0 (the final position of the reference ray),
             from an array specifying detector positions and dimensions, or
             from a file containing such an array.
@@ -51,6 +53,9 @@ class Hodoscope:
             detector_height: Total detector height in cm.
                              If this is passed, then `channels` should not be passed.
             detector_material: The material of the detector. Only used for detector sensitivity calculation.
+            tilt_angle: Incidence angle of the central ray on the detector, in degrees.  Positive angles mean the
+                        high-energy side is angled away from the magnets.
+            arc_radius: Radius of the arc formed by the detectors in cm, or inf if the hodoscope is flat.
         """
         # Calculate detector centers
         if channels is not None:
@@ -71,6 +76,10 @@ class Hodoscope:
             self.detector_used = True
         else:
             self.detector_used = False
+            
+        # Save detector shape parameters
+        self.tilt_angle = tilt_angle
+        self.arc_radius = arc_radius
 
     def _calculate_channel_edges_from_array(self, data: np.ndarray) -> None:
         """Calculate the dimensions and center positions of all channels"""
