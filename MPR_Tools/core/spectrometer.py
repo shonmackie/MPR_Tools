@@ -137,11 +137,18 @@ class MPRSpectrometer:
                         
                         for ar_idx in range(aperture_radial_points + 1):
                             for aang_idx in range(aperture_angular_points):
-                                phi = 2 * np.pi * aang_idx / aperture_angular_points
-                                x_aperture = (x_foil + self.conversion_foil.aperture_radius * 
-                                            np.cos(phi) * ar_idx / aperture_radial_points)
-                                y_aperture = (y_foil + self.conversion_foil.aperture_radius * 
-                                            np.sin(phi) * ar_idx / aperture_radial_points)
+                                if self.conversion_foil.aperture_type == 'circ':
+                                    phi = 2 * np.pi * aang_idx / aperture_angular_points
+                                    x_aperture = (x_foil + self.conversion_foil.aperture_radius *
+                                                np.cos(phi) * ar_idx / aperture_radial_points)
+                                    y_aperture = (y_foil + self.conversion_foil.aperture_radius *
+                                                np.sin(phi) * ar_idx / aperture_radial_points)
+                                else:
+                                    x_frac = ar_idx / aperture_radial_points - 0.5
+                                    y_frac = (aang_idx / (aperture_angular_points - 1) - 0.5
+                                              if aperture_angular_points > 1 else 0.0)
+                                    x_aperture = x_foil + self.conversion_foil.aperture_width * x_frac
+                                    y_aperture = y_foil + self.conversion_foil.aperture_height * y_frac
                                 
                                 # Calculate angles
                                 angle_x = np.arctan((x_aperture - x_foil) / self.conversion_foil.aperture_distance)
@@ -528,11 +535,10 @@ class MPRSpectrometer:
         Returns:
             Dictionary containing system parameters
         """
-        return {
+        summary = {
             'foil_radius_cm': self.conversion_foil.foil_radius_cm,
             'foil_thickness_um': self.conversion_foil.thickness_um,
             'aperture_distance_cm': self.conversion_foil.aperture_distance_cm,
-            'aperture_radius_cm': self.conversion_foil.aperture_radius_cm,
             'aperture_type': self.conversion_foil.aperture_type,
             'particle': self.conversion_foil.particle,
             'reference_energy_MeV': self.reference_energy,
@@ -543,3 +549,9 @@ class MPRSpectrometer:
             'num_input_recoil_particles': len(self.input_beam),
             'num_output_recoil_particles': len(self.output_beam)
         }
+        if self.conversion_foil.aperture_type == 'circ':
+            summary['aperture_radius_cm'] = self.conversion_foil.aperture_radius_cm
+        else:
+            summary['aperture_width_cm'] = self.conversion_foil.aperture_width_cm
+            summary['aperture_height_cm'] = self.conversion_foil.aperture_height_cm
+        return summary

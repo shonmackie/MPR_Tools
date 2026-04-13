@@ -23,7 +23,6 @@ class DualFoilSpectrometer:
         thickness_ch2: float,
         thickness_cd2: float,
         aperture_distance: float,
-        aperture_radius: float,
         proton_transfer_map_path: str,
         deuteron_transfer_map_path: str,
         reference_energy: float,
@@ -32,6 +31,7 @@ class DualFoilSpectrometer:
         cd2_min_energy: float,
         cd2_max_energy: float,
         hodoscope: Hodoscope,
+        aperture_radius: Optional[float] = None,
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
         run_directory: str = '.',
@@ -40,13 +40,12 @@ class DualFoilSpectrometer:
     ):
         """
         Initialize dual-foil spectrometer system.
-        
+
         Args:
             foil_radius: Foil radius in cm (same for both foils)
             thickness_ch2: CH2 foil thickness in μm
             thickness_cd2: CD2 foil thickness in μm
             aperture_distance: Distance from foil to aperture in cm
-            aperture_radius: Aperture radius in cm (for circular)
             proton_transfer_map_path: Path to COSY transfer map file for protons
             deuteron_transfer_map_path: Path to COSY transfer map file for deuterons
             reference_energy: Reference energy in MeV
@@ -55,8 +54,9 @@ class DualFoilSpectrometer:
             cd2_min_energy: Minimum acceptance energy in MeV for CD2 foil
             cd2_max_energy: Maximum acceptance energy in MeV for CD2 foil
             hodoscope: Hodoscope detector system
-            aperture_width: Aperture width in cm (for rectangular)
-            aperture_height: Aperture height in cm (for rectangular)
+            aperture_radius: Aperture radius in cm (required for circular apertures)
+            aperture_width: Aperture width in cm (required for rectangular apertures)
+            aperture_height: Aperture height in cm (required for rectangular apertures)
             run_directory: Directory for saving run data and figures
             aperture_type: Type of aperture ('circ' or 'rect')
             **shared_foil_kwargs: Additional arguments passed to both ConversionFoil instances
