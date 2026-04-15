@@ -23,7 +23,6 @@ class DualFoilSpectrometer:
         thickness_ch2: float,
         thickness_cd2: float,
         aperture_distance: float,
-        aperture_radius: float,
         proton_transfer_map_path: str,
         deuteron_transfer_map_path: str,
         proton_reference_energy: float,
@@ -38,6 +37,7 @@ class DualFoilSpectrometer:
         target_to_foil_distance: Optional[float] = None,
         burn_duration: Optional[float] = None,
         central_ray_length: Optional[float] = None,
+        aperture_radius: Optional[float] = None,
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
         run_directory: str = '.',
@@ -46,13 +46,12 @@ class DualFoilSpectrometer:
     ):
         """
         Initialize dual-foil spectrometer system.
-        
+
         Args:
             foil_radius: Foil radius in cm (same for both foils)
             thickness_ch2: CH2 foil thickness in μm
             thickness_cd2: CD2 foil thickness in μm
             aperture_distance: Distance from foil to aperture in cm
-            aperture_radius: Aperture radius in cm (for circular)
             proton_transfer_map_path: Path to COSY transfer map file for protons
             deuteron_transfer_map_path: Path to COSY transfer map file for deuterons
             proton_reference_energy: Reference energy in MeV for protons
@@ -68,8 +67,9 @@ class DualFoilSpectrometer:
             target_to_foil_distance: Distance from neutron source to foil in meters
             burn_duration: FWHM duration of the neutron source in seconds
             central_ray_length: Path length of the reference ray through the spectrometer in meters
-            aperture_width: Aperture width in cm (for rectangular)
-            aperture_height: Aperture height in cm (for rectangular)
+            aperture_radius: Aperture radius in cm (required for circular apertures)
+            aperture_width: Aperture width in cm (required for rectangular apertures)
+            aperture_height: Aperture height in cm (required for rectangular apertures)
             run_directory: Directory for saving run data and figures
             aperture_type: Type of aperture ('circ' or 'rect')
             **shared_foil_kwargs: Additional arguments passed to both ConversionFoil instances

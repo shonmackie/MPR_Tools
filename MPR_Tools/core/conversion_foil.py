@@ -27,7 +27,7 @@ class ConversionFoil:
         foil_radius: float,
         thickness: float,
         aperture_distance: float,
-        aperture_radius: float,
+        aperture_radius: Optional[float] = None,
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
         foil_material: Literal['CH2', 'CD2', 'LiH', 'Be', 'B'] = 'CH2',
@@ -36,29 +36,35 @@ class ConversionFoil:
         """
         Initialize conversion foil system.
 
+
         Args:
             foil_radius: Foil radius in cm
             thickness: Foil thickness in μm
             aperture_distance: Distance from foil to aperture in cm
-            aperture_radius: Aperture radius in cm
-            aperture_width: Aperture width (in dispersion direction [x]) in cm (for rectangular apertures)
-            aperture_height: Aperture height (in non-dispersion direction [y]) in cm (for rectangular apertures)
+            aperture_radius: Aperture radius in cm (required for circular apertures)
+            aperture_width: Aperture width (in dispersion direction [x]) in cm (required for rectangular apertures)
+            aperture_height: Aperture height (in non-dispersion direction [y]) in cm (required for rectangular apertures)
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
         """
         print('Initializing conversion foil...')
-        
+
         # Convert units and store geometry
         self.foil_radius = foil_radius * 1e-2  # cm to m
         self.thickness = thickness * 1e-6      # μm to m
         self.aperture_distance = aperture_distance * 1e-2  # cm to m
-        self.aperture_radius = aperture_radius * 1e-2      # cm to m
-        if aperture_type == 'rect':
+        if aperture_type == 'circ':
+            if aperture_radius is None:
+                raise ValueError("aperture_radius must be provided for circular apertures.")
+            self.aperture_radius = aperture_radius * 1e-2      # cm to m
+        elif aperture_type == 'rect':
             if aperture_width is None or aperture_height is None:
-                raise ValueError("Aperture width and height must be provided for rectangular apertures.")
+                raise ValueError("aperture_width and aperture_height must be provided for rectangular apertures.")
             self.aperture_width = aperture_width * 1e-2        # cm to m
             self.aperture_height = aperture_height * 1e-2      # cm to m
-            
+        else:
+            raise ValueError(f"Unsupported aperture_type: {aperture_type!r}. Use 'circ' or 'rect'.")
+
         self.aperture_type = aperture_type
         
         # Calculate particle densities in CH2
@@ -131,18 +137,24 @@ class ConversionFoil:
         return self.aperture_distance * 1e2
     
     @property
-    def aperture_radius_cm(self) -> float:
-        """Get aperture radius in cm."""
+    def aperture_radius_cm(self) -> Optional[float]:
+        """Get aperture radius in cm (circular apertures only)."""
+        if self.aperture_type != 'circ':
+            return None
         return self.aperture_radius * 1e2
-    
+
     @property
-    def aperture_width_cm(self) -> float:
-        """Get aperture width in cm."""
+    def aperture_width_cm(self) -> Optional[float]:
+        """Get aperture width in cm (rectangular apertures only)."""
+        if self.aperture_type != 'rect':
+            return None
         return self.aperture_width * 1e2
-    
+
     @property
-    def aperture_height_cm(self) -> float:
-        """Get aperture height in cm."""
+    def aperture_height_cm(self) -> Optional[float]:
+        """Get aperture height in cm (rectangular apertures only)."""
+        if self.aperture_type != 'rect':
+            return None
         return self.aperture_height * 1e2
     
     def set_foil_radius(self, radius_cm: float) -> None:
@@ -163,7 +175,9 @@ class ConversionFoil:
         self.aperture_distance = distance_cm * 1e-2
     
     def set_aperture_radius(self, radius_cm: float) -> None:
-        """Set aperture radius in cm."""
+        """Set aperture radius in cm (circular apertures only)."""
+        if self.aperture_type != 'circ':
+            raise ValueError("aperture_radius can only be set for circular apertures.")
         self.aperture_radius = radius_cm * 1e-2
         
     def set_aperture_width(self, width_cm: float) -> None:
@@ -356,9 +370,13 @@ class ConversionFoil:
             rng = np.random.default_rng()
 
         # Limit scattering angles for computational efficiency
-        max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
+        if self.aperture_type == 'circ':
+            max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
+        else:
+            half_diag = np.sqrt((self.aperture_width / 2)**2 + (self.aperture_height / 2)**2)
+            max_angle = np.arctan((self.foil_radius + half_diag) / self.aperture_distance)
 
-        # Collect only the interactions that produce recoil particles
+        # Limit scattering to the interactions that actually scatter
         recoil_interactions = []
         for interaction in self.interactions:
             if interaction.generates_recoil_particles:
@@ -494,8 +512,12 @@ class ConversionFoil:
         print(f'\nEstimating intrinsic efficiency for {incident_energy:.3f} MeV particles using {max_workers} processes...')
         
         # Limit scattering angles for computational efficiency
-        max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        
+        if self.aperture_type == 'circ':
+            max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
+        else:
+            half_diag = np.sqrt((self.aperture_width / 2)**2 + (self.aperture_height / 2)**2)
+            max_angle = np.arctan((self.foil_radius + half_diag) / self.aperture_distance)
+
         # Calculate scattering probability in foil (non-parallelizable part)
         total_xs = 0
         effective_xs = 0

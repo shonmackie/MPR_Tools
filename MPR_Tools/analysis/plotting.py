@@ -870,8 +870,11 @@ class SpectrometerPlotter:
         # Convert all lengths to cm
         foil_radius = self.spectrometer.conversion_foil.foil_radius * 100
         aperture_distance = self.spectrometer.conversion_foil.aperture_distance * 100
-        aperture_radius = self.spectrometer.conversion_foil.aperture_radius * 100
-        
+        if self.spectrometer.conversion_foil.aperture_type == 'circ':
+            aperture_half_height = self.spectrometer.conversion_foil.aperture_radius * 100
+        else:
+            aperture_half_height = self.spectrometer.conversion_foil.aperture_height * 100 / 2
+
         # Foil (vertical line at z=0)
         ax.vlines(0, -foil_radius, foil_radius, color='tab:purple', label='Conversion Foil')
         # Add text label for foil
@@ -884,14 +887,14 @@ class SpectrometerPlotter:
             color='tab:purple',
             fontsize=12
         )
-        
+
         # Aperture (vertical line at aperture distance)
-        ax.vlines(aperture_distance, -aperture_radius, aperture_radius, 
+        ax.vlines(aperture_distance, -aperture_half_height, aperture_half_height,
                 color='tab:orange', label='Aperture')
         # Add text label for aperture
         ax.text(
             aperture_distance,
-            aperture_radius,
+            aperture_half_height,
             'Aperture',
             ha='right',
             va='bottom',
@@ -965,7 +968,7 @@ class SpectrometerPlotter:
         
         # Set reasonable axis limits
         ax.set_xlim(-0.1 * aperture_distance, 1.1 * aperture_distance)
-        max_extent = 1.5 * max(foil_radius, aperture_radius)
+        max_extent = 1.5 * max(foil_radius, aperture_half_height)
         ax.set_ylim(-max_extent, max_extent)
         
         fig.tight_layout()
