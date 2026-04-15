@@ -604,7 +604,8 @@ class SpectrometerPlotter:
         ax_counts.set_xlabel('Horizontal Position [cm]')
         ax_counts.set_ylabel(label)
         ax_counts.grid(True, alpha=0.3)
-        ax_counts.set_title(f'Yield: {incident_particle_yield:.0e}')
+        if incident_particle_yield is not None:
+            ax_counts.set_title(f'Yield: {incident_particle_yield:.0e}')
         labelLines(ax_counts.get_lines(), align=False)
         _add_energy_axis(ax_counts)
         fig.tight_layout()
