@@ -347,6 +347,7 @@ class ConversionFoil:
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None,
+        continuous_energy_sampling: bool = True,
     ) -> Tuple[float, float, float, float, float, float]:
         """
         Generate a scattered charged particle from incident particle interaction.
@@ -361,6 +362,8 @@ class ConversionFoil:
             z_sampling: Depth sampling method ('exp' for exponential, 'uni' for uniform).
             rng: Random number generator (pass the worker's RNG for thread safety).
             y_restriction: Restrict sampled y position to 'positive' or 'negative' half of foil.
+            continuous_energy_sampling: If True, sample energy continuously via inverse CDF
+                                        interpolation. If False, sample from the discrete bin centres.
 
         Returns:
             Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy)
@@ -391,7 +394,7 @@ class ConversionFoil:
         
         # Precompute inverse CDF for continuous energy sampling (multi-energy case only).
         _cdf = None
-        if len(incident_energies) > 1:
+        if len(incident_energies) > 1 and continuous_energy_sampling:
             _cdf = np.concatenate([[0.0], np.cumsum(probability_distribution[:-1] * np.diff(incident_energies))])
             _cdf /= _cdf[-1]
 
@@ -401,9 +404,10 @@ class ConversionFoil:
         rejected = 0
         while not accepted and rejected < 100:
             # Sample incident particle energy from weighted distribution
-            # Sample incident energy continuously with CDF, discrete for monoenergetic case
             if _cdf is not None:
                 incident_energy = float(np.interp(rng.uniform(), _cdf, incident_energies))
+            elif len(incident_energies) > 1:
+                incident_energy = float(rng.choice(incident_energies, p=probability_distribution))
             else:
                 incident_energy = float(incident_energies[0])
             

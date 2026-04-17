@@ -210,7 +210,8 @@ class MPRSpectrometer:
         save_beam: bool = True,
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
-        y_restriction: Optional[Literal['positive', 'negative']] = None
+        y_restriction: Optional[Literal['positive', 'negative']] = None,
+        continuous_energy_sampling: bool = True,
     ) -> None:
         """
         Generate recoil rays from incident particle energy distribution using Monte Carlo with multiprocessing.
@@ -226,6 +227,8 @@ class MPRSpectrometer:
             executor: Pool of workers to use (if None, a new pool is created).
             max_workers: Maximum number of worker processes (None -> CPU count).
             y_restriction: Restrict sampled foil y position to 'positive' or 'negative' half.
+            continuous_energy_sampling: If True, sample energy continuously via inverse CDF. If False,
+                                        sample from discrete bin centres.
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
@@ -270,7 +273,8 @@ class MPRSpectrometer:
                     self.reference_energy,
                     self.target_to_foil_distance,
                     self.burn_duration,
-                    y_restriction
+                    y_restriction,
+                    continuous_energy_sampling,
                 ))
         
         output_batches = run_concurrently(
@@ -301,6 +305,7 @@ class MPRSpectrometer:
         target_to_foil_distance: Optional[float],
         burn_duration: Optional[float],
         y_restriction: Optional[Literal['positive', 'negative']],
+        continuous_energy_sampling: bool,
         progress_counter,
         progress_lock,
     ) -> np.ndarray:
@@ -329,6 +334,7 @@ class MPRSpectrometer:
                         z_sampling=z_sampling,
                         rng=rng,
                         y_restriction=y_restriction,
+                        continuous_energy_sampling=continuous_energy_sampling,
                     )
                 )
 

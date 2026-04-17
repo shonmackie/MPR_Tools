@@ -149,11 +149,12 @@ class DualFoilSpectrometer:
         z_sampling: Literal['exp', 'uni'] = 'exp',
         save_beam: bool = True,
         executor: Optional[Executor] = None,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = None,
+        continuous_energy_sampling: bool = True,
     ) -> None:
         """
         Generate recoil rays for both foils with y-restrictions.
-        
+
         Args:
             incident_energies: Array of incident particle energies in MeV
             probability_distribution: Relative probability distribution
@@ -164,6 +165,8 @@ class DualFoilSpectrometer:
             save_beam: Whether to save beams to CSV
             executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes
+            continuous_energy_sampling: If True, sample energy continuously via inverse CDF. If False,
+                                        sample from discrete bin centres.
         """
         # Split recoil events between foils based on probability_distribution
         ch2_idx = (incident_energies >= self.ch2_min_energy) & (incident_energies <= self.ch2_max_energy)
@@ -182,6 +185,7 @@ class DualFoilSpectrometer:
             save_beam=False,
             executor=executor,
             max_workers=max_workers,
+            continuous_energy_sampling=continuous_energy_sampling,
         )
 
         print(f'\nGenerating {num_ch2} CH2 (proton) rays with positive y restriction...')

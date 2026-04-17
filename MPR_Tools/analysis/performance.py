@@ -110,7 +110,7 @@ class PerformanceAnalyzer:
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of (position_mean in m, std_deviation in m, fwfm in m, energy_resolution in keV, dispersion in m/MeV)
+            Tuple of (position_mean in m, std_deviation in m, energy_resolution in keV, dispersion in m/MeV)
         """
         if spectrometer is None:
             spectrometer = self.spectrometer
