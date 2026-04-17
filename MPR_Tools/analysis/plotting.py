@@ -114,7 +114,6 @@ class SpectrometerPlotter:
         fig.colorbar(scatter, label=f'{self.spectrometer.conversion_foil.particle.capitalize()} Energy [MeV]')
         ax.set_xlabel('Horizontal Position [cm]')
         ax.set_ylabel('Vertical Position [cm]')
-        ax.set_title(f'{self.spectrometer.conversion_foil.particle.capitalize()} Distribution in Focal Plane')
         ax.grid(True, alpha=0.3)
         
         if self.dual_data:
@@ -129,7 +128,6 @@ class SpectrometerPlotter:
                 alpha=0.7,
             )
             fig.colorbar(scatter2, label=f'{spec2.conversion_foil.particle.capitalize()} Energy [MeV]')
-            ax.set_title(f'{self.spectrometer.conversion_foil.particle.capitalize()} and {spec2.conversion_foil.particle.capitalize()} Distribution in Focal Plane')
         
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
@@ -812,7 +810,7 @@ class SpectrometerPlotter:
                 ax.fill_between(x_fill, i, y_fill, alpha=alpha, color=color)
                 ax.plot(x_fill, y_fill, color=color, linewidth=0.8)
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(10, 4) if is_dual else (8, 6))
         _draw_ridgelines(ax, pdfs_ch2, colors_ch2, alpha=0.5)
         if is_dual:
             _draw_ridgelines(ax, pdfs_cd2, colors_cd2, alpha=0.4)
@@ -821,13 +819,27 @@ class SpectrometerPlotter:
         ax.set_ylabel('Channel index')
         ax.set_ylim(-0.5, n_channels - 0.5 + ridge_scale)
         ax.grid(True, alpha=0.3)
-        ax.text(0.52, 0.55, self.spectrometer.conversion_foil.particle,
-                transform=ax.transAxes, color=colors_ch2[0],
-                va='top', ha='left')
+
+        t_range = t_grid[-1] - t_grid[0]
+
+        def _label_pos(pdfs):
+            """Return (t_label, ch_label) using weighted-average channel and peak time."""
+            weights = np.array([p.max() for p in pdfs])
+            if weights.sum() == 0:
+                return t_grid[-1] + 0.05 * t_range, len(pdfs) / 2
+            ch_center = float(np.average(np.arange(len(pdfs)), weights=weights))
+            ch_idx = int(round(ch_center))
+            ch_idx = max(0, min(ch_idx, len(pdfs) - 1))
+            t_peak = t_grid[np.argmax(pdfs[ch_idx])] if pdfs[ch_idx].max() > 0 else t_grid[-1]
+            return t_peak + 0.05 * t_range, ch_center*1.05
+
+        t_lbl_ch2, ch_lbl_ch2 = _label_pos(pdfs_ch2)
+        ax.text(t_lbl_ch2, ch_lbl_ch2, self.spectrometer.conversion_foil.particle,
+                color=colors_ch2[0], va='center', ha='left')
         if is_dual and self.dual_data is not None:
-            ax.text(0.52, 0.48, self.dual_data['spectrometer'].conversion_foil.particle,
-                    transform=ax.transAxes, color=colors_cd2[0],
-                    va='top', ha='left')
+            t_lbl_cd2, ch_lbl_cd2 = _label_pos(pdfs_cd2)
+            ax.text(t_lbl_cd2, ch_lbl_cd2, self.dual_data['spectrometer'].conversion_foil.particle,
+                    color=colors_cd2[0], va='center', ha='left')
 
         # Overlay background E_dep vs time on a twin log y-axis (right),
         # restricted to the signal arrival window [global_t_min, global_t_max].
@@ -845,7 +857,8 @@ class SpectrometerPlotter:
                        color='tab:purple', linewidth=2, label='photon', alpha=0.8)
             ax_bg.set_yscale('log')
             ax_bg.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
-            labelLines(ax_bg.get_lines(), align=False)
+            # 
+            labelLines(ax_bg.get_lines(), xvals=[220, 170], align=False)
 
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
@@ -1273,7 +1286,6 @@ class SpectrometerPlotter:
             filename = f'{self.spectrometer.figure_directory}/{filename}'
         
         fig, ax1 = plt.subplots(1, 1, figsize=(8, 5))
-        fig.suptitle('Comprehensive Performance')
         
         # Left y-axis: position
         color_position = 'tab:orange'
