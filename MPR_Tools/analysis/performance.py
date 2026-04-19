@@ -110,7 +110,7 @@ class PerformanceAnalyzer:
             max_workers: Maximum number of worker processes (None for CPU count)
             
         Returns:
-            Tuple of (position_mean in m, std_deviation in m, fwfm in m, energy_resolution in keV, dispersion in m/MeV)
+            Tuple of (position_mean in m, std_deviation in m, energy_resolution in keV, dispersion in m/MeV)
         """
         if spectrometer is None:
             spectrometer = self.spectrometer
@@ -120,7 +120,7 @@ class PerformanceAnalyzer:
         
         # Helper function for generating recoil positions mean and std
         def _get_positions(energy: float, num_recoils: int) -> Tuple[float, float]:
-            self.spectrometer.generate_monte_carlo_rays(
+            spectrometer.generate_monte_carlo_rays(
                 np.array([energy]), 
                 np.array([1.0]), 
                 num_recoils,
@@ -328,7 +328,7 @@ class PerformanceAnalyzer:
         
         # Find leftmost and rightmost crossings
         left_indices = np.where(hist[:peak_idx] >= half_max)[0]
-        right_indices = np.where(hist[peak_idx:] >= half_max)[0] + peak_idx + 1
+        right_indices = np.where(hist[peak_idx:] >= half_max)[0] + peak_idx
         
         if len(left_indices) == 0 or len(right_indices) == 0:
             return 0.0, 0.0
@@ -351,7 +351,6 @@ class PerformanceAnalyzer:
         
     def _get_incident_spectrum(
         self,
-        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
         """
@@ -363,19 +362,14 @@ class PerformanceAnalyzer:
             incident_energies: np.ndarray of incident energies
             incident_energies_std: np.ndarray of incident energy uncertainties
         """
-        signal_per_bin, _ = self.get_recoil_x_map(foil_solid_angle_fraction, particle_yield)
+        signal_per_bin, _, _ = self.get_recoil_x_map(particle_yield)
         hodoscope = self.spectrometer.hodoscope
         x_positions = hodoscope.channel_centers  # meters
         response_values = signal_per_bin
 
-        # Total background is in response/cm^2-source
-        # Assume background is uniform across detector
-        total_background = sum(self.spectrometer.hodoscope.get_background())
-        # Integrate background over channel heights
-        channel_heights_cm = hodoscope.channel_heights * 100
-        total_background = np.sum(total_background * hodoscope.channel_widths * 100 * channel_heights_cm)
-        if particle_yield:
-            total_background *= particle_yield
+        # TODO: Background calculation requires background CSV files.
+        # Call hodoscope.get_background(neutron_file, photon_file) and sum per-channel arrays.
+        total_background = 0.0
         
         # Load comprehensive performance curve
         performance_df = self._load_performance_curve()
@@ -413,7 +407,6 @@ class PerformanceAnalyzer:
         self,
         dx: float = 0.5,
         dy: float = 0.5,
-        foil_solid_angle_fraction: Optional[float] = None,
         particle_yield: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -422,7 +415,6 @@ class PerformanceAnalyzer:
         Args:
             dx: X-direction resolution in cm
             dy: Y-direction resolution in cm
-            foil_solid_angle_fraction, optional: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source
             particle_yield, optional: Input particle yield
             
         Returns:
@@ -433,8 +425,8 @@ class PerformanceAnalyzer:
         
         x_positions = self.spectrometer.output_beam[:, 0] * 100
         y_positions = self.spectrometer.output_beam[:, 2] * 100
-        input_energies = self.spectrometer.input_beam[:, 4]
-        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 4])
+        input_energies = self.spectrometer.input_beam[:, 6]
+        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
 
         # Define grid boundaries
         x_min, x_max = np.min(x_positions), np.max(x_positions)
@@ -486,9 +478,9 @@ class PerformanceAnalyzer:
         response_map /= (cell_area_cm2 * total_recoils)
         
         # Add source-to-foil geometric factor
-        if foil_solid_angle_fraction:
-            density_map *= foil_solid_angle_fraction
-            response_map *= foil_solid_angle_fraction
+        if self.spectrometer.foil_solid_angle_fraction:
+            density_map *= self.spectrometer.foil_solid_angle_fraction
+            response_map *= self.spectrometer.foil_solid_angle_fraction
             
         # Add yield multiplier
         if particle_yield:
@@ -504,25 +496,38 @@ class PerformanceAnalyzer:
     
     def get_recoil_x_map(
         self,
-        foil_solid_angle_fraction: Optional[float] = None,
-        particle_yield: Optional[float] = None
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        particle_yield: Optional[float] = None,
+        time_gate_percentiles: Tuple[float, float] = (0, 100),
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Bin the recoil beam into 1-D x channels and compute signal and y-coverage per channel.
-        By default the hodoscope channel edges and heights are used for binning.
+        Bin the recoil beam into 1-D x channels and compute signal, y-coverage, and per-channel
+        signal arrival-time windows.
 
-        The y-acceptance cut is applied symmetrically around y=0 (the reference ray).
+        The y-acceptance of each channel is determined entirely by the hodoscope: particles are
+        accepted when |y - hodoscope.y_center| <= channel_height/2.  In a dual-foil setup each
+        hodoscope's y_center and channel_height together define its physical half of the detector
+        with no additional restriction parameter required.
+
         When detector_used is False, signal is in [particles/source] per channel.
         When detector_used is True, signal is in [MeV deposited/source] per channel.
         Scaling by particle_yield gives [particles] or [MeV deposited] respectively.
 
+        Per-channel time windows are computed when hodoscope.use_time_gating is True.  For each
+        channel the window spans the requested percentile range of detector arrival times of
+        signal particles accepted into that channel.  When use_time_gating is False, the returned
+        channel_time_windows array is filled with NaN.
+
         Args:
-            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
             particle_yield: Total source yield; scales the returned signal.
+            time_gate_percentiles: (low_percentile, high_percentile) pair defining the signal
+                                   time window per channel.  Defaults to (0, 100) to accept
+                                   all arrival times.
 
         Returns:
-            Tuple of (signal_per_bin, coverage_per_bin) where
-            signal_per_bin [particles/source or MeV/source], coverage_per_bin [0-1].
+            Tuple of (signal_per_bin, coverage_per_bin, channel_time_windows) where
+            signal_per_bin [particles/source or MeV/source],
+            coverage_per_bin [0-1],
+            channel_time_windows of shape (n_channels, 2) [s] — columns are [t_min, t_max].
         """
         if len(self.spectrometer.output_beam) == 0:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
@@ -530,13 +535,14 @@ class PerformanceAnalyzer:
         hodoscope = self.spectrometer.hodoscope
         x_positions = self.spectrometer.output_beam[:, 0] * 100  # m to cm
         y_positions = self.spectrometer.output_beam[:, 2] * 100  # m to cm
-        input_energies = self.spectrometer.input_beam[:, 4]
-        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 4])
+        input_energies = self.spectrometer.input_beam[:, 6]
+        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
         total_particles = len(x_positions)
 
-        # Determine bin edges and channel heights
+        # Determine bin edges, channel heights, and detector y-center
         bin_edges_cm = hodoscope.channel_edges * 100   # m to cm
         bin_heights_cm = hodoscope.channel_heights * 100  # m to cm
+        y_center_cm = hodoscope.y_center * 100  # m to cm
 
         n_bins = len(bin_edges_cm) - 1
 
@@ -548,24 +554,41 @@ class PerformanceAnalyzer:
         )
         weights = foil_efficiencies * sensitivities
 
-        # Bin particles into x channels; track total and within-y-acceptance separately
-        # np.digitize returns 1-based indices; subtract 1 to get 0-based bin indices
+        # Bin particles into x channels; track total and within-y-acceptance separately.
+        # Simultaneously compute per-channel signal arrival-time windows when time gating is enabled.
+        # np.digitize returns 1-based indices; subtract 1 to get 0-based bin indices.
         bin_indices = np.digitize(x_positions, bin_edges_cm) - 1  # -1 and n_bins are out of range
         signal_per_bin = np.zeros(n_bins)
         total_per_bin = np.zeros(n_bins)
+        channel_time_windows = np.full((n_bins, 2), np.nan)
+
         for b in range(n_bins):
             in_bin = bin_indices == b
+
+            # Accept particles within [y_center - height/2, y_center + height/2].
+            # For dual-foil, each hodoscope's y_center and channel_height place it in its
+            # physical half of the detector.
+            accepted = in_bin & (np.abs(y_positions - y_center_cm) <= bin_heights_cm[b] / 2)
+
             total_per_bin[b] = np.sum(weights[in_bin])
-            y_accepted = np.abs(y_positions) <= bin_heights_cm[b] / 2
-            signal_per_bin[b] = np.sum(weights[in_bin & y_accepted])
+            signal_per_bin[b] = np.sum(weights[accepted])
+
+            # Compute the signal arrival-time window for this channel from the percentile range
+            # of detector arrival times of all accepted signal particles.
+            if hodoscope.use_time_gating:
+                arrival_times = self.spectrometer.output_beam[:, 4]
+                times_in_channel = arrival_times[accepted]
+                if len(times_in_channel) > 0:
+                    channel_time_windows[b, 0] = np.percentile(times_in_channel, time_gate_percentiles[0])
+                    channel_time_windows[b, 1] = np.percentile(times_in_channel, time_gate_percentiles[1])
 
         # Normalise to particles/source
         signal_per_bin /= total_particles
         total_per_bin /= total_particles
 
-        if foil_solid_angle_fraction:
-            signal_per_bin *= foil_solid_angle_fraction
-            total_per_bin *= foil_solid_angle_fraction
+        if self.spectrometer.foil_solid_angle_fraction:
+            signal_per_bin *= self.spectrometer.foil_solid_angle_fraction
+            total_per_bin *= self.spectrometer.foil_solid_angle_fraction
 
         # Yield scaling
         if particle_yield:
@@ -574,5 +597,5 @@ class PerformanceAnalyzer:
 
         coverage_per_bin = np.where(total_per_bin > 0, signal_per_bin / total_per_bin, 0.0)
 
-        return signal_per_bin, coverage_per_bin
+        return signal_per_bin, coverage_per_bin, channel_time_windows
         

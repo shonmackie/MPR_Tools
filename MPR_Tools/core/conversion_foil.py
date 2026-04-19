@@ -12,7 +12,7 @@ from tqdm import tqdm
 from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction, \
     ProbabilityDistribution
 from .parallelization import run_concurrently
-from ..config.constants import AVOGADRO, FOIL_MATERIALS
+from ..config.constants import AVOGADRO, FOIL_MATERIALS, NEUTRON_MASS
 
 
 class ConversionFoil:
@@ -27,38 +27,44 @@ class ConversionFoil:
         foil_radius: float,
         thickness: float,
         aperture_distance: float,
-        aperture_radius: float,
+        aperture_radius: Optional[float] = None,
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
         foil_material: Literal['CH2', 'CD2', 'LiH', 'Be', 'B'] = 'CH2',
-        aperture_type: Literal['circ', 'rect'] = 'circ'
+        aperture_type: Literal['circ', 'rect'] = 'circ',
     ):
         """
         Initialize conversion foil system.
-        
+
+
         Args:
             foil_radius: Foil radius in cm
             thickness: Foil thickness in μm
             aperture_distance: Distance from foil to aperture in cm
-            aperture_radius: Aperture radius in cm
-            aperture_width: Aperture width (in dispersion direction [x]) in cm (for rectangular apertures)
-            aperture_height: Aperture height (in non-dispersion direction [y]) in cm (for rectangular apertures)
+            aperture_radius: Aperture radius in cm (required for circular apertures)
+            aperture_width: Aperture width (in dispersion direction [x]) in cm (required for rectangular apertures)
+            aperture_height: Aperture height (in non-dispersion direction [y]) in cm (required for rectangular apertures)
             foil_material: Foil material to use ('CH2' or 'CD2')
             aperture_type: Type of aperture ('circ' or 'rect')
         """
         print('Initializing conversion foil...')
-        
+
         # Convert units and store geometry
         self.foil_radius = foil_radius * 1e-2  # cm to m
         self.thickness = thickness * 1e-6      # μm to m
         self.aperture_distance = aperture_distance * 1e-2  # cm to m
-        self.aperture_radius = aperture_radius * 1e-2      # cm to m
-        if aperture_type == 'rect':
+        if aperture_type == 'circ':
+            if aperture_radius is None:
+                raise ValueError("aperture_radius must be provided for circular apertures.")
+            self.aperture_radius = aperture_radius * 1e-2      # cm to m
+        elif aperture_type == 'rect':
             if aperture_width is None or aperture_height is None:
-                raise ValueError("Aperture width and height must be provided for rectangular apertures.")
+                raise ValueError("aperture_width and aperture_height must be provided for rectangular apertures.")
             self.aperture_width = aperture_width * 1e-2        # cm to m
             self.aperture_height = aperture_height * 1e-2      # cm to m
-            
+        else:
+            raise ValueError(f"Unsupported aperture_type: {aperture_type!r}. Use 'circ' or 'rect'.")
+
         self.aperture_type = aperture_type
         
         # Calculate particle densities in CH2
@@ -70,9 +76,6 @@ class ConversionFoil:
         self.particle_mass = FOIL_MATERIALS[foil_material]['particle_mass'] # amu
         self.stopping_data_path = FOIL_MATERIALS[foil_material]['stopping_power']
         self.interaction_info = FOIL_MATERIALS[self.foil_material]['interactions']
-    
-        # Calculate relative mass, either 0 for protons or ~1 for deuterons
-        self.relative_mass = (self.particle_mass - FOIL_MATERIALS['CH2']['particle_mass']) / FOIL_MATERIALS['CH2']['particle_mass']
         
         # Load cross section and stopping power data
         self._load_data_files()
@@ -134,18 +137,24 @@ class ConversionFoil:
         return self.aperture_distance * 1e2
     
     @property
-    def aperture_radius_cm(self) -> float:
-        """Get aperture radius in cm."""
+    def aperture_radius_cm(self) -> Optional[float]:
+        """Get aperture radius in cm (circular apertures only)."""
+        if self.aperture_type != 'circ':
+            return None
         return self.aperture_radius * 1e2
-    
+
     @property
-    def aperture_width_cm(self) -> float:
-        """Get aperture width in cm."""
+    def aperture_width_cm(self) -> Optional[float]:
+        """Get aperture width in cm (rectangular apertures only)."""
+        if self.aperture_type != 'rect':
+            return None
         return self.aperture_width * 1e2
-    
+
     @property
-    def aperture_height_cm(self) -> float:
-        """Get aperture height in cm."""
+    def aperture_height_cm(self) -> Optional[float]:
+        """Get aperture height in cm (rectangular apertures only)."""
+        if self.aperture_type != 'rect':
+            return None
         return self.aperture_height * 1e2
     
     def set_foil_radius(self, radius_cm: float) -> None:
@@ -166,7 +175,9 @@ class ConversionFoil:
         self.aperture_distance = distance_cm * 1e-2
     
     def set_aperture_radius(self, radius_cm: float) -> None:
-        """Set aperture radius in cm."""
+        """Set aperture radius in cm (circular apertures only)."""
+        if self.aperture_type != 'circ':
+            raise ValueError("aperture_radius can only be set for circular apertures.")
         self.aperture_radius = radius_cm * 1e-2
         
     def set_aperture_width(self, width_cm: float) -> None:
@@ -328,59 +339,80 @@ class ConversionFoil:
 
     
     def generate_recoil_particle(
-        self, 
+        self,
         incident_energies: np.ndarray,
-        energy_distribution: np.ndarray,
+        probability_distribution: np.ndarray,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
-        y_restriction: Optional[Literal['positive', 'negative']] = None
+        y_restriction: Optional[Literal['positive', 'negative']] = None,
+        continuous_energy_sampling: bool = True,
     ) -> Tuple[float, float, float, float, float, float]:
         """
         Generate a scattered charged particle from incident particle interaction.
-        
+
         Args:
-            incident_energies: Array of incident particle energies in MeV
-            energy_distribution: Distribution of incident particle energies
-                                 (each energy will have an equal chance to generate a ray, so
-                                 make sure you weight it by the scattering efficiency first)
-            include_kinematics: Include energy loss from non-perpendicular scattering
-            include_stopping_power_loss: Include SRIM energy loss calculation
-            z_sampling: Depth sampling method ('exp' or 'uni')
-            rng: Random number generator to use (for thread safety)
-            
+            incident_energies: Array of incident particle energies in MeV. One energy value per bin;
+                               the particle energy is sampled from this 1-D distribution.
+            probability_distribution: Probability weight for each bin in incident_energies (normalised
+                                 internally). Must include cross-section weighting before calling.
+            include_kinematics: Include energy loss from non-perpendicular scattering.
+            include_stopping_power_loss: Include SRIM energy loss calculation.
+            z_sampling: Depth sampling method ('exp' for exponential, 'uni' for uniform).
+            rng: Random number generator (pass the worker's RNG for thread safety).
+            y_restriction: Restrict sampled y position to 'positive' or 'negative' half of foil.
+            continuous_energy_sampling: If True, sample energy continuously via inverse CDF
+                                        interpolation. If False, sample from the discrete bin centres.
+
         Returns:
             Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy)
         """
-        # Use provided RNG or default
+        # Use provided RNG or create a default one
         if rng is None:
             rng = np.random.default_rng()
-            
+
         # Limit scattering angles for computational efficiency
-        max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        
+        if self.aperture_type == 'circ':
+            max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
+        else:
+            half_diag = np.sqrt((self.aperture_width / 2)**2 + (self.aperture_height / 2)**2)
+            max_angle = np.arctan((self.foil_radius + half_diag) / self.aperture_distance)
+
         # Limit scattering to the interactions that actually scatter
         recoil_interactions = []
         for interaction in self.interactions:
             if interaction.generates_recoil_particles:
                 recoil_interactions.append(interaction)
-        
-        # Keep track of some energy-dependent things, as we may not need to recalculate them every time
+
+        # Cache energy-dependent quantities to avoid recomputing them when the same energy is
+        # sampled twice in a row (i.e. for monoenergetic inputs).
         previous_incident_energy = None
         angle_distributions = None
         interaction_weights = None
-        attenuation = None
+        attenuation = 0.0
         
+        # Precompute inverse CDF for continuous energy sampling (multi-energy case only).
+        _cdf = None
+        if len(incident_energies) > 1 and continuous_energy_sampling:
+            _cdf = np.concatenate([[0.0], np.cumsum(probability_distribution[:-1] * np.diff(incident_energies))])
+            _cdf /= _cdf[-1]
+
         # Generate rays until one passes through aperture
         accepted = False
         # Limit number of rejections to avoid infinite loops
         rejected = 0
         while not accepted and rejected < 100:
             # Sample incident particle energy from weighted distribution
-            incident_energy = np.random.choice(incident_energies, p=energy_distribution)
+            if _cdf is not None:
+                incident_energy = float(np.interp(rng.uniform(), _cdf, incident_energies))
+            elif len(incident_energies) > 1:
+                incident_energy = float(rng.choice(incident_energies, p=probability_distribution))
+            else:
+                incident_energy = float(incident_energies[0])
             
-            # This part is a little expensive, so only do it if the incident energy is different from last time...
+            # Only recompute energy-dependent cross sections and angle distributions when the
+            # incident energy changes
             if incident_energy != previous_incident_energy:
                 # Do the cross section calculations
                 angle_distributions = {}
@@ -390,18 +422,19 @@ class ConversionFoil:
                     weight = (interaction.get_cross_section(incident_energy) *
                               angle_distributions[interaction].integral(0, max_angle))
                     interaction_weights.append(weight)
-                interaction_weights = np.array(interaction_weights)/sum(interaction_weights)
-                
-                # Set up z-sampling probability
-                if z_sampling == 'exp':  # exponential
-                    attenuation = 0
-                    for interaction in self.interactions:
-                        attenuation += interaction.get_cross_section(incident_energy)
-                else:  # uniform
-                    attenuation = 0
-                
+                interaction_weights = np.array(interaction_weights) / sum(interaction_weights)
+
+                # Attenuation coefficient for exponential depth sampling; 0 gives uniform sampling
+                if z_sampling == 'exp':
+                    attenuation = float(sum(
+                        interaction.get_cross_section(incident_energy)
+                        for interaction in self.interactions
+                    ))
+                else:
+                    attenuation = 0.0
+
                 previous_incident_energy = incident_energy
-                
+
             interaction = rng.choice(recoil_interactions, p=interaction_weights)
             x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
                 rng, angle_distributions[interaction], attenuation, max_angle, y_restriction,
@@ -419,14 +452,14 @@ class ConversionFoil:
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)
                     recoil_energy = self.calculate_stopping_power_loss(recoil_energy, path_length)
-                
+
                 accepted = True
             else:
                 rejected += 1
-                
+
         if not accepted:
             raise ValueError("Unable to generate a recoil particle that passes through the aperture.")
-                
+
         return x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy
     
     def _check_aperture_acceptance(
@@ -483,8 +516,12 @@ class ConversionFoil:
         print(f'\nEstimating intrinsic efficiency for {incident_energy:.3f} MeV particles using {max_workers} processes...')
         
         # Limit scattering angles for computational efficiency
-        max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
-        
+        if self.aperture_type == 'circ':
+            max_angle = np.arctan((self.foil_radius + self.aperture_radius) / self.aperture_distance)
+        else:
+            half_diag = np.sqrt((self.aperture_width / 2)**2 + (self.aperture_height / 2)**2)
+            max_angle = np.arctan((self.foil_radius + half_diag) / self.aperture_distance)
+
         # Calculate scattering probability in foil (non-parallelizable part)
         total_xs = 0
         effective_xs = 0
