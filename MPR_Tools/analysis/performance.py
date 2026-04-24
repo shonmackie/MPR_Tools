@@ -90,6 +90,7 @@ class PerformanceAnalyzer:
         spectrometer: Optional[MPRSpectrometer] = None,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
+        map_order: int = 5,
         verbose: bool = False,
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
@@ -105,6 +106,7 @@ class PerformanceAnalyzer:
             spectrometer: MPRSpectrometer to analyze (defaults to self.spectrometer)
             include_kinematics: Include kinematic energy transfer
             include_stopping_power_loss: Include stopping power energy loss via SRIM
+            map_order: Order of transfer map to apply (1-5 typically)
             verbose: Print detailed results
             executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
@@ -131,7 +133,7 @@ class PerformanceAnalyzer:
                 max_workers=max_workers,
             )
             spectrometer.apply_transfer_map(
-                map_order=5, save_beam=False, executor=executor, max_workers=max_workers)
+                map_order=map_order, save_beam=False, executor=executor, max_workers=max_workers)
             positions = spectrometer.output_beam[:, 0]
             position_width, position_mean = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
             return position_mean, position_width

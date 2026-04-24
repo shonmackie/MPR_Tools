@@ -613,6 +613,9 @@ def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float,
     l_0 = tau_0 * v_relative / (gamma/(1 + gamma))
     
     # Pre-calculate some angles and ratios
+    extraneous_angle = np.maximum(np.hypot(a, b)/0.999, 1)  # fix COSY's mistake if it gives you nonphysical angles
+    a /= extraneous_angle
+    b /= extraneous_angle
     sin_yaw = a/np.sqrt(1 - b**2)  # yaw is the angle of the ray that you see when looking along the y-axis
     cos_yaw = np.sqrt(1 - sin_yaw**2)
     yaw = np.arcsin(sin_yaw)
@@ -626,11 +629,14 @@ def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float,
     A = bend
     B = cos_yaw*cos_tilt - sin_yaw*sin_tilt - bend*(z_0*cos_yaw + x_0*sin_yaw)
     C = 2*(x_0*sin_tilt - z_0*cos_tilt) + bend*(x_0**2 + z_0**2)
+    if np.any(A*C > B**2):
+        raise ValueError("Some of these rays don't hit the curved detector.")
     distance = np.where(  # this is the signed distance between the two surfaces along the ray projected to the xz-plane
         abs(A*C) > 1e-12*B**2,
         (B - np.sqrt(B**2 - A*C))/A,
         C/(2*B),
     )
+    assert not np.any(np.isnan(distance))
     x = x_0 + distance*sin_yaw
     y = y_0 + distance*tan_pitch
     z = z_0 + distance*cos_yaw
