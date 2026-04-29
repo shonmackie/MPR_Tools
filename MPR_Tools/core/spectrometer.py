@@ -144,14 +144,17 @@ class MPRSpectrometer:
                                             np.sin(phi) * ar_idx / aperture_radial_points)
                                 
                                 # Calculate angles
-                                angle_x = np.arctan((x_aperture - x_foil) / self.conversion_foil.aperture_distance)
-                                angle_y = np.arctan((y_aperture - y_foil) / self.conversion_foil.aperture_distance)
+                                total_distance = np.sqrt(
+                                    (x_aperture - x_foil)**2 + (y_aperture - y_foil)**2 +
+                                    self.conversion_foil.aperture_distance**2)
+                                sin_angle_x = (x_aperture - x_foil) / total_distance
+                                sin_angle_y = (y_aperture - y_foil) / total_distance
                                 
                                 # Calculate relative transverse momenta since that's what COSY uses instead of angle fsr
                                 gamma = 1 + energy/particle_rest_energy  # lorentz factor of the ray
                                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
-                                p_x_relative = p_relative * np.sin(angle_x)
-                                p_y_relative = p_relative * np.sin(angle_y)
+                                p_x_relative = p_relative * sin_angle_x
+                                p_y_relative = p_relative * sin_angle_y
 
                                 # Check for duplicates
                                 ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, energy_offset, energy]
@@ -285,7 +288,7 @@ class MPRSpectrometer:
                 x0, y0, theta_s, phi_s, incident_energy, recoil_energy = conversion_foil.generate_recoil_particle(
                     incident_energies,
                     weighted_distribution,
-                    include_kinematics, 
+                    include_kinematics,
                     include_stopping_power_loss,
                     z_sampling=z_sampling,
                     rng=rng,  # Pass the worker's RNG
@@ -296,13 +299,16 @@ class MPRSpectrometer:
                 x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
                 y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
                 
-                angle_x = np.arctan((x_aperture - x0) / conversion_foil.aperture_distance)
-                angle_y = np.arctan((y_aperture - y0) / conversion_foil.aperture_distance)
+                total_distance = np.sqrt(
+                    (x_aperture - x0)**2 + (y_aperture - y0)**2 +
+                    conversion_foil.aperture_distance**2)
+                sin_angle_x = (x_aperture - x0) / total_distance
+                sin_angle_y = (y_aperture - y0) / total_distance
                 
                 gamma = 1 + recoil_energy/particle_rest_energy  # Lorentz factor of the ray
                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
-                p_x_relative = p_relative * np.sin(angle_x)
-                p_y_relative = p_relative * np.sin(angle_y)
+                p_x_relative = p_relative * sin_angle_x
+                p_y_relative = p_relative * sin_angle_y
                 
                 energy_relative = (recoil_energy - reference_energy) / reference_energy
                 
@@ -442,6 +448,20 @@ class MPRSpectrometer:
             # Update progress counter thread-safely
             with progress_lock:
                 progress_counter.value += 1
+                
+        # Apply the correction for detector tilt and curvature
+        if self.hodoscope.tilt_angle != 0 or not np.isinf(self.hodoscope.arc_radius):
+            angle = np.radians(self.hodoscope.tilt_angle)  # convert this to radians
+            curvature = -1/(self.hodoscope.arc_radius*1e-2)  # convert this to signed inverse meters (now positive means bending away from the magnets)
+            cosy_plane_rays = np.concatenate([  # add a time column so that the output batch can be used as an input batch
+                output_batch[:, 0:4], np.zeros((batch_size, 1)), output_batch[:, 4:],
+            ], axis=1)
+            detector_plane_rays = ray_cylinder_intersection(
+                cosy_plane_rays, 0, angle, curvature,
+                self.reference_energy, self.conversion_foil.particle_mass)
+            output_batch = np.concatenate([  # re-remove the time column
+                detector_plane_rays[:, 0:4], detector_plane_rays[:, 5:],
+            ], axis=1)
         
         return output_batch
     
@@ -543,3 +563,96 @@ class MPRSpectrometer:
             'num_input_recoil_particles': len(self.input_beam),
             'num_output_recoil_particles': len(self.output_beam)
         }
+
+
+def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float, bend: float, reference_energy: float, particle_mass: float) -> np.ndarray:
+    """
+    take some rays at a normal plane and propagate them straight forward or backward to where they intersect with a
+    detector that is shifted along the central ray, rotated about the y-axis, and/or bent about the y-axis into an arc.
+    Args:
+        input_rays: the rays in regular COSY coordinates.  it should have six columns which are, in order,
+                    - x-position relative to the central ray in meters
+                    - x-momentum as a fraction of the central ray momentum
+                    - y-position relative to the central ray in meters
+                    - y-momentum as a fraction of the central ray momentum
+                    - some deranged time-of-flight metric in meters
+                    - energy difference from the central ray as a fraction of the central ray energy
+        shift: distance along the central ray from the input plane to the detector, in meters.
+               positive shift means the rays have to keep going forward to hit the detector;
+               negative shift means the rays have to backtrack to get back to the detector.
+        tilt: angle between the detector's normal vector and the central ray, in radians.
+              positive tilt means the rays with positive x-values have to travel farther than those with negative x-values;
+              negative tilt means the opposite.
+        bend: curvature of the detector surface in inverse meters.
+              positive bend means rays with extreme x-values have to travel farther than the central ray does;
+              negative bend means the opposite.
+        reference_energy: the kinetic energy of the central ray in MeV
+        particle_mass: the mass of the ray particle in unified atomic mass units
+    Returns:
+        the rays in COSY coordinates relative to the detector:
+        - the signed arc-length along the detector in meters
+        - momentum that is transverse to both the detector and the y-axis, in the same units as before
+        - y-position in meters
+        - y-momentum in the same units as before
+        - some deranged time-of-flight metric, updated to account for any additional or removed time-of-flight
+        - the same as before (propagation to a new detector location doesn't change the energy)
+    """
+    # Unpack the input coordinates
+    x_0, px_relative, y_0, py_relative, tau_0, energy_relative = np.transpose(input_rays)
+    z_0 = -shift
+    
+    # Convert to more useful coordinates
+    energy = reference_energy*(1 + energy_relative)
+    particle_rest_energy = particle_mass*931.494  # MeV
+    gamma = 1 + energy/particle_rest_energy  # lorentz factor of the ray
+    reference_gamma = 1 + reference_energy/particle_rest_energy
+    p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
+    a = px_relative / p_relative  # this is like COSY's a but sensically defined
+    b = py_relative / p_relative
+    v_relative = np.sqrt((gamma**-2 - 1)/(reference_gamma**-2 - 1))
+    l_0 = tau_0 * v_relative / (gamma/(1 + gamma))
+    
+    # Pre-calculate some angles and ratios
+    extraneous_angle = np.maximum(np.hypot(a, b)/0.999, 1)  # fix COSY's mistake if it gives you nonphysical angles
+    a /= extraneous_angle
+    b /= extraneous_angle
+    sin_yaw = a/np.sqrt(1 - b**2)  # yaw is the angle of the ray that you see when looking along the y-axis
+    cos_yaw = np.sqrt(1 - sin_yaw**2)
+    yaw = np.arcsin(sin_yaw)
+    sin_pitch = b  # pitch is the angle between the ray and the xz-plane
+    cos_pitch = np.sqrt(1 - sin_pitch**2)
+    tan_pitch = sin_pitch/cos_pitch
+    sin_tilt = np.sin(tilt)
+    cos_tilt = np.cos(tilt)
+    
+    # Solve the equation
+    A = bend
+    B = cos_yaw*cos_tilt - sin_yaw*sin_tilt - bend*(z_0*cos_yaw + x_0*sin_yaw)
+    C = 2*(x_0*sin_tilt - z_0*cos_tilt) + bend*(x_0**2 + z_0**2)
+    if np.any(A*C > B**2):
+        raise ValueError("Some of these rays don't hit the curved detector.")
+    distance = np.where(  # this is the signed distance between the two surfaces along the ray projected to the xz-plane
+        abs(A*C) > 1e-12*B**2,
+        (B - np.sqrt(B**2 - A*C))/A,
+        C/(2*B),
+    )
+    assert not np.any(np.isnan(distance))
+    x = x_0 + distance*sin_yaw
+    y = y_0 + distance*tan_pitch
+    z = z_0 + distance*cos_yaw
+    l = l_0 + distance/cos_pitch
+    
+    # Calculate the new distances and angles for the new position
+    q = x*cos_tilt + z*sin_tilt  # q is the signed distance in the direction orthogonal to the y-axis and tangent to the detector at the central ray
+    yaw_D = yaw + tilt + np.arcsin(q*bend)
+    
+    # Convert to fancy new detector coordinates
+    if bend != 0:
+        x_D = np.arcsin(q*bend)/bend
+    else:
+        x_D = q
+    px_D_relative = np.sqrt(1 - b**2) * np.sin(yaw_D) * p_relative
+    tau = l / v_relative * gamma/(1 + gamma)
+    
+    # pack it up and return
+    return np.stack([x_D, px_D_relative, y, py_relative, tau, energy_relative], axis=1)

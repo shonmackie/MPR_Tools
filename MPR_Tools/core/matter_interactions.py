@@ -265,7 +265,7 @@ class ComptonScattering:
     
     def get_recoil_energy(self, incident_energy: float, electron_angle: float, rng: np.random.Generator) -> float:
         """ calculate the energy of a recoil particle with a given scattering angle """
-        if incident_energy != 0:
+        if electron_angle != 0:
             a_0 = incident_energy / ELECTRON_REST_ENERGY
             photon_angle = ComptonScattering._convert_to_photon_angle(incident_energy, electron_angle)
             a = a_0 / (1 + a_0 * (1 - np.cos(photon_angle)))
