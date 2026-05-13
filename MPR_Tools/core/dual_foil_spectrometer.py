@@ -169,8 +169,8 @@ class DualFoilSpectrometer:
                                         sample from discrete bin centres.
         """
         # Split recoil events between foils based on probability_distribution
-        ch2_idx = (incident_energies >= self.ch2_min_energy) & (incident_energies <= self.ch2_max_energy)
-        cd2_idx = (incident_energies >= self.cd2_min_energy) & (incident_energies <= self.cd2_max_energy)
+        ch2_idx = (incident_energies >= self.spec_ch2.min_incident_energy) & (incident_energies <= self.spec_ch2.max_incident_energy)
+        cd2_idx = (incident_energies >= self.spec_cd2.min_incident_energy) & (incident_energies <= self.spec_cd2.max_incident_energy)
         ch2_fraction = np.sum(probability_distribution[ch2_idx]) / (np.sum(probability_distribution[ch2_idx]) + np.sum(probability_distribution[cd2_idx]))
         num_ch2 = int(num_recoil_particles * ch2_fraction)
         num_cd2 = num_recoil_particles - num_ch2

@@ -45,6 +45,7 @@ class HodoscopeCreator:
         self,
         start_energy: float,
         performance_curve_file: Optional[str] = None,
+        foil: Optional[str] = None,
         peak_energy_min: Optional[float] = None,
         peak_energy_max: Optional[float] = None,
         n_peak_bins: Optional[int] = None,
@@ -59,6 +60,9 @@ class HodoscopeCreator:
                 ``PerformanceAnalyzer.generate_performance_curve()``.
                 Defaults to the standard location inside the spectrometer's
                 data directory.
+            foil: If provided, filter the performance CSV to rows matching this
+                foil material (e.g. ``'CH2'`` or ``'CD2'``). Required when the
+                CSV contains data for multiple foils.
             peak_energy_min: If provided, the lower bound of a signal peak region.
             peak_energy_max: If provided, the upper bound of a signal peak region.
             n_peak_bins: If provided along with the peak energy bounds, the number of narrow bins to place within the signal peak region.
@@ -76,6 +80,8 @@ class HodoscopeCreator:
         performance_df = pd.read_csv(
             f'{self.spectrometer.data_directory}/{performance_curve_file}'
         )
+        if foil is not None and 'foil' in performance_df.columns:
+            performance_df = performance_df[performance_df['foil'] == foil].reset_index(drop=True)
 
         energies = performance_df['energy [MeV]'].to_numpy()
         positions = performance_df['position [m]'].to_numpy()
@@ -161,10 +167,11 @@ class HodoscopeCreator:
         # Plot
         if plot:
             self.plot_bins(
-                bin_energies, bin_positions, 
+                bin_energies, bin_positions,
                 performance_curve_file=performance_curve_file,
-                peak_energy_min=peak_energy_min, 
-                peak_energy_max=peak_energy_max
+                foil=foil,
+                peak_energy_min=peak_energy_min,
+                peak_energy_max=peak_energy_max,
             )
 
         return bin_energies, bin_positions, bin_edges
@@ -174,6 +181,7 @@ class HodoscopeCreator:
         bin_energies: np.ndarray,
         bin_positions: np.ndarray,
         performance_curve_file: Optional[str] = None,
+        foil: Optional[str] = None,
         filename: Optional[str] = None,
         peak_energy_min: Optional[float] = None,
         peak_energy_max: Optional[float] = None,
@@ -185,6 +193,8 @@ class HodoscopeCreator:
             bin_energies : Center energy of each bin [MeV].
             bin_positions: Center position of each bin [m].
             performance_curve_file: Optional path to performance CSV.
+            foil: If provided, filter the performance CSV to rows matching this
+                foil material (e.g. ``'CH2'`` or ``'CD2'``).
             filename: Output filename.  Defaults to
                 ``<figure_directory>/hodoscope_bins.png``.
             peak_energy_min: If provided, the lower bound of a signal peak region to highlight on the plot.
@@ -195,13 +205,16 @@ class HodoscopeCreator:
         performance_df = pd.read_csv(
             f'{self.spectrometer.data_directory}/{performance_curve_file}'
         )
+        if foil is not None and 'foil' in performance_df.columns:
+            performance_df = performance_df[performance_df['foil'] == foil].reset_index(drop=True)
 
         energies = performance_df['energy [MeV]'].to_numpy()
         positions = performance_df['position [m]'].to_numpy()
         widths = performance_df['position width [m]'].to_numpy()
 
         if filename is None:
-            filename = f'{self.spectrometer.figure_directory}/hodoscope_bins.png'
+            foil_suffix = f'_{foil}' if foil is not None else ''
+            filename = f'{self.spectrometer.figure_directory}/hodoscope_bins{foil_suffix}.png'
         else:
             filename = f'{self.spectrometer.figure_directory}/{filename}'
 

@@ -87,6 +87,8 @@ class Hodoscope:
 
     def _calculate_channel_edges_from_array(self, data: np.ndarray) -> None:
         """Calculate the dimensions and center positions of all channels"""
+        # Sort rows by edge position so channel_edges is monotonically increasing.
+        data = data[np.argsort(data[:, 0])]
         # Extract channel x-coordinates from the left column
         self.channel_edges = data[:, 0] * 1e-2  # cm to m
         self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2

@@ -9,9 +9,10 @@ from .core.hodoscope import Hodoscope
 from .core.spectrometer import MPRSpectrometer
 from .core.dual_foil_spectrometer import DualFoilSpectrometer
 from .analysis.parameter_sweep import FoilSweeper
-from .analysis.plotting import SpectrometerPlotter, SweepPlotter
+from .analysis.plotting import SpectrometerPlotter, SweepPlotter, UnfoldingPlotter
 from .analysis.performance import PerformanceAnalyzer
 from .analysis.hodoscope_creation import HodoscopeCreator
+from .analysis.unfolding import SpectrumUnfolder, UnfoldingResult
 
 __version__ = "1.0.0"
-__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter', 'PerformanceAnalyzer', 'HodoscopeCreator']
+__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter', 'UnfoldingPlotter', 'PerformanceAnalyzer', 'HodoscopeCreator', 'SpectrumUnfolder', 'UnfoldingResult']

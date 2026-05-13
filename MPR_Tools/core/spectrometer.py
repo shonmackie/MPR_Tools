@@ -243,7 +243,7 @@ class MPRSpectrometer:
         if len(incident_energies) > 1:
             # Only use incident energies that can possibly produce recoil energies within acceptance range.
             # Both min and max bounds are applied so out-of-acceptance bins don't influence the distribution.
-            idx = (incident_energies >= self.min_energy) & (incident_energies <= self.max_energy)
+            idx = (incident_energies >= self.min_incident_energy) & (incident_energies <= self.max_incident_energy)
             incident_energies = incident_energies[idx]
             probability_distribution = probability_distribution[idx]
 

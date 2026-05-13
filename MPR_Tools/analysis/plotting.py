@@ -1,13 +1,13 @@
 """Plotting methods for MPR spectrometer visualization."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
+from matplotlib.colors import LogNorm, Normalize
 from scipy.stats import gaussian_kde
 from scipy.interpolate import griddata, interp1d
 from labellines import labelLines
@@ -45,8 +45,8 @@ class SpectrometerPlotter:
             self.dual_data = {
                 'spectrometer': spectrometer.spec_cd2,
                 'performance_analyzer': PerformanceAnalyzer(spectrometer.spec_cd2),
-                'primary_label': 'Protons (CH2)',
-                'secondary_label': 'Deuterons (CD2)',
+                'primary_label': 'protons',
+                'secondary_label': 'deuterons',
                 'secondary_color': 'tab:blue',
                 'secondary_cmap': 'GnBu'
             }
@@ -403,23 +403,30 @@ class SpectrometerPlotter:
         # channel_time_windows shape (n_channels, 2): per-channel [t_min, t_max] of signal
         # arrival times.  Filled with NaN when hodoscope.use_time_gating is False.
         is_dual = self.dual_data is not None
-        signal, coverage, channel_time_windows = self.performance_analyzer.get_recoil_x_map(
-            particle_yield=incident_particle_yield,
-        )
+        signal, coverage, channel_time_windows = self.performance_analyzer.get_recoil_x_map()
+        if self.spectrometer.foil_solid_angle_fraction:
+            signal *= self.spectrometer.foil_solid_angle_fraction
+            coverage *= self.spectrometer.foil_solid_angle_fraction
+        if incident_particle_yield:
+            signal *= incident_particle_yield
+            coverage *= incident_particle_yield
         channel_edges = hodoscope.channel_edges * 100  # m to cm
         channel_widths = hodoscope.channel_widths * 100  # m to cm
         channel_heights = hodoscope.channel_heights * 100  # m to cm
 
-        # signal units: [particles/source] (or [particles] with yield)
-
         # --- Dual spectrometer signal (retrieved before background so time windows are ready) ---
         signal2 = coverage2 = channel_time_windows2 = channel_edges2 = channel_widths2 = channel_heights2 = None
         if is_dual:
+            dual_spec = self.dual_data['spectrometer']
             signal2, coverage2, channel_time_windows2 = (
-                self.dual_data['performance_analyzer'].get_recoil_x_map(
-                    particle_yield=incident_particle_yield,
-                )
+                self.dual_data['performance_analyzer'].get_recoil_x_map()
             )
+            if dual_spec.foil_solid_angle_fraction:
+                signal2 *= dual_spec.foil_solid_angle_fraction
+                coverage2 *= dual_spec.foil_solid_angle_fraction
+            if incident_particle_yield:
+                signal2 *= incident_particle_yield
+                coverage2 *= incident_particle_yield
             hodoscope2 = self.dual_data['spectrometer'].hodoscope
             channel_edges2 = hodoscope2.channel_edges * 100  # m to cm
             channel_widths2 = hodoscope2.channel_widths * 100  # m to cm
@@ -526,12 +533,16 @@ class SpectrometerPlotter:
                     _x_to_en2 = interp1d(_pos_cm2, _en_mev2, bounds_error=False, fill_value='extrapolate')
                     _en_to_x2 = interp1d(_en_mev2, _pos_cm2, bounds_error=False, fill_value='extrapolate')
 
-        def _add_energy_axis(ax):
+        def _add_energy_axis(ax, which: Literal['all', 'primary', 'secondary'] = 'all'):
             """Add twin top x-axis(es) showing incident neutron energy in MeV.
 
             In dual-foil mode two axes are added (one per foil), each colored to match
             the corresponding signal line.  The deuteron axis is offset outward so the
             two labels do not overlap.
+
+            Args:
+                which: 'all' adds all axes; 'primary' adds only the CH2 axis;
+                       'secondary' adds only the CD2 axis (no offset since it is alone).
             """
             if _x_to_en is None or _en_to_x is None:
                 return
@@ -560,14 +571,15 @@ class SpectrometerPlotter:
 
             inc = self.spectrometer.conversion_foil.incident_particle.capitalize()
             if is_dual:
-                _make_twin(_x_to_en, _en_to_x,
-                           f'{inc} Energy [MeV] (p)',
-                           color=self.primary_color)
-                if self.dual_data is not None and _x_to_en2 is not None and _en_to_x2 is not None:
+                if which in ('all', 'primary'):
+                    _make_twin(_x_to_en, _en_to_x,
+                               f'{inc} Energy [MeV] (p)',
+                               color=self.primary_color)
+                if which in ('all', 'secondary') and self.dual_data is not None and _x_to_en2 is not None and _en_to_x2 is not None:
                     _make_twin(_x_to_en2, _en_to_x2,
                                f'{inc} Energy [MeV] (d)',
                                color=self.dual_data['secondary_color'],
-                               offset=45,
+                               offset=45 if which == 'all' else 0,
                                tick_step=0.5)
             else:
                 _make_twin(_x_to_en, _en_to_x, f'{inc} Energy [MeV]')
@@ -576,39 +588,65 @@ class SpectrometerPlotter:
             return ax.step(edges, np.append(values, values[-1]), where='pre', **kwargs)[0]
 
         # Plot 1: counts
-        # In dual-foil mode background labels distinguish the CH2 and CD2 halves.
-        n_label = 'neutron (p)' if is_dual else 'neutron'
-        g_label = 'photon (p)' if is_dual else 'photon'
-        fig, ax_counts = plt.subplots(figsize=(10, 5.5 if is_dual else 4))
-        _step(ax_counts, channel_edges, signal,
-              color=self.primary_color, label=particle_label, linewidth=3)
-        if neutron_bg_per_channel is not None:
-            _step(ax_counts, channel_edges, neutron_bg_per_channel,
-                  color='tab:green', label=n_label, linewidth=3)
-        if photon_bg_per_channel is not None:
-            _step(ax_counts, channel_edges, photon_bg_per_channel,
-                  color='tab:purple', label=g_label, linewidth=3)
-        if self.dual_data is not None and signal2 is not None:
-            _step(ax_counts, channel_edges2, signal2,
-                  color=self.dual_data['secondary_color'],
-                  label=self.dual_data['secondary_label'], linewidth=3)
-        if is_dual and neutron_bg_per_channel2 is not None:
-            _step(ax_counts, channel_edges2, neutron_bg_per_channel2,
-                  color='tab:green', linestyle='--', label='neutron (d)', linewidth=3)
-        if is_dual and photon_bg_per_channel2 is not None:
-            _step(ax_counts, channel_edges2, photon_bg_per_channel2,
-                  color='tab:purple', linestyle='--', label='photon (d)', linewidth=3)
-        ax_counts.set_yscale('log')
-        ax_counts.set_xlabel('Horizontal Position [cm]')
-        ax_counts.set_ylabel(label)
-        ax_counts.grid(True, alpha=0.3)
-        if incident_particle_yield is not None:
-            ax_counts.set_title(f'Yield: {incident_particle_yield:.0e}')
-        labelLines(ax_counts.get_lines(), align=False)
-        _add_energy_axis(ax_counts)
-        fig.tight_layout()
-        fig.savefig(filename_counts, dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        if is_dual:
+            fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+            _step(ax_top, channel_edges, signal,
+                  color=self.primary_color, label=particle_label, linewidth=3)
+            if neutron_bg_per_channel is not None:
+                _step(ax_top, channel_edges, neutron_bg_per_channel,
+                      color='tab:green', label='neutron', linewidth=3)
+            if photon_bg_per_channel is not None:
+                _step(ax_top, channel_edges, photon_bg_per_channel,
+                      color='tab:purple', label='photon', linewidth=3)
+            ax_top.set_yscale('log')
+            ax_top.set_ylabel(label)
+            ax_top.grid(True, alpha=0.3)
+            if incident_particle_yield is not None:
+                ax_top.set_title(f'Yield: {incident_particle_yield:.0e}')
+            labelLines(ax_top.get_lines(), align=False)
+            _add_energy_axis(ax_top, which='primary')
+
+            if signal2 is not None:
+                _step(ax_bot, channel_edges2, signal2,
+                      color=self.dual_data['secondary_color'],
+                      label=self.dual_data['secondary_label'], linewidth=3)
+            if neutron_bg_per_channel2 is not None:
+                _step(ax_bot, channel_edges2, neutron_bg_per_channel2,
+                      color='tab:green', label='neutron', linewidth=3)
+            if photon_bg_per_channel2 is not None:
+                _step(ax_bot, channel_edges2, photon_bg_per_channel2,
+                      color='tab:purple', label='photon', linewidth=3)
+            ax_bot.set_yscale('log')
+            ax_bot.set_xlabel('Horizontal Position [cm]')
+            ax_bot.set_ylabel(label)
+            ax_bot.grid(True, alpha=0.3)
+            labelLines(ax_bot.get_lines(), align=False)
+            _add_energy_axis(ax_bot, which='secondary')
+
+            fig.tight_layout()
+            fig.savefig(filename_counts, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+        else:
+            fig, ax_counts = plt.subplots(figsize=(10, 4))
+            _step(ax_counts, channel_edges, signal,
+                  color=self.primary_color, label=particle_label, linewidth=3)
+            if neutron_bg_per_channel is not None:
+                _step(ax_counts, channel_edges, neutron_bg_per_channel,
+                      color='tab:green', label='neutron', linewidth=3)
+            if photon_bg_per_channel is not None:
+                _step(ax_counts, channel_edges, photon_bg_per_channel,
+                      color='tab:purple', label='photon', linewidth=3)
+            ax_counts.set_yscale('log')
+            ax_counts.set_xlabel('Horizontal Position [cm]')
+            ax_counts.set_ylabel(label)
+            ax_counts.grid(True, alpha=0.3)
+            if incident_particle_yield is not None:
+                ax_counts.set_title(f'Yield: {incident_particle_yield:.0e}')
+            labelLines(ax_counts.get_lines(), align=False)
+            _add_energy_axis(ax_counts)
+            fig.tight_layout()
+            fig.savefig(filename_counts, dpi=150, bbox_inches='tight')
+            plt.close(fig)
         print(f'Position histogram saved to {filename_counts}')
 
         # Plot 2 (optional): S/B — separate lines for neutron and photon backgrounds.
@@ -811,13 +849,36 @@ class SpectrometerPlotter:
                 ax.plot(x_fill, y_fill, color=color, linewidth=0.8)
 
         fig, ax = plt.subplots(figsize=(10, 4) if is_dual else (8, 6))
-        _draw_ridgelines(ax, pdfs_ch2, colors_ch2, alpha=0.5)
+
         if is_dual:
-            _draw_ridgelines(ax, pdfs_cd2, colors_cd2, alpha=0.4)
+            n_cd2_channels = self.dual_data['spectrometer'].hodoscope.total_channels
+            # Second left y-axis for the secondary (CD2) foil so each foil's channels
+            # span the full figure height and neither is visually squeezed.
+            ax2 = ax.twinx()
+            ax2.yaxis.set_label_position('left')
+            ax2.yaxis.tick_left()
+            ax2.spines['left'].set_position(('outward', 60))
+            ax2.spines['left'].set_visible(True)
+            ax2.spines['right'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            _draw_ridgelines(ax, pdfs_ch2, colors_ch2, alpha=0.5)
+            _draw_ridgelines(ax2, pdfs_cd2, colors_cd2, alpha=0.4)
+
+            particle_ch2 = self.spectrometer.conversion_foil.particle
+            particle_cd2 = self.dual_data['spectrometer'].conversion_foil.particle
+            ax.set_ylabel(f'Channel index ({particle_ch2})', color=colors_ch2[0])
+            ax.tick_params(axis='y', colors=colors_ch2[0])
+            ax.spines['left'].set_color(colors_ch2[0])
+            ax2.set_ylabel(f'Channel index ({particle_cd2})', color=colors_cd2[0])
+            ax2.tick_params(axis='y', colors=colors_cd2[0])
+            ax2.spines['left'].set_color(colors_cd2[0])
+        else:
+            _draw_ridgelines(ax, pdfs_ch2, colors_ch2, alpha=0.5)
+            ax.set_ylim(-0.5, n_channels - 0.5 + ridge_scale)
+            ax.set_ylabel('Channel index')
 
         ax.set_xlabel('Detector arrival time [ns]')
-        ax.set_ylabel('Channel index')
-        ax.set_ylim(-0.5, n_channels - 0.5 + ridge_scale)
         ax.grid(True, alpha=0.3)
 
         t_range = t_grid[-1] - t_grid[0]
@@ -838,7 +899,7 @@ class SpectrometerPlotter:
                 color=colors_ch2[0], va='center', ha='left')
         if is_dual and self.dual_data is not None:
             t_lbl_cd2, ch_lbl_cd2 = _label_pos(pdfs_cd2)
-            ax.text(t_lbl_cd2, ch_lbl_cd2, self.dual_data['spectrometer'].conversion_foil.particle,
+            ax2.text(t_lbl_cd2, ch_lbl_cd2, self.dual_data['spectrometer'].conversion_foil.particle,
                     color=colors_cd2[0], va='center', ha='left')
 
         # Overlay background E_dep vs time on a twin log y-axis (right),
@@ -1063,153 +1124,6 @@ class SpectrometerPlotter:
             fig.savefig(response_filename, dpi=150, bbox_inches='tight')
             print(f'Detector response heatmap saved to {response_filename}')
         
-    def plot_synthetic_incident_histogram(
-        self,
-        filename: Optional[str] = None,
-    ):
-        if filename == None:
-            filename = f'{self.spectrometer.figure_directory}/synthetic_{self.spectrometer.conversion_foil.incident_particle}_histogram.png'
-        dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std, response, background = self.performance_analyzer.get_plasma_parameters()
-        fwhm = right_edge - left_edge
-        
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        # Plot histogram
-        ax.step(
-            energies,
-            response,
-            where='pre',
-            color=self.primary_color
-        )
-        ax.fill_between(
-            energies,
-            response - background,
-            response + background,
-            step='pre',
-            color=self.primary_color,
-            alpha=0.3,
-        )
-        # hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', density=True)
-        # Add energy standard deviation
-        # hist_std = self._get_histogram_std(bins, energies, energies_std)
-        # ax.fill_between(
-        #     bins[1:],
-        #     hist - hist_std,
-        #     hist + hist_std,
-        #     color='tab:blue',
-        #     alpha=0.3,
-        #     step='pre'
-        # )
-        
-        # Add dual data if available
-        if self.dual_data:
-            performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
-            dsr2, plasma_temperature2, left_edge2, right_edge2, dsr_energy_range2, primary_energy_range2, energies2, energies_std2, response2, background2 = performance_analyzer2.get_plasma_parameters()
-            fwhm2 = right_edge2 - left_edge2
-            ax.step(
-                energies2,
-                response2,
-                where='pre',
-                color=self.dual_data['secondary_color'],
-            )
-            ax.fill_between(
-                energies2,
-                response2 - background2,
-                response2 + background2,
-                step='pre',
-                color=self.dual_data['secondary_color'],
-                alpha=0.3,
-            )
-            
-        
-        # Highlight dsr and primary range
-        ax.axvspan(dsr_energy_range[0], dsr_energy_range[1], color='tab:orange', alpha=0.2)
-        ax.axvspan(primary_energy_range[0], primary_energy_range[1], color='tab:green', alpha=0.2)
-        
-        # Add text to indicate dsr and primary range
-        ax.text(
-            dsr_energy_range[0] + (dsr_energy_range[1] - dsr_energy_range[0]) / 2,
-            max(response) / 1000,
-            'DSR',
-            ha='center',
-            va='top',
-            color='tab:red',
-            fontsize=12
-        )
-        
-        ax.text(
-            primary_energy_range[0] + (primary_energy_range[1] - primary_energy_range[0]) / 2,
-            max(response) / 1000,
-            'Primary',
-            ha='center',
-            va='top',
-            color='tab:green',
-            fontsize=12
-        )
-        
-        # Add double sided arrow to indicate fwhm
-        height = max(response)
-        ax.annotate(
-            f'FWHM = {int(fwhm*1000):3d} keV  \n$T_i$ = {plasma_temperature:.2f} keV   ',
-            xy=(right_edge, height/2),
-            xytext=(left_edge, height/2),
-            arrowprops=dict(
-                arrowstyle='<->',
-                color='black',
-                shrinkA=0,
-                shrinkB=0,
-            ),
-            ha='right',
-            va='center',
-            fontsize=12
-        )
-        
-        # Add dsr text
-        ax.text(
-            dsr_energy_range[0] + (dsr_energy_range[1] - dsr_energy_range[0]) / 2,
-            height/50,
-            f'$dsr$={dsr*100:.1f}%',
-            ha='center',
-            va='bottom',
-            color='black',
-            fontsize=12
-        )
-        
-        ax.set_xlabel(f'{self.spectrometer.conversion_foil.incident_particle.capitalize()} Energy [MeV]')
-        ax.set_ylabel('PDF')
-        ax.set_yscale('log')
-        ax.grid(True, alpha=0.3)
-        
-        fig.tight_layout()
-        fig.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f'Synthetic {self.spectrometer.conversion_foil.incident_particle} histogram saved to {filename}')
-        
-    def _get_histogram_std(self, bins, energies, energies_std, density=True):
-        """Helper function to compute histogram standard deviation."""
-        # Get which bin each energy falls into
-        bin_indices = np.digitize(energies, bins) - 1
-        hist_std = np.zeros(len(bins) - 1)
-        
-        for i, energy_std in enumerate(energies_std):
-            # Find the bin index for this energy
-            bin_index = bin_indices[i]
-            if 0 <= bin_index < len(hist_std):
-                # Accumulate variance
-                hist_std[bin_index] += (energy_std ** 2)
-        
-        # Take square root to get standard deviation
-        hist_std = np.sqrt(hist_std)
-        
-        # TODO: Add background contribution — call hodoscope.get_background(neutron_file, photon_file)
-        #       and sum per-channel arrays once background files are available here.
-        
-        # Normalize if density is True
-        if density:
-            bin_widths = np.diff(bins)
-            hist_std /= (len(energies) * bin_widths)
-        
-        return hist_std
-    
     def plot_monoenergetic_analysis(
         self,  
         incident_energy: float,
@@ -1331,9 +1245,12 @@ class SpectrometerPlotter:
             
             # Label lines on their respective axes
             range = energies.max() - energies.min()
-            labelLines(position_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
-            labelLines(resolution_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
-            labelLines(efficiency_line, xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
+            position_range = (positions.max() - positions.min()) * 100
+            resolution_range = energy_resolutions.max() - energy_resolutions.min()
+            efficiency_range = (total_efficiencies.max() - total_efficiencies.min()) * 1e6
+            labelLines(position_line, xvals=[energies.min() + 0.25 * range], align=True, yoffsets=position_range * 0.1, fontsize=12)
+            labelLines(resolution_line, xvals=[energies.min() + 0.25 * range], align=True, yoffsets=resolution_range * 0.1, fontsize=12)
+            labelLines(efficiency_line, xvals=[energies.min() + 0.75 * range], align=True, yoffsets=efficiency_range * 0.1, fontsize=12)
             
             # Add shading and label to indicate foil energy regions
             if self.dual_data:
@@ -1831,3 +1748,642 @@ class SweepPlotter:
                                       colors=cp.color, linestyles=cp.linestyle,
                                       linewidths=cp.linewidth)
                     ax.clabel(cs, inline=True, fontsize=8)
+
+
+class UnfoldingPlotter:
+    """Plots unfolded neutron spectra from ``SpectrumUnfolder`` results.
+
+    Parameters
+    ----------
+    foil_solid_angle_fraction : float
+        Fraction of the full sphere subtended by the conversion foil
+        (= r_foil² / (4 d_foil²)).  Used to convert spectrum integrals
+        into absolute yield.  Pass ``None`` to skip yield annotations.
+    energy_unit : str
+        Label appended to the x-axis, default ``'MeV'``.
+    """
+
+    # Default colour cycle (matches tab10 but explicit for reproducibility)
+    _COLOURS = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red',
+                'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray']
+
+    def __init__(
+        self,
+        spectrometer: Optional[Union[MPRSpectrometer, DualFoilSpectrometer]] = None,
+        foil_solid_angle_fraction: Optional[float] = None,
+        energy_unit: str = 'MeV',
+    ) -> None:
+        self.spectrometer = spectrometer
+        self.foil_solid_angle_fraction = foil_solid_angle_fraction
+        self.energy_unit = energy_unit
+
+    # ------------------------------------------------------------------
+    # Public helpers
+    # ------------------------------------------------------------------
+
+    def yield_from_result(self, result) -> Optional[float]:
+        """Return integrated source yield from an ``UnfoldingResult``.
+
+        Returns ``None`` if ``foil_solid_angle_fraction`` was not provided.
+        """
+        if self.foil_solid_angle_fraction is None:
+            return None
+        return float(result.spectrum.sum() / self.foil_solid_angle_fraction)
+
+    # ------------------------------------------------------------------
+    # plot_spectrum
+    # ------------------------------------------------------------------
+
+    def plot_spectrum(
+        self,
+        result,
+        *,
+        ax: Optional[Axes] = None,
+        normalize: bool = False,
+        show_uncertainties: bool = True,
+        true_spectrum: Optional[np.ndarray] = None,
+        true_energy_grid: Optional[np.ndarray] = None,
+        title: Optional[str] = None,
+        filename: Optional[str] = None,
+        color: str = 'tab:blue',
+        xlim: Optional[tuple] = None,
+    ) -> Axes:
+        """Plot a single unfolded spectrum.
+
+        Parameters
+        ----------
+        result : UnfoldingResult
+            Output of any ``SpectrumUnfolder.unfold_*`` call.
+        ax : Axes, optional
+            Existing axes to draw on.  A new figure is created if omitted.
+        normalize : bool
+            Divide both the spectrum and uncertainties by their sum so the
+            y-axis shows a normalised shape.
+        show_uncertainties : bool
+            Shade the ±1σ band around the spectrum.
+        true_spectrum : array_like, optional
+            Known true spectrum to overlay (e.g. from a synthetic test).
+        true_energy_grid : array_like, optional
+            Energy grid for ``true_spectrum``.  Defaults to ``result.energy_grid``.
+        title : str, optional
+            Axes title.
+        filename : str, optional
+            If given, save the figure to this path.
+        color : str
+            Line colour for the unfolded spectrum.
+        xlim : (float, float), optional
+            x-axis limits ``(E_min, E_max)`` in MeV.  Use this to restrict the
+            plot to the energy range covered by the instrument.
+
+        Returns
+        -------
+        Axes
+        """
+        standalone = ax is None
+        if standalone:
+            fig, ax = plt.subplots(figsize=(8, 5))
+
+        E = result.energy_grid
+        f = result.spectrum.copy()
+        sigma = result.uncertainties.copy()
+
+        scale = f.sum() if (normalize and f.sum() > 0) else 1.0
+        f /= scale
+        sigma /= scale
+
+        ax.plot(E, f, color=color, label=result.method)
+        if show_uncertainties:
+            ax.fill_between(E, f - sigma, f + sigma, color=color, alpha=0.25)
+
+        if true_spectrum is not None:
+            E_true = np.asarray(true_energy_grid if true_energy_grid is not None else E)
+            ft = np.asarray(true_spectrum, dtype=float)
+            if normalize and ft.sum() > 0:
+                ft = ft / ft.sum()
+            ax.plot(E_true, ft, 'k--', linewidth=2, label='True spectrum')
+
+        ax.set_xlabel(f'Energy [{self.energy_unit}]')
+        y_label = 'Spectrum [normalized]' if normalize else 'Spectrum [arb. units]'
+        ax.set_ylabel(y_label)
+
+        method_label = result.method.replace('_', ' ').title()
+        chi2_str = f'χ² = {result.chi_square:.2f}'
+        yield_str = ''
+        if self.foil_solid_angle_fraction is not None:
+            Y = self.yield_from_result(result)
+            yield_str = f'\nY = {Y:.3e}'
+        ax.set_title(title or f'{method_label}  |  {chi2_str}{yield_str}')
+
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+
+        ax.legend(fontsize=12)
+        ax.grid(True, alpha=0.3)
+        ax.set_yscale('log')
+
+        if standalone:
+            plt.tight_layout()
+            if filename:
+                plt.savefig(filename, dpi=150, bbox_inches='tight')
+        return ax
+
+    # ------------------------------------------------------------------
+    # plot_comparison
+    # ------------------------------------------------------------------
+
+    def plot_comparison(
+        self,
+        results: Mapping[str, object],
+        *,
+        normalize: bool = True,
+        show_uncertainties: bool = False,
+        true_spectrum: Optional[np.ndarray] = None,
+        true_energy_grid: Optional[np.ndarray] = None,
+        filename: Optional[str] = None,
+        xlim: Optional[tuple] = None,
+    ) -> Axes:
+        """Overlay multiple unfolded spectra on a single axes.
+
+        Parameters
+        ----------
+        results : dict  {label: UnfoldingResult}
+            One entry per method to plot.
+        normalize : bool
+            Normalise each spectrum to unit area before plotting.
+        show_uncertainties : bool
+            Shade ±1σ bands.
+        true_spectrum : array_like, optional
+            Known true spectrum to overlay.
+        true_energy_grid : array_like, optional
+            Energy grid for the true spectrum.
+        filename : str, optional
+            Save path.
+        xlim : (float, float), optional
+            x-axis limits ``(E_min, E_max)`` in MeV.  Use this to restrict the
+            plot to the energy range covered by the instrument.
+
+        Returns
+        -------
+        Axes
+        """
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        lines = []
+        for (label, result), color in zip(results.items(), self._COLOURS):
+            E = result.energy_grid
+            f = result.spectrum.copy()
+            sigma = result.uncertainties.copy()
+            scale = f.sum() if (normalize and f.sum() > 0) else 1.0
+            f /= scale
+            sigma /= scale
+            (line,) = ax.plot(E, f, color=color, label=label)
+            lines.append(line)
+            if show_uncertainties:
+                ax.fill_between(E, f - sigma, f + sigma, color=color, alpha=0.2)
+
+        if xlim is None:
+            all_E = np.concatenate([r.energy_grid for r in results.values()])
+            xlim = (float(all_E.min()), float(all_E.max()))
+
+        true_ylim: Optional[tuple] = None
+        if true_spectrum is not None:
+            first_result = next(iter(results.values()))
+            E_true = np.asarray(
+                true_energy_grid if true_energy_grid is not None else first_result.energy_grid
+            )
+            ft = np.asarray(true_spectrum, dtype=float)
+            if normalize and ft.sum() > 0:
+                ft = ft / ft.sum()
+            (line,) = ax.plot(E_true, ft, 'k-', linewidth=2.5, label='True spectrum')
+            lines.insert(0, line)
+            f_lim = ft[(E_true >= xlim[0]) & (E_true <= xlim[1])]
+            if f_lim.size > 0:
+                y_lo = f_lim[f_lim > 0].min() if np.any(f_lim > 0) else f_lim.min()
+                true_ylim = (y_lo * 0.5, f_lim.max() * 2)
+
+        labelLines(lines, zorder=2.5, align=False)
+
+        ax.set_xlabel(f'Energy [{self.energy_unit}]')
+        y_label = 'Spectrum [normalised]' if normalize else 'Spectrum [arb. units]'
+        ax.set_ylabel(y_label)
+
+        ax.set_xlim(*xlim)
+        if true_ylim is not None:
+            ax.set_ylim(*true_ylim)
+
+        ax.grid(True, alpha=0.3)
+        ax.set_yscale('log')
+        plt.tight_layout()
+
+        if filename:
+            plt.savefig(filename, dpi=150, bbox_inches='tight')
+        return ax
+
+    # ------------------------------------------------------------------
+    # plot_residuals
+    # ------------------------------------------------------------------
+
+    def plot_residuals(
+        self,
+        result,
+        R: np.ndarray,
+        counts: np.ndarray,
+        sigma_counts: np.ndarray,
+        *,
+        ax: Optional[Axes] = None,
+        title: Optional[str] = None,
+        filename: Optional[str] = None,
+        color: str = 'tab:blue',
+    ) -> Axes:
+        """Plot channel-by-channel residuals (data − model) / σ.
+
+        Parameters
+        ----------
+        result : UnfoldingResult
+            Unfolded spectrum result.
+        R : array_like, shape (n_energies, n_channels)
+            Response matrix used during unfolding.
+        counts : array_like, shape (n_channels,)
+            Measured hodoscope counts per channel.
+        sigma_counts : array_like, shape (n_channels,)
+            Per-channel uncertainties.
+        ax : Axes, optional
+            Existing axes; a new figure is created if omitted.
+        title : str, optional
+            Axes title.
+        filename : str, optional
+            Save path.
+        color : str
+            Bar colour.
+
+        Returns
+        -------
+        Axes
+        """
+        standalone = ax is None
+        if standalone:
+            fig, ax = plt.subplots(figsize=(10, 4))
+
+        R = np.asarray(R, dtype=float)
+        counts = np.asarray(counts, dtype=float)
+        sigma_counts = np.asarray(sigma_counts, dtype=float)
+
+        predicted = R.T @ result.spectrum          # (n_channels,)
+        residuals = (counts - predicted) / np.where(sigma_counts > 0, sigma_counts, 1.0)
+
+        channels = np.arange(len(counts))
+        ax.bar(channels, residuals, color=color, alpha=0.7, label=result.method)
+        ax.axhline(0, color='k', linewidth=1)
+        ax.axhline(1, color='grey', linewidth=0.8, linestyle='--')
+        ax.axhline(-1, color='grey', linewidth=0.8, linestyle='--')
+
+        ax.set_xlabel('Channel index')
+        ax.set_ylabel('(data − model) / σ')
+        method_label = result.method.replace('_', ' ').title()
+        ax.set_title(title or f'Residuals — {method_label}')
+        ax.legend(fontsize=11)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        if standalone:
+            plt.tight_layout()
+            if filename:
+                plt.savefig(filename, dpi=150, bbox_inches='tight')
+        return ax
+
+    # ------------------------------------------------------------------
+    # plot_yield_summary
+    # ------------------------------------------------------------------
+
+    def plot_yield_summary(
+        self,
+        results: Mapping[str, object],
+        *,
+        true_yield: Optional[float] = None,
+        title: str = 'Recovered yield by method',
+        filename: Optional[str] = None,
+    ) -> Axes:
+        """Bar chart of integrated neutron yield for each unfolding method.
+
+        Only meaningful when ``foil_solid_angle_fraction`` was provided at
+        construction.
+
+        Parameters
+        ----------
+        results : dict  {label: UnfoldingResult}
+        true_yield : float, optional
+            Horizontal reference line for the known true yield.
+        title : str
+        filename : str, optional
+
+        Returns
+        -------
+        Axes
+        """
+        if self.foil_solid_angle_fraction is None:
+            raise ValueError(
+                'foil_solid_angle_fraction must be set to compute absolute yield.'
+            )
+
+        labels = list(results.keys())
+        yields = [results[lbl].spectrum.sum() / self.foil_solid_angle_fraction for lbl in labels]
+
+        fig, ax = plt.subplots(figsize=(max(6, len(labels) * 1.4), 5))
+        x = np.arange(len(labels))
+        bars = ax.bar(x, yields, color=self._COLOURS[: len(labels)], alpha=0.8)
+        ax.bar_label(bars, fmt='%.2e', fontsize=10, padding=3)
+
+        if true_yield is not None:
+            ax.axhline(true_yield, color='k', linewidth=1.5, linestyle='--',
+                       label=f'True yield  ({true_yield:.2e})')
+            ax.legend(fontsize=11)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([lbl.replace('_', ' ') for lbl in labels],
+                           rotation=20, ha='right')
+        ax.set_ylabel('Neutron yield')
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3, axis='y')
+        plt.tight_layout()
+
+        if filename:
+            plt.savefig(filename, dpi=150, bbox_inches='tight')
+        return ax
+
+    # ------------------------------------------------------------------
+    # plot_response_matrix (and private helpers)
+    # ------------------------------------------------------------------
+
+    def _normalise_response(
+        self, R: np.ndarray, normalize: str, signal_unit: str = 'MeV'
+    ) -> Tuple[np.ndarray, str]:
+        """Return (Z, colorbar_label) after applying the requested normalisation.
+
+        signal_unit is only used for normalize='none'; it should be 'MeV' when the
+        hodoscope has a detector_material (energy deposited) or 'counts' when not.
+        """
+        Z = R.copy()
+        if normalize == 'row':
+            row_max = Z.max(axis=1, keepdims=True)
+            return np.where(row_max > 0, Z / row_max, 0.0), 'Response (row-normalised)'
+        if normalize == 'column':
+            col_max = Z.max(axis=0, keepdims=True)
+            return np.where(col_max > 0, Z / col_max, 0.0), 'Response (column-normalised)'
+        return Z, f'R [{signal_unit} / source neutron]'
+
+    def _colour_norm(
+        self, Z: np.ndarray, log_scale: bool
+    ) -> Tuple[np.ndarray, object]:
+        """Return (Z_plot, matplotlib norm) suitable for pcolormesh."""
+        if log_scale:
+            Z_plot = np.ma.masked_where(Z <= 0, Z)
+            valid = Z_plot.compressed()
+            vmin = valid.min() if len(valid) > 0 else 1e-10
+            vmax = valid.max() if len(valid) > 0 else 1.0
+            return Z_plot, LogNorm(vmin=vmin, vmax=vmax)
+        return Z, Normalize(vmin=0, vmax=float(Z.max()) or 1.0)
+
+    @staticmethod
+    def _energy_edges(E: np.ndarray) -> np.ndarray:
+        if len(E) > 1:
+            half_E = np.diff(E) / 2.0
+            return np.concatenate([[E[0] - half_E[0]], E[:-1] + half_E, [E[-1] + half_E[-1]]])
+        return np.array([E[0] - 0.5, E[0] + 0.5])
+
+    @staticmethod
+    def _nice_channel_ticks(n: int, max_labels: int = 12) -> np.ndarray:
+        step = max(1, (n + max_labels - 1) // max_labels)
+        return np.arange(0, n, step)
+
+    def _plot_response_matrix_dual(
+        self,
+        R: np.ndarray,
+        E: np.ndarray,
+        *,
+        n_ch_primary: int,
+        foil_label_primary: str,
+        foil_label_secondary: str,
+        normalize: str,
+        log_scale: bool,
+        cmap_primary: str,
+        cmap_secondary: str,
+        signal_unit: str,
+        filename: Optional[str],
+    ) -> Axes:
+        """Dual-foil response matrices on a single axes; secondary channels on a top x-axis."""
+        R_a = R[:, :n_ch_primary]
+        R_b = R[:, n_ch_primary:]
+        n_ch_secondary = R_b.shape[1]
+        ch_edges_a = np.arange(n_ch_primary + 1, dtype=float) - 0.5
+        ch_edges_b = np.arange(n_ch_secondary + 1, dtype=float) - 0.5
+        E_edges = self._energy_edges(E)
+
+        Z_a, cbar_label_a = self._normalise_response(R_a, normalize, signal_unit)
+        Z_b, cbar_label_b = self._normalise_response(R_b, normalize, signal_unit)
+        Z_plot_a, norm_a = self._colour_norm(Z_a, log_scale)
+        Z_plot_b, norm_b = self._colour_norm(Z_b, log_scale)
+
+        fig = plt.figure(figsize=(14, 6))
+        gs = fig.add_gridspec(1, 3, width_ratios=[1, 0.05, 0.05], wspace=0.3)
+        ax    = fig.add_subplot(gs[0, 0])
+        cax_a = fig.add_subplot(gs[0, 1])
+        cax_b = fig.add_subplot(gs[0, 2])
+
+        # Primary (proton) mesh on primary axes
+        mesh_a = ax.pcolormesh(
+            ch_edges_a, E_edges, Z_plot_a, cmap=cmap_primary, norm=norm_a, shading='flat')
+        ax.set_xlim(-0.5, n_ch_primary - 0.5)
+        ax.set_xticks(self._nice_channel_ticks(n_ch_primary))
+        ax.tick_params(axis='x', colors='tab:red')
+        ax.spines['bottom'].set_color('tab:red')
+        ax.set_xlabel(f'Channel index ({foil_label_primary})', color='tab:red')
+        ax.set_ylabel(f'Neutron energy [{self.energy_unit}]')
+
+        # Secondary (deuteron) mesh on twin axes with its own x scale
+        ax_sec = ax.twiny()
+        ax_sec.set_xlim(-0.5, n_ch_secondary - 0.5)
+        mesh_b = ax_sec.pcolormesh(
+            ch_edges_b, E_edges, Z_plot_b, cmap=cmap_secondary, norm=norm_b, shading='flat')
+        ax_sec.set_xticks(self._nice_channel_ticks(n_ch_secondary))
+        ax_sec.xaxis.set_label_position('bottom')
+        ax_sec.xaxis.tick_bottom()
+        ax_sec.spines['bottom'].set_position(('outward', 60))
+        ax_sec.spines['bottom'].set_color('tab:blue')
+        ax_sec.spines['top'].set_visible(False)
+        ax_sec.tick_params(axis='x', colors='tab:blue')
+        ax_sec.set_xlabel(f'Channel index ({foil_label_secondary})', color='tab:blue')
+
+        cbar_a = fig.colorbar(mesh_a, cax=cax_a)
+        cbar_a.set_label(cbar_label_a, color='tab:red')
+        cbar_a.ax.yaxis.set_tick_params(color='tab:red')
+        cbar_b = fig.colorbar(mesh_b, cax=cax_b)
+        cbar_b.set_label(cbar_label_b, color='tab:blue')
+        cbar_b.ax.yaxis.set_tick_params(color='tab:blue')
+
+        fig.tight_layout()
+        if filename:
+            fig.savefig(filename, dpi=150, bbox_inches='tight')
+        return ax
+
+    def plot_response_matrix(
+        self,
+        R: np.ndarray,
+        energy_grid: np.ndarray,
+        *,
+        channel_centers: Optional[np.ndarray] = None,
+        channel_edges: Optional[np.ndarray] = None,
+        n_ch_primary: Optional[int] = None,
+        foil_label_primary: Optional[str] = None,
+        foil_label_secondary: Optional[str] = None,
+        normalize: Literal['none', 'row', 'column'] = 'none',
+        log_scale: bool = True,
+        cmap: str = 'viridis',
+        cmap_primary: Optional[str] = None,
+        cmap_secondary: Optional[str] = None,
+        signal_unit: str = 'MeV',
+        show_marginals: bool = True,
+        title: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> Axes:
+        """Heatmap of the instrument response matrix R[energy, channel].
+
+        Parameters
+        ----------
+        R : array_like, shape (n_energies, n_channels)
+            Instrument response matrix from
+            ``PerformanceAnalyzer.build_response_matrix()``.
+        energy_grid : array_like, shape (n_energies,)
+            Incident neutron energies [MeV] corresponding to rows of R.
+        channel_centers : array_like, shape (n_channels,), optional
+            Detector channel centre positions [cm].  Inferred from
+            ``self.spectrometer`` when omitted.
+        channel_edges : array_like, shape (n_channels + 1,), optional
+            Channel boundary positions for ``pcolormesh``.  Inferred from
+            ``channel_centers`` when omitted.
+        n_ch_primary : int, optional
+            Split point for dual-foil mode.  Inferred from ``self.spectrometer``
+            when it is a ``DualFoilSpectrometer``.
+        foil_label_primary : str, optional
+            x-axis label for the primary foil.  Inferred from spectrometer particle
+            type when omitted.
+        foil_label_secondary : str, optional
+            x-axis label for the secondary foil.  Inferred when omitted.
+        normalize : {'none', 'row', 'column'}
+        log_scale : bool
+        cmap : str
+            Colourmap for single-foil mode.
+        cmap_primary : str, optional
+            Colourmap for the primary foil in dual-foil mode (default 'YlOrRd').
+        cmap_secondary : str, optional
+            Colourmap for the secondary foil in dual-foil mode (default 'GnBu').
+        signal_unit : str
+        show_marginals : bool
+            Single-foil only.
+        title : str, optional
+        filename : str, optional
+
+        Returns
+        -------
+        Axes
+        """
+        R = np.asarray(R, dtype=float)
+        E = np.asarray(energy_grid, dtype=float)
+
+        # infer dual-foil / channel parameters from attached spectrometer
+        spec = self.spectrometer
+        if isinstance(spec, DualFoilSpectrometer):
+            if n_ch_primary is None:
+                n_ch_primary = len(spec.spec_ch2.hodoscope.channel_centers)
+            if foil_label_primary is None:
+                foil_label_primary = spec.spec_ch2.conversion_foil.particle + 's'
+            if foil_label_secondary is None:
+                foil_label_secondary = spec.spec_cd2.conversion_foil.particle + 's'
+        elif isinstance(spec, MPRSpectrometer):
+            if channel_edges is None and channel_centers is None:
+                channel_edges = spec.hodoscope.channel_edges * 100  # m → cm
+
+        foil_label_primary = foil_label_primary or 'protons'
+        foil_label_secondary = foil_label_secondary or 'deuterons'
+
+        if n_ch_primary is not None:
+            return self._plot_response_matrix_dual(
+                R, E,
+                n_ch_primary=n_ch_primary,
+                foil_label_primary=foil_label_primary,
+                foil_label_secondary=foil_label_secondary,
+                normalize=normalize,
+                log_scale=log_scale,
+                cmap_primary=cmap_primary or 'YlOrRd',
+                cmap_secondary=cmap_secondary or 'GnBu',
+                signal_unit=signal_unit,
+                filename=filename,
+            )
+
+        # --- single-foil layout ---
+        _, n_ch = R.shape
+
+        if channel_edges is not None:
+            ch_edges = np.asarray(channel_edges, dtype=float)
+            ch_label = 'Channel position [cm]'
+        elif channel_centers is not None:
+            cc = np.asarray(channel_centers, dtype=float)
+            half = np.diff(cc) / 2.0
+            ch_edges = np.concatenate([[cc[0] - half[0]], cc[:-1] + half, [cc[-1] + half[-1]]])
+            ch_label = 'Channel position [cm]'
+        else:
+            ch_edges = np.arange(n_ch + 1) - 0.5
+            ch_label = 'Channel index'
+
+        E_edges = self._energy_edges(E)
+        Z, cbar_label = self._normalise_response(R, normalize, signal_unit)
+        Z_plot, col_norm = self._colour_norm(Z, log_scale)
+
+        if show_marginals:
+            fig = plt.figure(figsize=(12, 6))
+            gs = fig.add_gridspec(
+                2, 3,
+                width_ratios=[5, 1.5, 0.3],
+                height_ratios=[1, 4],
+                hspace=0.05,
+                wspace=0.15,
+            )
+            ax_top   = fig.add_subplot(gs[0, 0])
+            ax_main  = fig.add_subplot(gs[1, 0], sharex=ax_top)
+            ax_right = fig.add_subplot(gs[1, 1], sharey=ax_main)
+            ax_cbar  = fig.add_subplot(gs[:, 2])
+        else:
+            fig, ax_main = plt.subplots(figsize=(10, 6))
+            ax_top = ax_right = ax_cbar = None
+
+        mesh = ax_main.pcolormesh(
+            ch_edges, E_edges, Z_plot, cmap=cmap, norm=col_norm, shading='flat')
+        ax_main.set_xlabel(ch_label)
+        ax_main.set_ylabel(f'Neutron energy [{self.energy_unit}]')
+
+        if show_marginals and ax_cbar is not None:
+            cbar = fig.colorbar(mesh, cax=ax_cbar)
+            if title and ax_top is not None:
+                ax_top.set_title(title)
+        else:
+            if title:
+                ax_main.set_title(title)
+            cbar = fig.colorbar(mesh, ax=ax_main, pad=0.02, fraction=0.046)
+        cbar.set_label(cbar_label)
+
+        if show_marginals and ax_top is not None and ax_right is not None:
+            ch_ctrs = 0.5 * (ch_edges[:-1] + ch_edges[1:])
+            ax_top.bar(ch_ctrs, R.sum(axis=0),
+                       width=np.diff(ch_edges), color='steelblue', alpha=0.8)
+            ax_top.set_xlim(ch_edges[0], ch_edges[-1])
+            ax_top.set_ylabel('Σ R')
+            ax_top.tick_params(labelbottom=False)
+            ax_top.grid(True, alpha=0.3, axis='y')
+
+            ax_right.barh(E, R.sum(axis=1),
+                          height=np.diff(E_edges), color='coral', alpha=0.8)
+            ax_right.set_xlabel('Σ R')
+            ax_right.tick_params(labelleft=False)
+            ax_right.grid(True, alpha=0.3, axis='x')
+
+        if filename:
+            fig.savefig(filename, dpi=150, bbox_inches='tight')
+        return ax_main

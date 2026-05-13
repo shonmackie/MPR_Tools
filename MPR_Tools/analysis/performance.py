@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Executor
-from typing import Tuple, Optional, Union
+from typing import Dict, Tuple, Optional, Union
 import warnings
 import numpy as np
 import pandas as pd
@@ -215,7 +215,7 @@ class PerformanceAnalyzer:
 
                 # Energy range
                 energies = np.linspace(spec.min_incident_energy, spec.max_incident_energy, num_energies)
-
+                
                 positions_mean = np.zeros_like(energies)
                 positions_width = np.zeros_like(energies)
                 gradients = np.zeros_like(energies)
@@ -281,61 +281,118 @@ class PerformanceAnalyzer:
             df = pd.read_csv(output_filename)
 
         return df
-    
-    def get_plasma_parameters(
-        self,
-        dsr_energy_range: Tuple[float, float] = (10, 12),
-        primary_energy_range: Tuple[float, float] = (13, 15)
-    ) -> Tuple[float, float, float, float, Tuple[float, float], Tuple[float, float], np.ndarray, np.ndarray, np.ndarray, float]:
-        """
-        Get plasma parameters from the spectrometer object, assuming the incident particles are neutrons.
-        
-        Args:
-            n_bins:
-                Number of bins to use for histogram
-            dsr_energy_range:
-                Energy range for DSR in MeV
-            primary_energy_range:
-                Energy range for primary neutrons in MeV
-            
-        Returns:
-            Tuple of (dsr, plasma_temperature, fwhm, dsr_energy_range, primary_energy_range, energies, energies_std, response, background)
-        """
-        response, background, energies, energies_std = self._get_incident_spectrum()
-        
-        # Calculate dsr
-        ds_idx = (energies > dsr_energy_range[0]) & (energies < dsr_energy_range[1])
-        primary_idx = (energies > primary_energy_range[0]) & (energies < primary_energy_range[1])
-        dsr = np.sum(response[ds_idx]) / np.sum(response[primary_idx])
-        # TODO: Add dsr uncertainty
-        
-        # Calculate plasma temperature
-        # Find FWHM of 14.1 MeV peak
-        # From J A Frenje 2020 Plasma Phys. Control. Fusion 62 023001
-        left_edge, right_edge = self._get_fwhm(response, energies)
-        fwhm = (right_edge - left_edge)
-        m_rat = 5.0 # sum of neutron plus alpha mass divided by neutron mass
-        plasma_temperature = 9e-5 * m_rat / self.spectrometer.reference_energy * (fwhm * 1000)**2
-        
-        return dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std, response, background
 
-    def _get_fwhm(self, hist, edges) -> Tuple[float, float]:
+    def build_response_matrix(
+        self,
+        energy_grid: np.ndarray,
+        num_recoils_per_energy: int = 10000,
+        include_kinematics: bool = True,
+        include_stopping_power_loss: bool = True,
+        output_filename: Optional[str] = None,
+        reset: bool = True,
+        executor: Optional[Executor] = None,
+        max_workers: Optional[int] = None,
+    ) -> Dict[str, np.ndarray]:
         """
-        Get full width at half maximum (FWHM) of largest peak of a histogram.
+        Build the instrument response matrix for each foil.
+
+        Returns a dict mapping foil material name to a response matrix R of shape
+        (n_energies, n_channels).  R[i, k] is the expected signal in hodoscope channel
+        k per foil-face incident particle of energy energy_grid[i] — pure instrument physics,
+        independent of source geometry. Foil efficiency and y-acceptance are applied
+        inside get_recoil_x_map.
+
+        To convert to "per source particle" multiply R by foil_solid_angle_fraction.
+        To recover total source yield after unfolding, divide the summed recovered
+        spectrum by foil_solid_angle_fraction:
+            Y = f_recovered.sum() / spectrometer.foil_solid_angle_fraction
+
+        Energies outside a foil's acceptance range contribute zero rows for that foil.
+
+        Files are saved as <data_directory>/response_matrix_<foil>.npy (or, if
+        output_filename is supplied, <output_filename>_<foil>.npy).
+
+        Args:
+            energy_grid: 1-D array of incident particle energies [MeV] at which to evaluate R.
+            num_recoils_per_energy: Monte Carlo rays per energy point.
+            include_kinematics: Pass through to generate_monte_carlo_rays.
+            include_stopping_power_loss: Pass through to generate_monte_carlo_rays.
+            output_filename: Base path for .npy cache files (foil name is appended).
+                             Defaults to <data_directory>/response_matrix.
+            reset: If True, regenerate and save.  If False, load from file.
+            executor: Worker pool to use (if None, a fresh pool is created).
+            max_workers: Maximum worker processes (None -> CPU count).
+
+        Returns:
+            Dict mapping foil material name -> np.ndarray of shape (n_energies, n_channels).
+            For dual-foil setups the dict has two keys, one per foil.
         """
-        peak_idx = np.argmax(hist)
-        half_max = hist[peak_idx] / 2.0
-        
-        # Find leftmost and rightmost crossings
-        left_indices = np.where(hist[:peak_idx] >= half_max)[0]
-        right_indices = np.where(hist[peak_idx:] >= half_max)[0] + peak_idx
-        
-        if len(left_indices) == 0 or len(right_indices) == 0:
-            return 0.0, 0.0
-        left_idx = left_indices[0]
-        right_idx = right_indices[-1]
-        return edges[left_idx], edges[right_idx]
-    
+        # Determine spectrometers to analyze (mirrors generate_performance_curve)
+        spectrometers = [self.spectrometer]
+        if hasattr(self, 'dual_spectrometer'):
+            spectrometers.append(self.dual_spectrometer)
+
+        base = output_filename if output_filename is not None else f'{self.spectrometer.data_directory}/response_matrix'
+
+        def _path(key):
+            return f'{base}_{key}.npy'
+
+        n_energies = len(energy_grid)
+
+        # Build a work list: each entry is (spec, tqdm_label, [(key, hodoscope), ...]).
+        # The simulation runs once per (spec, energy); binnings lists which (key, hodoscope)
+        # pairs to fill from that simulation result.
+        work = [
+            (spec, spec.conversion_foil.foil_material,
+             [(spec.conversion_foil.foil_material, spec.hodoscope)])
+            for spec in spectrometers
+        ]
+
+        all_keys = [key for _, _, binnings in work for key, _ in binnings]
+
+        # Load from file if not resetting; otherwise build empty matrices to fill in
+        if not reset:
+            matrices = {}
+            for key in all_keys:
+                matrices[key] = np.load(_path(key))
+                print(f'Response matrix {key} loaded from {_path(key)}')
+            return matrices
+
+        matrices = {
+            key: np.zeros((n_energies, hodo.total_channels))
+            for _, _, binnings in work
+            for key, hodo in binnings
+        }
+
+        for spec, label, binnings in work:
+            print(f'\nBuilding response matrix for {label}...')
+            for i, energy in enumerate(tqdm(energy_grid, desc=label)):
+                if energy < spec.min_incident_energy or energy > spec.max_incident_energy:
+                    continue
+                spec.generate_monte_carlo_rays(
+                    np.array([energy]),
+                    np.array([1.0]),
+                    num_recoils_per_energy,
+                    include_kinematics,
+                    include_stopping_power_loss,
+                    save_beam=False,
+                    executor=executor,
+                    max_workers=max_workers,
+                )
+                spec.apply_transfer_map(
+                    save_beam=False,
+                    executor=executor,
+                    max_workers=max_workers,
+                )
+                for key, hodoscope in binnings:
+                    signal, _, _ = self.get_recoil_x_map(spectrometer=spec, hodoscope=hodoscope)
+                    matrices[key][i, :] = signal
+
+        for key, R in matrices.items():
+            np.save(_path(key), R)
+            print(f'Response matrix {key} saved to {_path(key)}')
+        return matrices
+
     def _load_performance_curve(self, performance_curve_file: Optional[str] = None) -> Union[pd.DataFrame, None]:
         """
         Loads comprehensive performance curve for analysis
@@ -349,58 +406,31 @@ class PerformanceAnalyzer:
             warnings.warn(f'Performance curve file {performance_curve_file} not found. May need to generate first.', RuntimeWarning)
             return
         
-    def _get_incident_spectrum(
-        self,
-        particle_yield: Optional[float] = None
-    ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
-        """
-        Get incident particle mean energy based on the binned response.
-
-        Returns:
-            response: np.ndarray of detector response values
-            background: float of total background contribution
-            incident_energies: np.ndarray of incident energies
-            incident_energies_std: np.ndarray of incident energy uncertainties
-        """
-        signal_per_bin, _, _ = self.get_recoil_x_map(particle_yield)
-        hodoscope = self.spectrometer.hodoscope
-        x_positions = hodoscope.channel_centers  # meters
-        response_values = signal_per_bin
-
-        # TODO: Background calculation requires background CSV files.
-        # Call hodoscope.get_background(neutron_file, photon_file) and sum per-channel arrays.
-        total_background = 0.0
-        
-        # Load comprehensive performance curve
-        performance_df = self._load_performance_curve()
-        if performance_df is None:
-            raise ValueError('Performance curve file not found. May need to generate first.')
-        incident_energies = performance_df['energy [MeV]']
-        position_mean = performance_df['position [m]']
-        position_width = performance_df['position width [m]']
-        gradient = performance_df['gradient [m/MeV]']
-        
-        # Interpolate to get the energies for the x positions
-        energies = np.interp(x_positions, position_mean, incident_energies)
-        # Calculate energy uncertainty sigma_E = sigma_x / |dx/dE|
-        energies_std = np.interp(x_positions, position_mean, position_width / np.abs(gradient))
-        
-        return response_values, total_background, energies, energies_std
-    
-    def _get_foil_efficiency(self, energies: np.ndarray) -> np.ndarray:
+    def _get_foil_efficiency(self, energies: np.ndarray, spectrometer: Optional[MPRSpectrometer] = None) -> np.ndarray:
         """
         Get the foil efficiency for a given set of incident particle energies.
+
+        Args:
+            energies: Incident particle energies in MeV.
+            spectrometer: Spectrometer whose foil efficiency to look up.  Defaults to
+                          self.spectrometer.  When the performance CSV contains data for
+                          multiple foils (dual-foil case), only the rows matching this
+                          foil's material are used.
         """
+        spec = spectrometer if spectrometer is not None else self.spectrometer
         performance_df = self._load_performance_curve()
         if performance_df is not None:
+            if 'foil' in performance_df.columns:
+                foil_name = spec.conversion_foil.foil_material
+                performance_df = performance_df[performance_df['foil'] == foil_name]
             incident_energies = performance_df['energy [MeV]']
             total_efficiencies = performance_df['total efficiency']
-            
+
             # Interpolate to get the efficiencies for the incident energies
             efficiencies = np.interp(energies, incident_energies, total_efficiencies)
         else:
             efficiencies = np.ones(len(energies))
-        
+
         return efficiencies
     
     def get_recoil_density_map(
@@ -496,21 +526,22 @@ class PerformanceAnalyzer:
     
     def get_recoil_x_map(
         self,
-        particle_yield: Optional[float] = None,
         time_gate_percentiles: Tuple[float, float] = (0, 100),
+        spectrometer: Optional[MPRSpectrometer] = None,
+        hodoscope=None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Bin the recoil beam into 1-D x channels and compute signal, y-coverage, and per-channel
         signal arrival-time windows.
 
+        Returns signal in [particles / foil-face neutron] — pure instrument response,
+        independent of source geometry.  To obtain physical counts, multiply the result
+        by foil_solid_angle_fraction * particle_yield after calling this method.
+
         The y-acceptance of each channel is determined entirely by the hodoscope: particles are
         accepted when |y - hodoscope.y_center| <= channel_height/2.  In a dual-foil setup each
         hodoscope's y_center and channel_height together define its physical half of the detector
         with no additional restriction parameter required.
-
-        When detector_used is False, signal is in [particles/source] per channel.
-        When detector_used is True, signal is in [MeV deposited/source] per channel.
-        Scaling by particle_yield gives [particles] or [MeV deposited] respectively.
 
         Per-channel time windows are computed when hodoscope.use_time_gating is True.  For each
         channel the window spans the requested percentile range of detector arrival times of
@@ -518,7 +549,6 @@ class PerformanceAnalyzer:
         channel_time_windows array is filled with NaN.
 
         Args:
-            particle_yield: Total source yield; scales the returned signal.
             time_gate_percentiles: (low_percentile, high_percentile) pair defining the signal
                                    time window per channel.  Defaults to (0, 100) to accept
                                    all arrival times.
@@ -529,14 +559,16 @@ class PerformanceAnalyzer:
             coverage_per_bin [0-1],
             channel_time_windows of shape (n_channels, 2) [s] — columns are [t_min, t_max].
         """
-        if len(self.spectrometer.output_beam) == 0:
+        spec = spectrometer if spectrometer is not None else self.spectrometer
+
+        if len(spec.output_beam) == 0:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
 
-        hodoscope = self.spectrometer.hodoscope
-        x_positions = self.spectrometer.output_beam[:, 0] * 100  # m to cm
-        y_positions = self.spectrometer.output_beam[:, 2] * 100  # m to cm
-        input_energies = self.spectrometer.input_beam[:, 6]
-        output_energies_MeV = self.spectrometer.reference_energy * (1 + self.spectrometer.output_beam[:, 5])
+        hodoscope = hodoscope if hodoscope is not None else spec.hodoscope
+        x_positions = spec.output_beam[:, 0] * 100  # m to cm
+        y_positions = spec.output_beam[:, 2] * 100  # m to cm
+        input_energies = spec.input_beam[:, 6]
+        output_energies_MeV = spec.reference_energy * (1 + spec.output_beam[:, 5])
         total_particles = len(x_positions)
 
         # Determine bin edges, channel heights, and detector y-center
@@ -547,10 +579,10 @@ class PerformanceAnalyzer:
         n_bins = len(bin_edges_cm) - 1
 
         # Per-particle weights
-        foil_efficiencies = self._get_foil_efficiency(input_energies)
+        foil_efficiencies = self._get_foil_efficiency(input_energies, spectrometer=spec)
         sensitivities = hodoscope.get_detector_response(
             energies=output_energies_MeV,
-            particle=self.spectrometer.conversion_foil.particle
+            particle=spec.conversion_foil.particle
         )
         weights = foil_efficiencies * sensitivities
 
@@ -576,26 +608,16 @@ class PerformanceAnalyzer:
             # Compute the signal arrival-time window for this channel from the percentile range
             # of detector arrival times of all accepted signal particles.
             if hodoscope.use_time_gating:
-                arrival_times = self.spectrometer.output_beam[:, 4]
+                arrival_times = spec.output_beam[:, 4]
                 times_in_channel = arrival_times[accepted]
                 if len(times_in_channel) > 0:
                     channel_time_windows[b, 0] = np.percentile(times_in_channel, time_gate_percentiles[0])
                     channel_time_windows[b, 1] = np.percentile(times_in_channel, time_gate_percentiles[1])
 
-        # Normalise to particles/source
+        # Normalise to per foil-face neutron — pure instrument response.
         signal_per_bin /= total_particles
         total_per_bin /= total_particles
-
-        if self.spectrometer.foil_solid_angle_fraction:
-            signal_per_bin *= self.spectrometer.foil_solid_angle_fraction
-            total_per_bin *= self.spectrometer.foil_solid_angle_fraction
-
-        # Yield scaling
-        if particle_yield:
-            signal_per_bin *= particle_yield
-            total_per_bin *= particle_yield
 
         coverage_per_bin = np.where(total_per_bin > 0, signal_per_bin / total_per_bin, 0.0)
 
         return signal_per_bin, coverage_per_bin, channel_time_windows
-        
