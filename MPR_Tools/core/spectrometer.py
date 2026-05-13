@@ -31,7 +31,7 @@ class MPRSpectrometer:
         max_energy: float,
         hodoscope: Hodoscope,
         run_directory: str = '.',
-        foil_solid_angle_fraction: Optional[float] = None,
+        foil_geometric_factor: Optional[float] = None,
         target_to_foil_distance: Optional[float] = None,
         burn_duration: Optional[float] = None,
         central_ray_length: Optional[float] = None,
@@ -47,7 +47,7 @@ class MPRSpectrometer:
             max_energy: Maximum recoil particle acceptance energy in MeV
             hodoscope: Hodoscope detector system
             run_directory: Directory for saving run data and figures
-            foil_solid_angle_fraction: Geometric factor normalizing the response to account for solid angle subtended by the foil from the source.
+            foil_geometric_factor: Geometric factor normalizing the response to account for fraction of incident particles subtended by the foil from the source.
             target_to_foil_distance: Distance from neutron source to foil in meters. When provided,
                                      the arrival time at the foil is calculated from the incident
                                      particle's energy and mass. If None, arrival time is set to 0.
@@ -63,7 +63,7 @@ class MPRSpectrometer:
         self.min_energy = min_energy
         self.max_energy = max_energy
         self.hodoscope = hodoscope
-        self.foil_solid_angle_fraction = foil_solid_angle_fraction
+        self.foil_geometric_factor = foil_geometric_factor
         self.target_to_foil_distance = target_to_foil_distance  # m
         self.burn_duration = burn_duration  # s
         self.central_ray_length = central_ray_length

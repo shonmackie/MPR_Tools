@@ -33,7 +33,7 @@ class DualFoilSpectrometer:
         cd2_max_energy: float,
         hodoscope_ch2: Hodoscope,
         hodoscope_cd2: Hodoscope,
-        foil_solid_angle_fraction: Optional[float] = None,
+        foil_geometric_factor: Optional[float] = None,
         target_to_foil_distance: Optional[float] = None,
         burn_duration: Optional[float] = None,
         central_ray_length: Optional[float] = None,
@@ -62,7 +62,7 @@ class DualFoilSpectrometer:
             cd2_max_energy: Maximum acceptance energy in MeV for CD2 foil
             hodoscope_ch2: Hodoscope for the CH2 (proton) spectrometer
             hodoscope_cd2: Hodoscope for the CD2 (deuteron) spectrometer
-            foil_solid_angle_fraction: Fraction of solid angle covered by conversion foil as seen from the neutron source.
+            foil_geometric_factor: Fraction of incident particles covered by conversion foil as seen from the particle source.
                 Used for yield calculations and plotting. Divided by 2 for each foil since they share the same radius.
             target_to_foil_distance: Distance from neutron source to foil in meters
             burn_duration: FWHM duration of the neutron source in seconds
@@ -101,7 +101,7 @@ class DualFoilSpectrometer:
         )
         shared_spec_kwargs = dict(
             run_directory=run_directory,
-            foil_solid_angle_fraction=foil_solid_angle_fraction / 2 if foil_solid_angle_fraction is not None else None,  # Divide by 2 since each foil covers half the area
+            foil_geometric_factor=foil_geometric_factor / 2 if foil_geometric_factor is not None else None,  # Divide by 2 since each foil covers half the area
             target_to_foil_distance=target_to_foil_distance,
             burn_duration=burn_duration,
             central_ray_length=central_ray_length,

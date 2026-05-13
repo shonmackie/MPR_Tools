@@ -478,9 +478,9 @@ class PerformanceAnalyzer:
         response_map /= (cell_area_cm2 * total_recoils)
         
         # Add source-to-foil geometric factor
-        if self.spectrometer.foil_solid_angle_fraction:
-            density_map *= self.spectrometer.foil_solid_angle_fraction
-            response_map *= self.spectrometer.foil_solid_angle_fraction
+        if self.spectrometer.foil_geometric_factor:
+            density_map *= self.spectrometer.foil_geometric_factor
+            response_map *= self.spectrometer.foil_geometric_factor
             
         # Add yield multiplier
         if particle_yield:
@@ -586,9 +586,9 @@ class PerformanceAnalyzer:
         signal_per_bin /= total_particles
         total_per_bin /= total_particles
 
-        if self.spectrometer.foil_solid_angle_fraction:
-            signal_per_bin *= self.spectrometer.foil_solid_angle_fraction
-            total_per_bin *= self.spectrometer.foil_solid_angle_fraction
+        if self.spectrometer.foil_geometric_factor:
+            signal_per_bin *= self.spectrometer.foil_geometric_factor
+            total_per_bin *= self.spectrometer.foil_geometric_factor
 
         # Yield scaling
         if particle_yield:
