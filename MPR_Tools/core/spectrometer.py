@@ -8,6 +8,7 @@ from tqdm import tqdm
 from concurrent.futures import Executor
 import multiprocessing as mp
 
+from ..config.constants import NEUTRON_MASS, LIGHT_SPEED, MASS_TO_MEV
 from .conversion_foil import ConversionFoil
 from .hodoscope import Hodoscope
 from .parallelization import run_concurrently
@@ -29,11 +30,15 @@ class MPRSpectrometer:
         min_energy: float,
         max_energy: float,
         hodoscope: Hodoscope,
-        run_directory: str = '.'
+        run_directory: str = '.',
+        foil_geometric_factor: Optional[float] = None,
+        target_to_foil_distance: Optional[float] = None,
+        burn_duration: Optional[float] = None,
+        central_ray_length: Optional[float] = None,
     ):
         """
         Initialize complete MPR spectrometer system.
-        
+
         Args:
             conversion_foil: ConversionFoil object
             transfer_map_path: Path to COSY transfer map file
@@ -42,6 +47,14 @@ class MPRSpectrometer:
             max_energy: Maximum recoil particle acceptance energy in MeV
             hodoscope: Hodoscope detector system
             run_directory: Directory for saving run data and figures
+            foil_geometric_factor: Geometric factor normalizing the response to account for fraction of incident particles subtended by the foil from the source.
+            target_to_foil_distance: Distance from neutron source to foil in meters. When provided,
+                                     the arrival time at the foil is calculated from the incident
+                                     particle's energy and mass. If None, arrival time is set to 0.
+            burn_duration: FWHM duration of the neutron source in seconds. When provided (along with
+                           target_to_foil_distance), Gaussian timing noise is added to each particle's foil arrival time.
+            central_ray_length: Path length of the reference (central) ray through the
+                spectrometer in meters.
         """
         print(f'Initializing Magnetic {conversion_foil.particle.capitalize()} Recoil Spectrometer...')
         
@@ -50,6 +63,10 @@ class MPRSpectrometer:
         self.min_energy = min_energy
         self.max_energy = max_energy
         self.hodoscope = hodoscope
+        self.foil_geometric_factor = foil_geometric_factor
+        self.target_to_foil_distance = target_to_foil_distance  # m
+        self.burn_duration = burn_duration  # s
+        self.central_ray_length = central_ray_length
         self.figure_directory = f'{run_directory}/figures'
         self.data_directory = f'{run_directory}/data'
         
@@ -69,7 +86,9 @@ class MPRSpectrometer:
         print(f'Loaded COSY transfer map from {transfer_map_path}\n')
         
         # Initialize recoil beam arrays
+        # columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy
         self.input_beam: np.ndarray = np.zeros(0)
+        # columns: x0, p_x_relative, y0, p_y_relative, detector_time, energy_relative
         self.output_beam: np.ndarray = np.zeros(0)
         
         print(f'MPR spectrometer initialization complete.\n')
@@ -109,10 +128,13 @@ class MPRSpectrometer:
         )
         energy_offset_values = energy_values - self.reference_energy
         
-        particle_rest_energy = self.conversion_foil.particle_mass*931.494  # MeV
+        particle_rest_energy = self.conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1 + self.reference_energy/particle_rest_energy  # Lorentz factor of the central ray
 
-        self.input_beam = np.zeros((num_rays, 6))
+        # 7 columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy
+        # Characteristic rays carry no time information, so foil_time is set to 0.
+        # incident_energy is set to 0 (no single incident energy for characteristic rays).
+        self.input_beam = np.zeros((num_rays, 7))
         print(f'Characteristic ray energy range: {min_energy:.3f}-{max_energy:.3f} MeV')
         
         ray_index = 0
@@ -122,26 +144,33 @@ class MPRSpectrometer:
         for energy_offset, energy in tqdm(zip(energy_offset_values, energy_values), desc=f'Generating {num_rays} characteristic rays...'):
             
             if radial_points == 0:
-                # On-axis ray only
-                self.input_beam[ray_index] = [0, 0, 0, 0, energy_offset, energy]
+                # On-axis ray only; foil_time = 0 (no time info for characteristic rays)
+                self.input_beam[ray_index] = [0, 0, 0, 0, 0, energy_offset, 0]
                 ray_index += 1
             else:
                 # Full phase space grid
                 for r_idx in range(radial_points + 1):
                     for ang_idx in range(angular_points):
                         theta = 2 * np.pi * ang_idx / angular_points
-                        x_foil = (self.conversion_foil.foil_radius * np.cos(theta) * 
+                        x_foil = (self.conversion_foil.foil_radius * np.cos(theta) *
                                  r_idx / radial_points)
-                        y_foil = (self.conversion_foil.foil_radius * np.sin(theta) * 
+                        y_foil = (self.conversion_foil.foil_radius * np.sin(theta) *
                                  r_idx / radial_points)
-                        
+
                         for ar_idx in range(aperture_radial_points + 1):
                             for aang_idx in range(aperture_angular_points):
-                                phi = 2 * np.pi * aang_idx / aperture_angular_points
-                                x_aperture = (x_foil + self.conversion_foil.aperture_radius * 
-                                            np.cos(phi) * ar_idx / aperture_radial_points)
-                                y_aperture = (y_foil + self.conversion_foil.aperture_radius * 
-                                            np.sin(phi) * ar_idx / aperture_radial_points)
+                                if self.conversion_foil.aperture_type == 'circ':
+                                    phi = 2 * np.pi * aang_idx / aperture_angular_points
+                                    x_aperture = (x_foil + self.conversion_foil.aperture_radius *
+                                                np.cos(phi) * ar_idx / aperture_radial_points)
+                                    y_aperture = (y_foil + self.conversion_foil.aperture_radius *
+                                                np.sin(phi) * ar_idx / aperture_radial_points)
+                                else:
+                                    x_frac = ar_idx / aperture_radial_points - 0.5
+                                    y_frac = (aang_idx / (aperture_angular_points - 1) - 0.5
+                                              if aperture_angular_points > 1 else 0.0)
+                                    x_aperture = x_foil + self.conversion_foil.aperture_width * x_frac
+                                    y_aperture = y_foil + self.conversion_foil.aperture_height * y_frac
                                 
                                 # Calculate angles
                                 total_distance = np.sqrt(
@@ -156,8 +185,8 @@ class MPRSpectrometer:
                                 p_x_relative = p_relative * sin_angle_x
                                 p_y_relative = p_relative * sin_angle_y
 
-                                # Check for duplicates
-                                ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, energy_offset, energy]
+                                # foil_time = 0 (no time info for characteristic rays); incident_energy = 0
+                                ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, 0, energy_offset, 0]
                                 is_duplicate = False
                                 
                                 for prev_idx in range(ray_index):
@@ -176,7 +205,7 @@ class MPRSpectrometer:
     def generate_monte_carlo_rays(
         self,
         incident_energies: np.ndarray,
-        energy_distribution: np.ndarray,
+        probability_distribution: np.ndarray,
         num_recoil_particles: int,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -184,21 +213,25 @@ class MPRSpectrometer:
         save_beam: bool = True,
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
-        y_restriction: Optional[Literal['positive', 'negative']] = None
+        y_restriction: Optional[Literal['positive', 'negative']] = None,
+        continuous_energy_sampling: bool = True,
     ) -> None:
         """
         Generate recoil rays from incident particle energy distribution using Monte Carlo with multiprocessing.
-        
+
         Args:
-            incident_energies: Array of incident particle energies in MeV
-            energy_distribution: Relative probability distribution (normalized automatically)
-            num_recoil_particles: Number of recoil particles to simulate
-            include_kinematics: Include kinematic energy transfer
-            include_stopping_power_loss: Include stopping power energy loss via SRIM
-            z_sampling: Depth sampling method ('exp' or 'uni')
-            save_beam: Whether or not to save input beam to csv
-            executor: Pool of workers to use (if None, we will make our own)
-            max_workers: Maximum number of worker processes (None for CPU count)
+            incident_energies:   Array of incident particle energies in MeV.
+            probability_distribution: Relative probability for each energy bin. Normalized automatically.
+            num_recoil_particles: Number of recoil particles to simulate.
+            include_kinematics: Include kinematic energy transfer.
+            include_stopping_power_loss: Include stopping power energy loss via SRIM.
+            z_sampling: Depth sampling method ('exp' or 'uni').
+            save_beam: Whether to save input beam to CSV.
+            executor: Pool of workers to use (if None, a new pool is created).
+            max_workers: Maximum number of worker processes (None -> CPU count).
+            y_restriction: Restrict sampled foil y position to 'positive' or 'negative' half.
+            continuous_energy_sampling: If True, sample energy continuously via inverse CDF. If False,
+                                        sample from discrete bin centres.
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
@@ -209,21 +242,22 @@ class MPRSpectrometer:
         particles_per_process = num_recoil_particles // max_workers
         remaining_particles = num_recoil_particles % max_workers
         
-        # Narrow energy distribution unless doing monoenergetic performance
+        # Narrow energy distribution unless doing monoenergetic performance analysis.
         if len(incident_energies) > 1:
-            # Only use incident energies that can possibly produce recoil energies within acceptance range
-            idx = incident_energies >= self.min_energy
+            # Only use incident energies that can possibly produce recoil energies within acceptance range.
+            # Both min and max bounds are applied so out-of-acceptance bins don't influence the distribution.
+            idx = (incident_energies >= self.min_energy) & (incident_energies <= self.max_energy)
             incident_energies = incident_energies[idx]
-            energy_distribution = energy_distribution[idx]
-        
+            probability_distribution = probability_distribution[idx]
+
         # Weight energy distribution by scattering cross section
-        interaction_probability = np.zeros_like(energy_distribution)
+        interaction_probability = np.zeros_like(probability_distribution)
         for interaction in self.conversion_foil.interactions:
             if interaction.generates_recoil_particles:
                 interaction_probability += interaction.get_cross_section(incident_energies)
-        weighted_distribution = energy_distribution * interaction_probability
+        weighted_distribution = probability_distribution * interaction_probability
         weighted_distribution /= np.sum(weighted_distribution)
-        
+
         # Execute in parallel
         worker_args = []
         for i in range(max_workers):
@@ -240,7 +274,10 @@ class MPRSpectrometer:
                     z_sampling,
                     self.conversion_foil,
                     self.reference_energy,
-                    y_restriction
+                    self.target_to_foil_distance,
+                    self.burn_duration,
+                    y_restriction,
+                    continuous_energy_sampling,
                 ))
         
         output_batches = run_concurrently(
@@ -265,37 +302,46 @@ class MPRSpectrometer:
         weighted_distribution: np.ndarray,
         include_kinematics: bool,
         include_stopping_power_loss: bool,
-        z_sampling: str,
+        z_sampling: Literal['exp', 'uni'],
         conversion_foil: ConversionFoil,
         reference_energy: float,
+        target_to_foil_distance: Optional[float],
+        burn_duration: Optional[float],
         y_restriction: Optional[Literal['positive', 'negative']],
+        continuous_energy_sampling: bool,
         progress_counter,
         progress_lock,
     ) -> np.ndarray:
-        """Generate a batch of recoil particles in a separate process."""
-        # Create independent random number generator
+        """
+        Generate a batch of recoil particles in a separate process.
+
+        Each row of the returned array is:
+            [x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy]
+        """
+        # Create an independent RNG for this worker to ensure reproducibility
         rng = np.random.default_rng(seed_offset)
-        
-        particle_rest_energy = conversion_foil.particle_mass*931.494  # MeV
-        reference_gamma = 1 + reference_energy/particle_rest_energy  # Lorentz factor of the central ray
-        
-        batch_results = np.empty((0, 6), dtype=float)
-        
+
+        particle_rest_energy = conversion_foil.particle_mass * MASS_TO_MEV  # MeV
+        reference_gamma = 1 + reference_energy / particle_rest_energy   # Lorentz factor of the central ray
+
+        batch_results = np.empty((0, 7), dtype=float)
+
         while len(batch_results) < batch_size:
-            try:                
-                # Generate recoil particle with the worker's RNG
-                # The recoil particles generated are already accepted by the aperture
-                x0, y0, theta_s, phi_s, incident_energy, recoil_energy = conversion_foil.generate_recoil_particle(
-                    incident_energies,
-                    weighted_distribution,
-                    include_kinematics,
-                    include_stopping_power_loss,
-                    z_sampling=z_sampling,
-                    rng=rng,  # Pass the worker's RNG
-                    y_restriction=y_restriction
+            try:
+                x0, y0, theta_s, phi_s, incident_energy, recoil_energy = (
+                    conversion_foil.generate_recoil_particle(
+                        incident_energies,
+                        weighted_distribution,
+                        include_kinematics,
+                        include_stopping_power_loss,
+                        z_sampling=z_sampling,
+                        rng=rng,
+                        y_restriction=y_restriction,
+                        continuous_energy_sampling=continuous_energy_sampling,
+                    )
                 )
-                
-                # Convert to spectrometer coordinates
+
+                # Convert foil position and scattering angles to COSY phase-space coordinates
                 x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
                 y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
                 
@@ -312,17 +358,39 @@ class MPRSpectrometer:
                 
                 energy_relative = (recoil_energy - reference_energy) / reference_energy
                 
-                batch_results = np.vstack((batch_results, np.array([x0, p_x_relative, y0, p_y_relative, energy_relative, incident_energy])))
+                # Calculate foil arrival time
+                if conversion_foil.incident_particle == 'photon':
+                    velocity = LIGHT_SPEED  # m/s
+                elif conversion_foil.incident_particle == 'neutron':
+                    # Calculate velocity of the incident particle with its own relativistic correction
+                    incident_rest_energy = NEUTRON_MASS * MASS_TO_MEV # MeV
+                    incident_gamma = 1 + incident_energy / incident_rest_energy
+                    velocity = LIGHT_SPEED * np.sqrt(1.0 - 1.0 / incident_gamma**2)  # m/s
+                else:
+                    raise ValueError(f"Unsupported incident particle type: {conversion_foil.incident_particle}")
+                foil_time = target_to_foil_distance / velocity if target_to_foil_distance else 0.0
+                
+                # Add Gaussian timing noise if burn duration is provided
+                if burn_duration:
+                    # Convert FWHM burn duration to standard deviation for Gaussian noise
+                    timing_noise = rng.normal(0, burn_duration / (2 * np.sqrt(2 * np.log(2))))
+                    foil_time += timing_noise
+
+                # Row: [x0, px, y0, py, foil_time, energy_relative, incident_energy]
+                batch_results = np.vstack((
+                    batch_results,
+                    np.array([x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy])
+                ))
                 
                 # Update progress counter thread-safely
                 with progress_lock:
                     progress_counter.value += 1
-                    
+
             except Exception as e:
                 print(e)
                 print(f'Failed to generate {self.conversion_foil.particle}')
                 pass  # Skip failed generations
-        
+
         return batch_results
     
     def apply_transfer_map(
@@ -351,11 +419,20 @@ class MPRSpectrometer:
             return
         
         print(f'Applying order {map_order} transfer map to {num_recoil_particles} {self.conversion_foil.particle}s using {max_workers} processes...')
-        
+
+        # Precompute reference-particle constants for COSY l -> transit time conversion.
+        # COSY Eq. 1: l = -(t - t0) * v0 * gamma / (1 + gamma)
+        particle_rest_energy = self.conversion_foil.particle_mass * MASS_TO_MEV  # MeV
+        reference_gamma = 1.0 + self.reference_energy / particle_rest_energy
+        reference_velocity = LIGHT_SPEED * np.sqrt(1.0 - 1.0 / reference_gamma**2)        # m/s
+        reference_detector_time = (
+            self.central_ray_length / reference_velocity if self.central_ray_length is not None else 0.0
+        )
+
         # Calculate recoil particles per process
         particles_per_process = num_recoil_particles // max_workers
         remaining_particles = num_recoil_particles % max_workers
-        
+
         # Execute in parallel
         worker_args = []
         start_idx = 0
@@ -363,12 +440,11 @@ class MPRSpectrometer:
             batch_size = particles_per_process + (1 if i < remaining_particles else 0)
             if batch_size > 0:  # Only submit if there's work to do
                 end_idx = start_idx + batch_size
-                
+
                 # Package parameters for worker
                 worker_args.append((
                     self.input_beam[start_idx:end_idx],
                     self.transfer_map,
-                    self.conversion_foil.relative_mass,
                     map_order,
                 ))
                 
@@ -382,6 +458,14 @@ class MPRSpectrometer:
         
         self.output_beam = np.concatenate(output_batches)
         
+        # Convert COSY l coordinate to detector time
+        # Eq (1), Sec 3.2.1: l = -(t - t0) * v0 * gamma / (1 + gamma)
+        energy_MeV = self.reference_energy * (1 + self.output_beam[:, 5])  # Convert relative energy back to absolute energy in MeV
+        gamma = 1 + energy_MeV / particle_rest_energy  # Lorentz factor of each ray based on its energy
+        detector_time = -self.output_beam[:, 4] / (reference_velocity * gamma) * (1 + gamma) + reference_detector_time
+        detector_time += self.input_beam[:, 4]  # Add back foil arrival time to get absolute detector time
+        self.output_beam[:, 4] = detector_time # Overwrite l column with detector time
+        
         print('Transfer map applied successfully!')
         
         # Save output beam to file
@@ -392,59 +476,62 @@ class MPRSpectrometer:
         self,
         input_batch: np.ndarray,
         transfer_map: np.ndarray,
-        relative_mass: float,
         map_order: int,
         progress_counter,
         progress_lock
     ) -> np.ndarray:
         """
-        Worker method to apply transfer map to a batch of recoil particles.
-        
+        Worker method to apply the COSY transfer map to a batch of recoil particles.
+
         Args:
-            input_batch: Batch of input rays [N x 6]
-            transfer_map: Transfer map coefficients
-            relative_mass: Relative mass of recoil particle to proton, only used if mass is included in transfer map
-            map_order: Order of transfer map to apply
-            progress_counter: Shared counter for progress tracking
-            progress_lock: Lock for thread-safe progress updates
-            
+            input_batch: Input rays [N x 7]: x0, p_x_rel, y0, p_y_rel, foil_time, energy_rel, incident_energy.
+            transfer_map: COSY transfer map coefficients.
+            map_order: Maximum polynomial order of terms to include.
+            progress_counter: Shared counter for progress tracking.
+            progress_lock: Lock for thread-safe progress updates.
+
         Returns:
-            Batch of output rays [N x 5]
+            Output rays [N x 6]: x, p_x_rel, y, p_y_rel, detector_time, energy_rel.
         """
         batch_size = len(input_batch)
-        
-        ### Convert last column of transfer map to monomial powers for each term ###
-        # Need to convert term powers to integers
+
+        # Convert the last row of the transfer map (term indices) from integers to
+        # per-coordinate power arrays, e.g. 123456 to [1, 2, 3, 4, 5, 6]
         term_indices = transfer_map[-1].astype(int)
-        
+
         # Find maximum number of digits
         max_digits = len(str(np.max(term_indices)))
-        mass_included = max_digits >= 7 # Only 6 digits if mass is not included
-        
+
         # Convert to zero-padded strings
         term_indices_str = np.array([str(x).zfill(max_digits) for x in term_indices])
-        
+
         # Extract digits for each term
         term_powers_array = np.array([list(s) for s in term_indices_str], dtype=int)
-        
+
         ### Apply transfer map to each recoil ray ###
-        # Initialize output ray with input energy
-        output_batch = np.zeros((batch_size, 5))
-        output_batch[:, 4] = input_batch[:, 4]
-        
-        # Apply each map term
+        # Columns 0–4: COSY outputs [x, p_x, y, p_y, l] accumulated from the map.
+        # Column  5  : energy_relative passed through unchanged from the input.
+        output_batch = np.zeros((batch_size, 6))
+        output_batch[:, 5] = input_batch[:, 5]
+
+        # input_batch[:, 4] is the foil arrival time in seconds
+        # But for simplicity, the COSY map uses the l coordinate. We will assume that all particles arrive at the foil at the same time (t0) so that l_i=0.
+        # We will correct for the transit time to the foil and convert l_f to a detector time.
+        # Accumulate the polynomial transfer map term by term
         for j, term_powers in enumerate(term_powers_array):
             # Only include terms up to specified order
             if np.sum(term_powers) <= map_order:
-                # Calculate monomial term
-                monomial = np.prod([input_batch[:, k]**term_powers[k] for k in range(4)], axis=0) * input_batch[:, 4]**term_powers[5]
-                if mass_included:
-                    monomial *= relative_mass**term_powers[6]
-                    
-                # Add contributions to each coordinate
-                for coord in range(4):  # x, p_x, y, p_y
+                # Calculate monomial: x^p1 · a^p2 · y^p3 · b^p4 · l^p5 · deltaK^p6
+                monomial = (
+                    np.prod([input_batch[:, k]**term_powers[k] for k in range(4)], axis=0)
+                    * 0**term_powers[4] # Assume l_i = 0 for all particles since they all arrive at the foil at the same time (t0)
+                    * input_batch[:, 5]**term_powers[5]
+                )
+
+                # Add contributions to each COSY output coordinate: x, p_x, y, p_y, l
+                for coord in range(5):
                     output_batch[:, coord] += transfer_map[coord, j] * monomial
-            
+
             # Update progress counter thread-safely
             with progress_lock:
                 progress_counter.value += 1
@@ -475,8 +562,9 @@ class MPRSpectrometer:
             'p_x_relative': self.input_beam[:, 1],
             'y0': self.input_beam[:, 2],
             'p_y_relative': self.input_beam[:, 3],
-            'energy_relative': self.input_beam[:, 4],
-            'incident_energy': self.input_beam[:, 5]
+            'foil_time': self.input_beam[:, 4],
+            'energy_relative': self.input_beam[:, 5],
+            'incident_energy': self.input_beam[:, 6],
         })
         df.to_csv(filepath, index=False)
         print(f'Input beam saved to {filepath}')
@@ -491,7 +579,8 @@ class MPRSpectrometer:
             'p_x_relative': self.output_beam[:, 1],
             'y0': self.output_beam[:, 2],
             'p_y_relative': self.output_beam[:, 3],
-            'energy_relative': self.output_beam[:, 4]
+            'detector_time': self.output_beam[:, 4],
+            'energy_relative': self.output_beam[:, 5]
         })
         df.to_csv(filepath, index=False)
         print(f'Output beam saved to {filepath}')
@@ -514,11 +603,11 @@ class MPRSpectrometer:
             
         input_beam_df = pd.read_csv(input_beam_path)
         self.input_beam = input_beam_df.to_numpy()
-        
+
         # Read output beam
-        if output_beam_path == None:
+        if output_beam_path is None:
             output_beam_path = f'{self.data_directory}/output_beam.csv'
-            
+
         output_beam_df = pd.read_csv(output_beam_path)
         self.output_beam = output_beam_df.to_numpy()
         
@@ -548,11 +637,10 @@ class MPRSpectrometer:
         Returns:
             Dictionary containing system parameters
         """
-        return {
+        summary = {
             'foil_radius_cm': self.conversion_foil.foil_radius_cm,
             'foil_thickness_um': self.conversion_foil.thickness_um,
             'aperture_distance_cm': self.conversion_foil.aperture_distance_cm,
-            'aperture_radius_cm': self.conversion_foil.aperture_radius_cm,
             'aperture_type': self.conversion_foil.aperture_type,
             'particle': self.conversion_foil.particle,
             'reference_energy_MeV': self.reference_energy,
@@ -563,6 +651,12 @@ class MPRSpectrometer:
             'num_input_recoil_particles': len(self.input_beam),
             'num_output_recoil_particles': len(self.output_beam)
         }
+        if self.conversion_foil.aperture_type == 'circ':
+            summary['aperture_radius_cm'] = self.conversion_foil.aperture_radius_cm
+        else:
+            summary['aperture_width_cm'] = self.conversion_foil.aperture_width_cm
+            summary['aperture_height_cm'] = self.conversion_foil.aperture_height_cm
+        return summary
 
 
 def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float, bend: float, reference_energy: float, particle_mass: float) -> np.ndarray:
