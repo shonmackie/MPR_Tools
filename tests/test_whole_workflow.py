@@ -17,7 +17,7 @@ def test_whole_workflow():
             foil_material="CD2",
             aperture_type="circ",
         ),
-        "tests/test_map.txt",
+        "tests/map_first_order.txt",
         14.0,
         9.4, 15.6,
         Hodoscope(

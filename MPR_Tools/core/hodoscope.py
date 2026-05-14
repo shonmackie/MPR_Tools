@@ -24,9 +24,11 @@ class Hodoscope:
         detector_thickness: Optional[float] = None,
         use_time_gating: bool = False,
         y_center: float = 0.0,
+        tilt_angle=0.0,
+        arc_radius=np.inf,
     ):
         """
-        Initialize hodoscope detector array in one of three ways:
+        Initialize a linear or arc-shaped array of recoil particle detectors in one of three ways:
             as an array of identical detectors on either side of x=0 (the final position of the reference ray),
             from an array specifying detector positions and dimensions, or
             from a file containing such an array.
@@ -58,6 +60,9 @@ class Hodoscope:
                              When False (default), all background calculations integrate over the full time axis.
             y_center: Vertical center of the detector in cm (default 0). The y-acceptance of each channel is
                       [y_center - channel_height/2, y_center + channel_height/2].
+            tilt_angle: Incidence angle of the central ray on the detector, in degrees.  Positive angles mean the
+                        high-energy side is angled away from the magnets.
+            arc_radius: Radius of the arc formed by the detectors in cm, or inf if the hodoscope is flat.
         """
         # Calculate detector centers
         if channels is not None:
@@ -78,6 +83,10 @@ class Hodoscope:
             self.detector_used = True
         else:
             self.detector_used = False
+            
+        # Save detector shape parameters
+        self.tilt_angle = tilt_angle
+        self.arc_radius = arc_radius
 
         # Whether to use time-resolved background data for per-channel time gating.
         self.use_time_gating = use_time_gating
