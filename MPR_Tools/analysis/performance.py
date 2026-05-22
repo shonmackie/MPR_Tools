@@ -629,7 +629,7 @@ class PerformanceAnalyzer:
         Returns a dict mapping foil material name to R of shape (n_energies, n_channels).
         R[i, k] is the expected signal in hodoscope channel k per foil-face incident particle
         at energy energy_grid[i]. To convert to per-source-particle, multiply by
-        foil_solid_angle_fraction. Files are cached as <base>_<foil>.npy.
+        foil_geometric_factor. Files are cached as <base>_<foil>.npy.
 
         Args:
             energy_grid: 1-D array of incident energies [MeV].
