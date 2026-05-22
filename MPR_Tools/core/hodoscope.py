@@ -105,6 +105,9 @@ class Hodoscope:
         # Create array of channel heights from the right column (ignoring the last row)
         self.channel_heights = data[:-1, 1] * 1e-2
 
+        # Optional per-channel y-centers from column 3 (cm → m); None if not provided
+        self.channel_y_centers = data[:-1, 2] * 1e-2 if data.shape[1] >= 3 else None
+
         self.total_channels = data.shape[0] - 1
 
     def _calculate_channel_edges_from_parameters(
@@ -137,8 +140,9 @@ class Hodoscope:
         self.channel_centers = (self.channel_edges[:-1] + self.channel_edges[1:]) / 2
         self.channel_widths = np.diff(self.channel_edges)
         
-        # Channel heights are all the same
+        # Channel heights are all the same; no per-channel y-centers
         self.channel_heights = np.full(self.total_channels, detector_height)
+        self.channel_y_centers = None
 
     @property
     def detector_width_cm(self) -> float:
