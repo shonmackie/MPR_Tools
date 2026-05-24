@@ -28,7 +28,7 @@ class PerformanceAnalyzer:
             raise ValueError(f"Unsupported spectrometer type: {type(spectrometer)}")
     
     @staticmethod
-    def fwfm(data: np.ndarray, fractional_max, bandwidth_method: str | float = "scott", _recursions=0) -> tuple[float, float]:
+    def fwfm(data: np.ndarray, fractional_max, bandwidth_method: str | float = "scott", _recursions=0) -> tuple[float, float, float, float]:
         """
         Estimate the full-width fractional-max (FWFM) of a 1D distribution using a KDE.
 
@@ -41,7 +41,8 @@ class PerformanceAnalyzer:
 
         Returns
         -------
-        FWFM as a float, and the center of the fractional-max interval as a float
+        Tuple of (full_width, position, lower, upper) where position is the KDE peak,
+        and lower/upper are the left and right edges of the fractional-max interval.
         """
         data = np.asarray(data, dtype=float)
 
@@ -69,7 +70,7 @@ class PerformanceAnalyzer:
             upper = roots[-1]
             
         full_width = upper - lower
-        position = (lower + upper)/2
+        position = np.mean(data)
         
         # If the kernel seems like it could be smaller
         if full_width < 3*bandwidth and _recursions < 5:
@@ -77,9 +78,9 @@ class PerformanceAnalyzer:
             reduction = 4*bandwidth/full_width
             return PerformanceAnalyzer.fwfm(
                 data, fractional_max, bandwidth_method=bandsigma/reduction, _recursions=_recursions + 1)
-        
+
         else:
-            return full_width, position
+            return full_width, position, lower, upper
 
     def analyze_monoenergetic_performance(
         self,
@@ -135,7 +136,7 @@ class PerformanceAnalyzer:
             spectrometer.apply_transfer_map(
                 map_order=map_order, save_beam=False, executor=executor, max_workers=max_workers)
             positions = spectrometer.output_beam[:, 0]
-            position_width, position_mean = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
+            position_width, position_mean, _, _ = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
             return position_mean, position_width
         
         # Analyze focal plane distribution of target energy +/- delta
@@ -220,6 +221,8 @@ class PerformanceAnalyzer:
 
                 positions_mean = np.zeros_like(energies)
                 positions_width = np.zeros_like(energies)
+                positions_lower = np.zeros_like(energies)
+                positions_upper = np.zeros_like(energies)
                 gradients = np.zeros_like(energies)
                 energy_resolutions = np.zeros_like(energies)
                 scattering_efficiencies = np.zeros_like(energies)
@@ -241,7 +244,7 @@ class PerformanceAnalyzer:
                         max_workers=max_workers)
                     
                     positions = spec.output_beam[:,0]
-                    positions_width[i], positions_mean[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
+                    positions_width[i], positions_mean[i], positions_lower[i], positions_upper[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
                     
                     # Calculate efficiency for this energy
                     scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
@@ -254,15 +257,16 @@ class PerformanceAnalyzer:
                     geometric_efficiencies[i] = geometric_efficiency
                     total_efficiencies[i] = total_efficiency
                 
-                # calculate dispersion gradient and energy resolution from monoenergetic beamlet results
-                gradients = np.gradient(positions_mean, energies)  # m/MeV
-                energy_resolutions = positions_width/gradients * 1000 # keV
+                gradients = np.gradient(positions_mean, energies)
+                energy_resolutions = positions_width / gradients * 1000
 
                 # Create DataFrame for this foil
                 foil_df = pd.DataFrame({
                     'foil': foil_name,
                     'energy [MeV]': energies,
                     'position [m]': positions_mean,
+                    'position lower [m]': positions_lower,
+                    'position upper [m]': positions_upper,
                     'position width [m]': positions_width,
                     'fractional max': fractional_max,
                     'gradient [m/MeV]': gradients,
@@ -645,41 +649,50 @@ class PerformanceAnalyzer:
         Returns:
             Dict mapping foil material name -> np.ndarray of shape (n_energies, n_channels).
         """
-        spec = self.spectrometer
-        key = spec.conversion_foil.foil_material
-        base = output_filename if output_filename is not None else f'{spec.data_directory}/response_matrix'
-        cache_path = f'{base}_{key}.npy'
+        base = output_filename if output_filename is not None else f'{self.spectrometer.data_directory}/response_matrix'
 
-        if not reset:
-            R = np.load(cache_path)
-            print(f'Response matrix {key} loaded from {cache_path}')
-            return {key: R}
+        def _build_for_spec(spec: MPRSpectrometer) -> tuple[str, np.ndarray]:
+            key = spec.conversion_foil.foil_material
+            cache_path = f'{base}_{key}.npy'
 
-        n_energies = len(energy_grid)
-        R = np.zeros((n_energies, spec.hodoscope.total_channels))
-        print(f'\nBuilding response matrix for {key}...')
-        for i, energy in enumerate(tqdm(energy_grid, desc=key)):
-            if energy < spec.min_incident_energy or energy > spec.max_incident_energy:
-                continue
-            spec.generate_monte_carlo_rays(
-                np.array([energy]),
-                np.array([1.0]),
-                num_recoils_per_energy,
-                include_kinematics,
-                include_stopping_power_loss,
-                save_beam=False,
-                executor=executor,
-                max_workers=max_workers,
-            )
-            spec.apply_transfer_map(
-                save_beam=False,
-                executor=executor,
-                max_workers=max_workers,
-            )
-            signal, _, _ = self.get_recoil_x_map()
-            R[i, :] = signal
+            if not reset:
+                R = np.load(cache_path)
+                print(f'Response matrix {key} loaded from {cache_path}')
+                return key, R
 
-        np.save(cache_path, R)
-        print(f'Response matrix {key} saved to {cache_path}')
-        return {key: R}
+            n_energies = len(energy_grid)
+            R = np.zeros((n_energies, spec.hodoscope.total_channels))
+            print(f'\nBuilding response matrix for {key}...')
+            for i, energy in enumerate(tqdm(energy_grid, desc=key)):
+                if energy < spec.min_incident_energy or energy > spec.max_incident_energy:
+                    continue
+                spec.generate_monte_carlo_rays(
+                    np.array([energy]),
+                    np.array([1.0]),
+                    num_recoils_per_energy,
+                    include_kinematics,
+                    include_stopping_power_loss,
+                    save_beam=False,
+                    executor=executor,
+                    max_workers=max_workers,
+                )
+                spec.apply_transfer_map(
+                    save_beam=False,
+                    executor=executor,
+                    max_workers=max_workers,
+                )
+                signal, _, _ = self.get_recoil_x_map(spectrometer=spec)
+                R[i, :] = signal
+
+            np.save(cache_path, R)
+            print(f'Response matrix {key} saved to {cache_path}')
+            return key, R
+
+        result = {}
+        k, R = _build_for_spec(self.spectrometer)
+        result[k] = R
+        if hasattr(self, 'dual_spectrometer'):
+            k2, R2 = _build_for_spec(self.dual_spectrometer)
+            result[k2] = R2
+        return result
 

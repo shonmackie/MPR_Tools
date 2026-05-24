@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, LogNorm
 from scipy.stats import gaussian_kde
 from scipy.interpolate import griddata, interp1d
 from labellines import labelLines
@@ -428,6 +428,9 @@ class SpectrometerPlotter:
         channel_widths = hodoscope.channel_widths * 100  # m to cm
         channel_heights = hodoscope.channel_heights * 100  # m to cm
 
+        _nz = np.where(signal > 0)[0]
+        sig_lo, sig_hi = (_nz[0], _nz[-1]) if len(_nz) else (0, len(signal) - 1)
+
         # signal units: [particles/source] (or [particles] with yield)
 
         # --- Dual spectrometer signal (retrieved before background so time windows are ready) ---
@@ -442,6 +445,8 @@ class SpectrometerPlotter:
             channel_edges2 = hodoscope2.channel_edges * 100  # m to cm
             channel_widths2 = hodoscope2.channel_widths * 100  # m to cm
             channel_heights2 = hodoscope2.channel_heights * 100  # m to cm
+            _nz2 = np.where(signal2 > 0)[0]
+            sig_lo2, sig_hi2 = (_nz2[0], _nz2[-1]) if len(_nz2) else (0, len(signal2) - 1)
 
         # --- Background per channel (neutron and photon separately) ---
         # Each hodoscope stores its own physical height, so channel_area = width * height is
@@ -503,6 +508,29 @@ class SpectrometerPlotter:
                     time_bins2, neutron_bg_vs_time2, photon_bg_vs_time2,
                     hodoscope2.use_time_gating,
                 )
+
+        # Trim all primary arrays to the nonzero signal region
+        signal = signal[sig_lo:sig_hi + 1]
+        coverage = coverage[sig_lo:sig_hi + 1]
+        channel_time_windows = channel_time_windows[sig_lo:sig_hi + 1]
+        channel_edges = channel_edges[sig_lo:sig_hi + 2]
+        channel_widths = channel_widths[sig_lo:sig_hi + 1]
+        channel_heights = channel_heights[sig_lo:sig_hi + 1]
+        if neutron_bg_per_channel is not None:
+            neutron_bg_per_channel = neutron_bg_per_channel[sig_lo:sig_hi + 1]
+        if photon_bg_per_channel is not None:
+            photon_bg_per_channel = photon_bg_per_channel[sig_lo:sig_hi + 1]
+        if is_dual:
+            signal2 = signal2[sig_lo2:sig_hi2 + 1]
+            coverage2 = coverage2[sig_lo2:sig_hi2 + 1]
+            channel_time_windows2 = channel_time_windows2[sig_lo2:sig_hi2 + 1]
+            channel_edges2 = channel_edges2[sig_lo2:sig_hi2 + 2]
+            channel_widths2 = channel_widths2[sig_lo2:sig_hi2 + 1]
+            channel_heights2 = channel_heights2[sig_lo2:sig_hi2 + 1]
+            if neutron_bg_per_channel2 is not None:
+                neutron_bg_per_channel2 = neutron_bg_per_channel2[sig_lo2:sig_hi2 + 1]
+            if photon_bg_per_channel2 is not None:
+                photon_bg_per_channel2 = photon_bg_per_channel2[sig_lo2:sig_hi2 + 1]
 
         # --- Derive per-plot filenames from base filename ---
         base, ext = os.path.splitext(filename)
@@ -1398,30 +1426,34 @@ class SpectrometerPlotter:
             # Extract data from DataFrame
             energies = grp['energy [MeV]'].to_numpy()
             positions = grp['position [m]'].to_numpy()
-            position_width = grp['position width [m]'].to_numpy()
-            energy_resolutions = grp['resolution [keV]'].to_numpy()
+            band_lower = grp['position lower [m]'].to_numpy()
+            band_upper = grp['position upper [m]'].to_numpy()
             total_efficiencies = grp['total efficiency'].to_numpy()
 
-            # Plot position curve (center of half-max interval) with ±width/2 band
+            # Compute resolution
+            widths = grp['position width [m]'].to_numpy()
+            gradients = np.gradient(positions, energies)
+            energy_resolutions = widths / gradients * 1000
+
+            # Plot position curve (KDE peak) with asymmetric FWHM band
             position_line = ax1.plot(energies, positions * 100, color=color_position,
                     label=f'Position')
-            ax1.fill_between(energies, (positions - position_width / 2) * 100,
-                            (positions + position_width / 2) * 100,
+            ax1.fill_between(energies, band_lower * 100, band_upper * 100,
                             alpha=0.3, color=color_position)
             ax1.grid(True, alpha=0.3)
             ax1.tick_params(axis='y', labelcolor=color_position)
             
-            resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution, marker='o', markersize=4,
+            resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution,
                             label=f'Resolution')
-            
-            efficiency_line = ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency, marker='s', markersize=4,
+
+            efficiency_line = ax3.plot(energies, total_efficiencies*1e6, color=color_efficiency,
                             label=f'Efficiency')
             
             # Label lines on their respective axes
             range = energies.max() - energies.min()
-            labelLines(position_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
-            labelLines(resolution_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12)
-            labelLines(efficiency_line, xvals=[energies.min() + 0.75 * range], align=True, fontsize=12)
+            labelLines(position_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12, yoffsets=2.5)
+            labelLines(resolution_line, xvals=[energies.min() + 0.85 * range], align=True, fontsize=12, yoffsets=35)
+            labelLines(efficiency_line, xvals=[energies.min() + 0.75 * range], align=True, fontsize=12, yoffsets=-0.025)
             
             # Add shading and label to indicate foil energy regions
             if self.dual_data:
@@ -1441,9 +1473,12 @@ class SpectrometerPlotter:
         x_min, x_max = df['energy [MeV]'].min(), df['energy [MeV]'].max()
         x_margin = (x_max - x_min) * 0.02
         ax1.set_xlim(x_min - x_margin, x_max + x_margin)
+        ax2.set_ylim(bottom=0)
+        ax3.set_ylim(bottom=0)
         
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
+        print(f'Figure saved to: {filename}')
         plt.close(fig)
         
     def plot_data(
@@ -1695,6 +1730,132 @@ class SpectrometerPlotter:
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
         print(f'Separation analysis plot saved to {filename}')
+
+    def plot_response_matrix(
+        self,
+        response_matrices: dict,
+        energy_grid: np.ndarray,
+        log_scale: bool = True,
+        filename: Optional[str] = None,
+    ) -> None:
+        """Plot the instrument response matrix as a heatmap (energy × channel index).
+
+        Args:
+            response_matrices: Dict mapping foil material name to R of shape
+                (n_energies, n_channels), as returned by
+                PerformanceAnalyzer.build_response_matrix().
+            energy_grid: 1-D array of incident energies [MeV] used to build R.
+            log_scale: Use logarithmic colour scale (default True).
+            filename: Output file path. Defaults to
+                <figure_directory>/response_matrix.png.
+        """
+        def energy_edges(E: np.ndarray) -> np.ndarray:
+            half = np.diff(E) / 2.0
+            return np.concatenate([[E[0] - half[0]], E[:-1] + half, [E[-1] + half[-1]]])
+
+        def channel_edges(n: int) -> np.ndarray:
+            return np.arange(n + 1, dtype=float) - 0.5
+
+        def colour_norm(R: np.ndarray) -> Tuple[np.ndarray, object]:
+            if log_scale:
+                Z = np.ma.masked_where(R <= 0, R)
+                valid = Z.compressed()
+                vmin = float(valid.min()) if len(valid) else 1e-10
+                vmax = float(valid.max()) if len(valid) else 1.0
+                return Z, LogNorm(vmin=vmin, vmax=vmax)
+            return R, Normalize(vmin=0, vmax=float(R.max()) or 1.0)
+
+        def nice_ticks(n: int, max_labels: int = 12) -> np.ndarray:
+            step = max(1, (n + max_labels - 1) // max_labels)
+            return np.arange(0, n, step)
+
+        if filename is None:
+            filename = f'{self.spectrometer.figure_directory}/response_matrix.png'
+
+        is_dual = self.dual_data is not None
+        inc = self.spectrometer.conversion_foil.incident_particle.capitalize()
+        cb_label = f'R [MeV / source {inc.lower()}]'
+        E_edges = energy_edges(np.asarray(energy_grid, dtype=float))
+
+        key1 = self.spectrometer.conversion_foil.foil_material
+        R1 = np.asarray(response_matrices[key1], dtype=float)
+        n_ch1 = R1.shape[1]
+        particle1 = self.spectrometer.conversion_foil.particle
+        ch_edges1 = channel_edges(n_ch1)
+        Z1, norm1 = colour_norm(R1)
+
+        if is_dual:
+            key2 = self.dual_data['spectrometer'].conversion_foil.foil_material
+            R2_raw = response_matrices.get(key2)
+        else:
+            R2_raw = None
+
+        if R2_raw is not None:
+            R2 = np.asarray(R2_raw, dtype=float)
+            n_ch2 = R2.shape[1]
+            particle2 = self.dual_data['spectrometer'].conversion_foil.particle
+            secondary_color = self.dual_data['secondary_color']
+            secondary_cmap = self.dual_data['secondary_cmap']
+            ch_edges2 = channel_edges(n_ch2)
+            Z2, norm2 = colour_norm(R2)
+
+            fig = plt.figure(figsize=(14, 6))
+            gs = fig.add_gridspec(1, 4, width_ratios=[1, 0.05, 0.07, 0.07], wspace=0.1)
+            ax    = fig.add_subplot(gs[0, 0])
+            cax1  = fig.add_subplot(gs[0, 1])
+            cax2  = fig.add_subplot(gs[0, 3])
+
+            mesh1 = ax.pcolormesh(ch_edges1, E_edges, Z1,
+                                  cmap=self.primary_cmap, norm=norm1, shading='flat')
+            ax.set_xlim(-0.5, n_ch1 - 0.5)
+            ax.set_xticks(nice_ticks(n_ch1))
+            ax.tick_params(axis='x', colors=self.primary_color)
+            ax.spines['bottom'].set_edgecolor(self.primary_color)
+            ax.set_xlabel(f'Channel index ({particle1}s)', color=self.primary_color)
+            ax.set_ylabel(f'{inc} energy [MeV]')
+
+            ax_sec = ax.twiny()
+            ax_sec.set_xlim(-0.5, n_ch2 - 0.5)
+            mesh2 = ax_sec.pcolormesh(ch_edges2, E_edges, Z2,
+                                      cmap=secondary_cmap, norm=norm2, shading='flat')
+            ax_sec.set_xticks(nice_ticks(n_ch2))
+            ax_sec.xaxis.set_label_position('bottom')
+            ax_sec.xaxis.tick_bottom()
+            ax_sec.spines['bottom'].set_position(('outward', 60))
+            ax_sec.spines['bottom'].set_edgecolor(secondary_color)
+            ax_sec.spines['top'].set_visible(False)
+            ax_sec.tick_params(axis='x', colors=secondary_color)
+            ax_sec.set_xlabel(f'Channel index ({particle2}s)', color=secondary_color)
+
+            cb1 = fig.colorbar(mesh1, cax=cax1)
+            cb1.set_label(cb_label, color=self.primary_color)
+            cb1.ax.yaxis.set_tick_params(color=self.primary_color)
+            cb2 = fig.colorbar(mesh2, cax=cax2)
+            cb2.set_label(cb_label, color=secondary_color)
+            cb2.ax.yaxis.set_tick_params(color=secondary_color)
+        else:
+            fig = plt.figure(figsize=(10, 6))
+            gs = fig.add_gridspec(1, 2, width_ratios=[1, 0.05], wspace=0.15)
+            ax   = fig.add_subplot(gs[0, 0])
+            cax1 = fig.add_subplot(gs[0, 1])
+
+            mesh1 = ax.pcolormesh(ch_edges1, E_edges, Z1,
+                                  cmap=self.primary_cmap, norm=norm1, shading='flat')
+            ax.set_xlim(-0.5, n_ch1 - 0.5)
+            ax.set_xticks(nice_ticks(n_ch1))
+            ax.tick_params(axis='x', colors=self.primary_color)
+            ax.spines['bottom'].set_edgecolor(self.primary_color)
+            ax.set_xlabel(f'Channel index ({particle1}s)', color=self.primary_color)
+            ax.set_ylabel(f'{inc} energy [MeV]')
+
+            cb1 = fig.colorbar(mesh1, cax=cax1)
+            cb1.set_label(cb_label, color=self.primary_color)
+            cb1.ax.yaxis.set_tick_params(color=self.primary_color)
+
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f'Response matrix plot saved to {filename}')
 
     def plot_forward_fit_spectrum(
         self,
