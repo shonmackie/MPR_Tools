@@ -154,7 +154,8 @@ class HodoscopeResponse:
             energies=output_energies_MeV,
             particle=spec.conversion_foil.particle,
         )
-        weights = foil_efficiencies * sensitivities
+        importance_weights = spec.input_beam[:, 7]
+        weights = foil_efficiencies * sensitivities * importance_weights
 
         bin_edges_cm = hodoscope.channel_edges * 100
         bin_heights_cm = hodoscope.channel_heights * 100
@@ -174,7 +175,7 @@ class HodoscopeResponse:
             )
             total_per_bin[b] = np.sum(weights[in_bin])
             signal_per_bin[b] = np.sum(weights[accepted])
-            count_per_bin[b] = np.sum(foil_efficiencies[accepted])
+            count_per_bin[b] = np.sum(foil_efficiencies[accepted] * importance_weights[accepted])
             if hodoscope.use_time_gating:
                 times_in_channel = arrival_times[accepted]
                 if len(times_in_channel) > 0:
@@ -215,6 +216,7 @@ class HodoscopeResponse:
             energies=output_energies_MeV,
             particle=spec.conversion_foil.particle,
         )
+        importance_weights = spec.input_beam[:, 7]
 
         x_min, x_max = float(np.min(x_positions)), float(np.max(x_positions))
         y_min, y_max = float(np.min(y_positions)), float(np.max(y_positions))
@@ -228,9 +230,9 @@ class HodoscopeResponse:
         for i in range(total_particles):
             xi = min(max(int((x_positions[i] - x_min) / dx), 0), density_map.shape[1] - 1)
             yi = min(max(int((y_positions[i] - y_min) / dy), 0), density_map.shape[0] - 1)
-            density_map[yi, xi] += foil_efficiencies[i]
+            density_map[yi, xi] += foil_efficiencies[i] * importance_weights[i]
             if hodoscope.detector_used:
-                response_map_2d[yi, xi] += foil_efficiencies[i] * sensitivities[i]
+                response_map_2d[yi, xi] += foil_efficiencies[i] * sensitivities[i] * importance_weights[i]
 
         density_map /= (cell_area_cm2 * total_particles)
         response_map_2d /= (cell_area_cm2 * total_particles)
