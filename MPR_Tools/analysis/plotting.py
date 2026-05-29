@@ -375,7 +375,7 @@ class SpectrometerPlotter:
     def plot_position_histogram(
         self,
         filename: Optional[str] = None,
-        incident_particle_yield: float = 1.0,
+        incident_particle_yield: Optional[float] = None,
         performance_curve_file: Optional[str] = None,
     ) -> None:
         """
@@ -566,7 +566,7 @@ class SpectrometerPlotter:
                                f'{inc} Energy [MeV] (d)',
                                color=self.dual_data['secondary_color'],
                                offset=45 if which == 'all' else 0,
-                               tick_step=0.5)
+                               tick_step=1.0)
             else:
                 _make_twin(_x_to_en, _en_to_x, f'{inc} Energy [MeV]')
 
@@ -1001,6 +1001,9 @@ class SpectrometerPlotter:
                                    ph_vals + ph_std,
                                    step='mid', color='tab:purple', alpha=0.25, linewidth=0)
             ax_bg.set_yscale('log')
+            _sig_vals = np.concatenate([n_vals[n_vals > 0], ph_vals[ph_vals > 0]])
+            if len(_sig_vals) > 0:
+                ax_bg.set_ylim(bottom=_sig_vals.min() * 0.5)
             ax_bg.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
             ax_bg.text(0.90, 0.5, 'neutron', transform=ax_bg.transAxes,
                        color='tab:green', fontsize=13, ha='right', va='center').set_path_effects(_stroke)

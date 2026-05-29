@@ -96,8 +96,9 @@ class HodoscopeResponse:
 
         n_ch = hodoscope.total_channels
         if (hodoscope.neutron_background_file and hodoscope.photon_background_file
-                and hodoscope.detector_used and particle_yield is not None):
-            n_bg, ph_bg, n_bg_std, ph_bg_std = self._compute_background(hodoscope, particle_yield)
+                and hodoscope.detector_used):
+            _bg_yield = particle_yield if particle_yield is not None else 1.0
+            n_bg, ph_bg, n_bg_std, ph_bg_std = self._compute_background(hodoscope, _bg_yield)
             self.neutron_background = n_bg
             self.photon_background = ph_bg
             self.neutron_background_std = n_bg_std
@@ -680,7 +681,7 @@ class PerformanceAnalyzer:
 
     def get_channel_response(
         self,
-        particle_yield: float,
+        particle_yield: Optional[float],
         response_matrices: Optional[Dict[str, np.ndarray]] = None,
         energy_grid: Optional[np.ndarray] = None,
         compute_density: bool = False,
