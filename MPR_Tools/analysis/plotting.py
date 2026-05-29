@@ -25,6 +25,8 @@ from ..core.dual_foil_spectrometer import DualFoilSpectrometer
 from ..analysis.performance import PerformanceAnalyzer
 from ..config.constants import MASS_TO_MEV
 
+from ..analysis.forward_fitting import compute_spectrum_data_points
+
 if TYPE_CHECKING:
     from ..analysis.parameter_sweep import FoilSweeper
     from ..analysis.forward_fitting import ForwardFittingResult
@@ -83,10 +85,7 @@ class SpectrometerPlotter:
                 """Draw the full envelope and channel boundaries for one hodoscope."""
                 heights = hod.channel_heights * 100  # cm, shape (N,)
                 edges = hod.channel_edges * 100       # cm, shape (N+1,)
-                if hod.channel_y_centers is not None:
-                    y_ctrs = hod.channel_y_centers * 100  # cm, per-channel (N,)
-                else:
-                    y_ctrs = np.full(len(heights), hod.y_center * 100)
+                y_ctrs = hod.channel_y_centers * 100  # cm, per-channel (N,)
 
                 tops = y_ctrs + heights / 2  # top edge per channel
                 bots = y_ctrs - heights / 2  # bottom edge per channel
@@ -377,8 +376,6 @@ class SpectrometerPlotter:
         self,
         filename: Optional[str] = None,
         incident_particle_yield: float = 1.0,
-        neutron_background_file: Optional[str] = None,
-        photon_background_file: Optional[str] = None,
         performance_curve_file: Optional[str] = None,
     ) -> None:
         """
@@ -399,14 +396,8 @@ class SpectrometerPlotter:
         Args:
             filename: Output filename for the plot.
             incident_particle_yield: Total source yield; scales both signal and background.
-            neutron_background_file: Path to a time-resolved CSV with columns 'time' [s],
-                'energy' [MeV], and 'mean' [particles/cm²/source] — used when
-                hodoscope.use_time_gating is True.  Also accepted in the 1-D ('energy', 'mean') format.
-            photon_background_file: Same format as neutron_background_file.
-            neutron_energy: Single neutron energy in MeV (scalar background input).
-            neutron_flux: Neutron flux in particles/cm^2-source (scalar background input).
-            photon_energy: Single photon energy in MeV (scalar background input).
-            photon_flux: Photon flux in particles/cm^2-source (scalar background input).
+                Background file paths are read from hodoscope.neutron_background_file and
+                hodoscope.photon_background_file.
         """
         if filename is None:
             filename = f'{self.spectrometer.figure_directory}/counts_vs_position.png'
@@ -415,122 +406,78 @@ class SpectrometerPlotter:
             raise ValueError("No output beam data available. Run apply_transfer_map() first.")
 
         hodoscope = self.spectrometer.hodoscope
-
-        # --- Signal via get_recoil_x_map ---
-        # Each hodoscope's y_center and channel_height define its acceptance window.
-        # channel_time_windows shape (n_channels, 2): per-channel [t_min, t_max] of signal
-        # arrival times.  Filled with NaN when hodoscope.use_time_gating is False.
         is_dual = self.dual_data is not None
-        signal, coverage, channel_time_windows = self.performance_analyzer.get_recoil_x_map(
-            particle_yield=incident_particle_yield,
-        )
+
+        # --- Primary foil HodoscopeResponse ---
+        primary_response = self.performance_analyzer.get_channel_response(incident_particle_yield)
+        signal = primary_response.signal
+        coverage = primary_response.coverage
+        channel_time_windows = primary_response.channel_time_windows
+        signal_std = primary_response.signal_std
         channel_edges = hodoscope.channel_edges * 100  # m to cm
-        channel_widths = hodoscope.channel_widths * 100  # m to cm
-        channel_heights = hodoscope.channel_heights * 100  # m to cm
 
         _nz = np.where(signal > 0)[0]
         sig_lo, sig_hi = (_nz[0], _nz[-1]) if len(_nz) else (0, len(signal) - 1)
 
-        # signal units: [particles/source] (or [particles] with yield)
+        # Unpack per-channel background (None when no background files are configured)
+        _has_bg = hodoscope.detector_used and hodoscope.neutron_background_file and hodoscope.photon_background_file
+        neutron_bg_per_channel = primary_response.neutron_background if _has_bg else None
+        photon_bg_per_channel = primary_response.photon_background if _has_bg else None
+        neutron_bg_std_per_channel = primary_response.neutron_background_std if _has_bg else None
+        photon_bg_std_per_channel = primary_response.photon_background_std if _has_bg else None
 
-        # --- Dual spectrometer signal (retrieved before background so time windows are ready) ---
-        signal2 = coverage2 = channel_time_windows2 = channel_edges2 = channel_widths2 = channel_heights2 = None
+        # Time-resolved background arrays (used only for the S/B overlay in time-gating mode)
+        time_bins = neutron_background_vs_time = photon_background_vs_time = None
+        neutron_background_std_vs_time = photon_background_std_vs_time = None
+        if _has_bg:
+            (time_bins, neutron_background_vs_time, neutron_background_std_vs_time,
+             photon_background_vs_time, photon_background_std_vs_time) = hodoscope.get_background()
+
+        # --- Secondary foil HodoscopeResponse (dual-foil mode) ---
+        signal2 = coverage2 = channel_time_windows2 = channel_edges2 = signal_std2 = None
+        neutron_bg_per_channel2 = photon_bg_per_channel2 = None
+        neutron_bg_std_per_channel2 = photon_bg_std_per_channel2 = None
         if is_dual:
-            signal2, coverage2, channel_time_windows2 = (
-                self.dual_data['performance_analyzer'].get_recoil_x_map(
-                    particle_yield=incident_particle_yield,
-                )
+            secondary_response = self.dual_data['performance_analyzer'].get_channel_response(
+                incident_particle_yield
             )
+            signal2 = secondary_response.signal
+            coverage2 = secondary_response.coverage
+            channel_time_windows2 = secondary_response.channel_time_windows
+            signal_std2 = secondary_response.signal_std
             hodoscope2 = self.dual_data['spectrometer'].hodoscope
             channel_edges2 = hodoscope2.channel_edges * 100  # m to cm
-            channel_widths2 = hodoscope2.channel_widths * 100  # m to cm
-            channel_heights2 = hodoscope2.channel_heights * 100  # m to cm
+            _has_bg2 = (hodoscope2.detector_used and hodoscope2.neutron_background_file
+                        and hodoscope2.photon_background_file)
+            neutron_bg_per_channel2 = secondary_response.neutron_background if _has_bg2 else None
+            photon_bg_per_channel2 = secondary_response.photon_background if _has_bg2 else None
+            neutron_bg_std_per_channel2 = secondary_response.neutron_background_std if _has_bg2 else None
+            photon_bg_std_per_channel2 = secondary_response.photon_background_std if _has_bg2 else None
             _nz2 = np.where(signal2 > 0)[0]
             sig_lo2, sig_hi2 = (_nz2[0], _nz2[-1]) if len(_nz2) else (0, len(signal2) - 1)
 
-        # --- Background per channel (neutron and photon separately) ---
-        # Each hodoscope stores its own physical height, so channel_area = width * height is
-        # correct without any extra area factor.  For dual-foil, CH2 and CD2 are computed
-        # independently using their respective hodoscopes and time windows.
-
-        # Initialize per-channel background arrays and the time-resolved arrays used for
-        # the gated vs. non-gated S/B overlay (only populated when use_time_gating=True).
-        neutron_bg_per_channel = photon_bg_per_channel = None
-        neutron_bg_per_channel2 = photon_bg_per_channel2 = None
-        time_bins = neutron_background_vs_time = photon_background_vs_time = None
-        scale = (incident_particle_yield if incident_particle_yield else 1.0)
-
-        def _compute_bg(time_windows, chan_widths, chan_heights, t_bins, n_bg_ts, ph_bg_ts, use_tg):
-            """Compute per-channel neutron/photon background for the given hodoscope half."""
-            dt_local = float(np.median(np.diff(t_bins))) if len(t_bins) > 1 else 1.0
-            neutron_bg = np.zeros(len(chan_widths))
-            photon_bg = np.zeros(len(chan_widths))
-            for i in range(len(chan_widths)):
-                if use_tg and not np.isnan(time_windows[i, 0]):
-                    # Weight each background bin by the fraction of that bin that overlaps the
-                    # signal arrival window.  This correctly handles windows narrower than the
-                    # bin width (which a binary mask would miss entirely) as well as partial
-                    # overlaps at the edges.
-                    t_min = time_windows[i, 0]
-                    t_max = time_windows[i, 1]
-                    bin_left = t_bins - dt_local / 2
-                    bin_right = t_bins + dt_local / 2
-                    overlap = np.maximum(0.0, np.minimum(bin_right, t_max) - np.maximum(bin_left, t_min)) / dt_local
-                else:
-                    overlap = np.ones(len(t_bins))
-                channel_area = chan_widths[i] * chan_heights[i]  # cm^2 — each hodoscope carries its own height
-                neutron_bg[i] = np.dot(n_bg_ts, overlap) * scale * channel_area
-                photon_bg[i] = np.dot(ph_bg_ts, overlap) * scale * channel_area
-            return neutron_bg, photon_bg
-
-        if neutron_background_file and photon_background_file and hodoscope.detector_used:
-            # get_background() always returns a 3-tuple of arrays regardless of use_time_gating.
-            # When use_time_gating=False, time_bins=[0.0] and each background array has length 1
-            # containing the total energy deposited; the time-window logic below then integrates
-            # over the single bin, giving the same result as a plain scalar multiply.
-            time_bins, neutron_background_vs_time, photon_background_vs_time = hodoscope.get_background(
-                neutron_background_file, photon_background_file
-            )
-            neutron_bg_per_channel, photon_bg_per_channel = _compute_bg(
-                channel_time_windows, channel_widths, channel_heights,
-                time_bins, neutron_background_vs_time, photon_background_vs_time,
-                hodoscope.use_time_gating,
-            )
-
-        if self.dual_data is not None and channel_time_windows2 is not None and neutron_background_file and photon_background_file:
-            hodoscope2 = self.dual_data['spectrometer'].hodoscope
-            if hodoscope2.detector_used:
-                time_bins2, neutron_bg_vs_time2, photon_bg_vs_time2 = hodoscope2.get_background(
-                    neutron_background_file, photon_background_file
-                )
-                neutron_bg_per_channel2, photon_bg_per_channel2 = _compute_bg(
-                    channel_time_windows2, channel_widths2, channel_heights2,
-                    time_bins2, neutron_bg_vs_time2, photon_bg_vs_time2,
-                    hodoscope2.use_time_gating,
-                )
-
-        # Trim all primary arrays to the nonzero signal region
+        # --- Trim all arrays to the nonzero signal region ---
         signal = signal[sig_lo:sig_hi + 1]
+        signal_std = signal_std[sig_lo:sig_hi + 1]
         coverage = coverage[sig_lo:sig_hi + 1]
         channel_time_windows = channel_time_windows[sig_lo:sig_hi + 1]
         channel_edges = channel_edges[sig_lo:sig_hi + 2]
-        channel_widths = channel_widths[sig_lo:sig_hi + 1]
-        channel_heights = channel_heights[sig_lo:sig_hi + 1]
         if neutron_bg_per_channel is not None:
             neutron_bg_per_channel = neutron_bg_per_channel[sig_lo:sig_hi + 1]
-        if photon_bg_per_channel is not None:
             photon_bg_per_channel = photon_bg_per_channel[sig_lo:sig_hi + 1]
+            neutron_bg_std_per_channel = neutron_bg_std_per_channel[sig_lo:sig_hi + 1]
+            photon_bg_std_per_channel = photon_bg_std_per_channel[sig_lo:sig_hi + 1]
         if is_dual:
             signal2 = signal2[sig_lo2:sig_hi2 + 1]
+            signal_std2 = signal_std2[sig_lo2:sig_hi2 + 1]
             coverage2 = coverage2[sig_lo2:sig_hi2 + 1]
             channel_time_windows2 = channel_time_windows2[sig_lo2:sig_hi2 + 1]
             channel_edges2 = channel_edges2[sig_lo2:sig_hi2 + 2]
-            channel_widths2 = channel_widths2[sig_lo2:sig_hi2 + 1]
-            channel_heights2 = channel_heights2[sig_lo2:sig_hi2 + 1]
             if neutron_bg_per_channel2 is not None:
                 neutron_bg_per_channel2 = neutron_bg_per_channel2[sig_lo2:sig_hi2 + 1]
-            if photon_bg_per_channel2 is not None:
                 photon_bg_per_channel2 = photon_bg_per_channel2[sig_lo2:sig_hi2 + 1]
+                neutron_bg_std_per_channel2 = neutron_bg_std_per_channel2[sig_lo2:sig_hi2 + 1]
+                photon_bg_std_per_channel2 = photon_bg_std_per_channel2[sig_lo2:sig_hi2 + 1]
 
         # --- Derive per-plot filenames from base filename ---
         base, ext = os.path.splitext(filename)
@@ -543,7 +490,7 @@ class SpectrometerPlotter:
         if detector_used:
             label = f'$E_{{dep}}$ [{"MeV" if incident_particle_yield else "MeV/source"}]'
         else:
-            label = f'Counts [{"MeV" if incident_particle_yield else "MeV/source"}]'
+            label = f'Counts [{"particles" if incident_particle_yield else "particles/source"}]'
 
         # Build position→energy interpolant from the performance curve (optional).
         # x_to_en: cm → MeV,  en_to_x: MeV → cm
@@ -626,20 +573,36 @@ class SpectrometerPlotter:
         def _step(ax, edges, values, **kwargs):
             return ax.step(edges, np.append(values, values[-1]), where='pre', **kwargs)[0]
 
+        def _step_band(ax, edges, values, sigma, color, alpha=0.25):
+            """Draw a +/-1 sigma shaded band around a step-function line."""
+            if np.all(np.isnan(sigma)):
+                return
+            y_lo = np.append(values - sigma, (values - sigma)[-1])
+            y_hi = np.append(values + sigma, (values + sigma)[-1])
+            ax.fill_between(edges, y_lo, y_hi, step='pre', color=color, alpha=alpha, linewidth=0)
+
         # Plot 1: counts
         # In dual-foil mode background labels distinguish the CH2 and CD2 halves.
         n_label = 'neutron (p)' if is_dual else 'neutron'
         g_label = 'photon (p)' if is_dual else 'photon'
         _label_kw = dict(fontsize=18, ha='left', va='center')
         _stroke = [pe.withStroke(linewidth=3, foreground='white')]
+        signal_std2 = signal_std2 if signal2 is not None else None
         if is_dual:
             fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+            _step_band(ax_top, channel_edges, signal, signal_std, color=self.primary_color)
             _step(ax_top, channel_edges, signal,
                   color=self.primary_color, label=particle_label, linewidth=3)
             if neutron_bg_per_channel is not None:
+                if neutron_bg_std_per_channel is not None:
+                    _step_band(ax_top, channel_edges, neutron_bg_per_channel,
+                               neutron_bg_std_per_channel, color='tab:green')
                 _step(ax_top, channel_edges, neutron_bg_per_channel,
                       color='tab:green', label='neutron', linewidth=3)
             if photon_bg_per_channel is not None:
+                if photon_bg_std_per_channel is not None:
+                    _step_band(ax_top, channel_edges, photon_bg_per_channel,
+                               photon_bg_std_per_channel, color='tab:purple')
                 _step(ax_top, channel_edges, photon_bg_per_channel,
                       color='tab:purple', label='photon', linewidth=3)
             ax_top.set_yscale('log')
@@ -656,13 +619,21 @@ class SpectrometerPlotter:
             _add_energy_axis(ax_top, which='primary')
 
             if signal2 is not None:
+                _step_band(ax_bot, channel_edges2, signal2, signal_std2,
+                           color=self.dual_data['secondary_color'])
                 _step(ax_bot, channel_edges2, signal2,
                       color=self.dual_data['secondary_color'],
                       label=self.dual_data['secondary_label'], linewidth=3)
             if neutron_bg_per_channel2 is not None:
+                if neutron_bg_std_per_channel2 is not None:
+                    _step_band(ax_bot, channel_edges2, neutron_bg_per_channel2,
+                               neutron_bg_std_per_channel2, color='tab:green')
                 _step(ax_bot, channel_edges2, neutron_bg_per_channel2,
                       color='tab:green', label='neutron', linewidth=3)
             if photon_bg_per_channel2 is not None:
+                if photon_bg_std_per_channel2 is not None:
+                    _step_band(ax_bot, channel_edges2, photon_bg_per_channel2,
+                               photon_bg_std_per_channel2, color='tab:purple')
                 _step(ax_bot, channel_edges2, photon_bg_per_channel2,
                       color='tab:purple', label='photon', linewidth=3)
             ax_bot.set_yscale('log')
@@ -686,19 +657,26 @@ class SpectrometerPlotter:
             plt.close(fig)
         else:
             fig, ax_counts = plt.subplots(figsize=(10, 4))
+            _step_band(ax_counts, channel_edges, signal, signal_std, color=self.primary_color)
             _step(ax_counts, channel_edges, signal,
                   color=self.primary_color, label=particle_label, linewidth=3)
             if neutron_bg_per_channel is not None:
+                if neutron_bg_std_per_channel is not None:
+                    _step_band(ax_counts, channel_edges, neutron_bg_per_channel,
+                               neutron_bg_std_per_channel, color='tab:green')
                 _step(ax_counts, channel_edges, neutron_bg_per_channel,
                       color='tab:green', label='neutron', linewidth=3)
             if photon_bg_per_channel is not None:
+                if photon_bg_std_per_channel is not None:
+                    _step_band(ax_counts, channel_edges, photon_bg_per_channel,
+                               photon_bg_std_per_channel, color='tab:purple')
                 _step(ax_counts, channel_edges, photon_bg_per_channel,
                       color='tab:purple', label='photon', linewidth=3)
             ax_counts.set_yscale('log')
             ax_counts.set_xlabel('Horizontal Position [cm]')
             ax_counts.set_ylabel(label)
             ax_counts.grid(True, alpha=0.3)
-                
+
             ax_counts.text(0.15, 0.82, particle_label, color=self.primary_color,
                            transform=ax_counts.transAxes, **_label_kw).set_path_effects(_stroke)
             if neutron_bg_per_channel is not None:
@@ -713,6 +691,24 @@ class SpectrometerPlotter:
             plt.close(fig)
         print(f'Position histogram saved to {filename_counts}')
 
+        def _sb_and_sigma(sig, bg, bg_std):
+            """Return (log10_sb, sigma_log10_sb) with NaN where undefined.
+
+            sigma_log10_sb = sqrt(1/sig + (bg_std/bg)^2) / ln(10)
+            from independent Poisson signal and MC background uncertainty.
+            """
+            valid = (sig > 0) & (bg > 0)
+            sb = np.where(valid, sig / bg, np.nan)
+            sigma_rel_sq = np.where(valid, 1.0 / sig + (bg_std / np.where(bg > 0, bg, 1.0)) ** 2, np.nan)
+            sigma_log10 = np.where(valid, np.sqrt(sigma_rel_sq) / np.log(10), np.nan)
+            return np.log10(sb), sigma_log10
+
+        def _step_band_linear(ax, edges, values, sigma, color, alpha=0.25):
+            """Draw a +/-1 sigma band around a step-function line on a linear-scale axis."""
+            y_lo = np.append(values - sigma, (values - sigma)[-1])
+            y_hi = np.append(values + sigma, (values + sigma)[-1])
+            ax.fill_between(edges, y_lo, y_hi, step='pre', color=color, alpha=alpha, linewidth=0)
+
         # Plot 2 (optional): S/B — separate lines for neutron and photon backgrounds.
         # Single-foil: gated S/B (solid) vs non-gated S/B (dashed) comparison.
         # Dual-foil: CH2 (solid) and CD2 (dashed) gated S/B; no-gate overlay omitted to
@@ -720,43 +716,60 @@ class SpectrometerPlotter:
         if neutron_bg_per_channel is not None and photon_bg_per_channel is not None:
             fig, ax_sb = plt.subplots(figsize=(10, 5.5 if is_dual else 4))
 
+            _n_std = neutron_bg_std_per_channel if neutron_bg_std_per_channel is not None else np.zeros_like(neutron_bg_per_channel)
+            _ph_std = photon_bg_std_per_channel if photon_bg_std_per_channel is not None else np.zeros_like(photon_bg_per_channel)
+
             if hodoscope.use_time_gating and neutron_background_vs_time is not None and photon_background_vs_time is not None:
                 if is_dual:
                     # Gated S/B for CH2 (solid) and CD2 (dashed).
-                    sb_neutron_ch2 = np.where(neutron_bg_per_channel > 0, signal / neutron_bg_per_channel, np.nan)
-                    _step(ax_sb, channel_edges, np.log10(sb_neutron_ch2),
+                    log10_sb_n_ch2, sigma_log10_sb_n_ch2 = _sb_and_sigma(signal, neutron_bg_per_channel, _n_std)
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_n_ch2, sigma_log10_sb_n_ch2, color='tab:green')
+                    _step(ax_sb, channel_edges, log10_sb_n_ch2,
                           color='tab:green', linestyle='-', label='neutron (p)', linewidth=3)
-                    sb_photon_ch2 = np.where(photon_bg_per_channel > 0, signal / photon_bg_per_channel, np.nan)
-                    _step(ax_sb, channel_edges, np.log10(sb_photon_ch2),
+                    log10_sb_ph_ch2, sigma_log10_sb_ph_ch2 = _sb_and_sigma(signal, photon_bg_per_channel, _ph_std)
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_ph_ch2, sigma_log10_sb_ph_ch2, color='tab:purple')
+                    _step(ax_sb, channel_edges, log10_sb_ph_ch2,
                           color='tab:purple', linestyle='-', label='photon (p)', linewidth=3)
                     if neutron_bg_per_channel2 is not None and photon_bg_per_channel2 is not None and signal2 is not None:
-                        sb_neutron_cd2 = np.where(neutron_bg_per_channel2 > 0, signal2 / neutron_bg_per_channel2, np.nan)
-                        _step(ax_sb, channel_edges2, np.log10(sb_neutron_cd2),
+                        _n_std2 = neutron_bg_std_per_channel2 if neutron_bg_std_per_channel2 is not None else np.zeros_like(neutron_bg_per_channel2)
+                        _ph_std2 = photon_bg_std_per_channel2 if photon_bg_std_per_channel2 is not None else np.zeros_like(photon_bg_per_channel2)
+                        log10_sb_n_cd2, sigma_log10_sb_n_cd2 = _sb_and_sigma(signal2, neutron_bg_per_channel2, _n_std2)
+                        _step_band_linear(ax_sb, channel_edges2, log10_sb_n_cd2, sigma_log10_sb_n_cd2, color='tab:green')
+                        _step(ax_sb, channel_edges2, log10_sb_n_cd2,
                               color='tab:green', linestyle='--', label='neutron (d)', linewidth=3)
-                        sb_photon_cd2 = np.where(photon_bg_per_channel2 > 0, signal2 / photon_bg_per_channel2, np.nan)
-                        _step(ax_sb, channel_edges2, np.log10(sb_photon_cd2),
+                        log10_sb_ph_cd2, sigma_log10_sb_ph_cd2 = _sb_and_sigma(signal2, photon_bg_per_channel2, _ph_std2)
+                        _step_band_linear(ax_sb, channel_edges2, log10_sb_ph_cd2, sigma_log10_sb_ph_cd2, color='tab:purple')
+                        _step(ax_sb, channel_edges2, log10_sb_ph_cd2,
                               color='tab:purple', linestyle='--', label='photon (d)', linewidth=3)
                 else:
                     # Gated S/B: use the per-channel time-windowed background.
-                    sb_neutron = np.where(neutron_bg_per_channel > 0, signal / neutron_bg_per_channel, np.nan)
-                    _step(ax_sb, channel_edges, np.log10(sb_neutron),
+                    log10_sb_n, sigma_log10_sb_n = _sb_and_sigma(signal, neutron_bg_per_channel, _n_std)
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_n, sigma_log10_sb_n, color='tab:green')
+                    _step(ax_sb, channel_edges, log10_sb_n,
                           color='tab:green', linestyle='-', label='neutron', linewidth=3)
-                    sb_photon_gating = np.where(photon_bg_per_channel > 0, signal / photon_bg_per_channel, np.nan)
-                    _step(ax_sb, channel_edges, np.log10(sb_photon_gating),
+                    log10_sb_ph, sigma_log10_sb_ph = _sb_and_sigma(signal, photon_bg_per_channel, _ph_std)
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_ph, sigma_log10_sb_ph, color='tab:purple')
+                    _step(ax_sb, channel_edges, log10_sb_ph,
                           color='tab:purple', linestyle='-', label='photon', linewidth=3)
             else:
-                sb_neutron = np.where(neutron_bg_per_channel > 0, signal / neutron_bg_per_channel, np.nan)
-                _step(ax_sb, channel_edges, np.log10(sb_neutron),
+                log10_sb_n, sigma_log10_sb_n = _sb_and_sigma(signal, neutron_bg_per_channel, _n_std)
+                _step_band_linear(ax_sb, channel_edges, log10_sb_n, sigma_log10_sb_n, color='tab:green')
+                _step(ax_sb, channel_edges, log10_sb_n,
                       color='tab:green', label=n_label, linewidth=3)
-                sb_photon = np.where(photon_bg_per_channel > 0, signal / photon_bg_per_channel, np.nan)
-                _step(ax_sb, channel_edges, np.log10(sb_photon),
+                log10_sb_ph, sigma_log10_sb_ph = _sb_and_sigma(signal, photon_bg_per_channel, _ph_std)
+                _step_band_linear(ax_sb, channel_edges, log10_sb_ph, sigma_log10_sb_ph, color='tab:purple')
+                _step(ax_sb, channel_edges, log10_sb_ph,
                       color='tab:purple', label=g_label, linewidth=3)
                 if neutron_bg_per_channel2 is not None and photon_bg_per_channel2 is not None and signal2 is not None:
-                    sb_neutron_cd2 = np.where(neutron_bg_per_channel2 > 0, signal2 / neutron_bg_per_channel2, np.nan)
-                    _step(ax_sb, channel_edges2, np.log10(sb_neutron_cd2),
+                    _n_std2 = neutron_bg_std_per_channel2 if neutron_bg_std_per_channel2 is not None else np.zeros_like(neutron_bg_per_channel2)
+                    _ph_std2 = photon_bg_std_per_channel2 if photon_bg_std_per_channel2 is not None else np.zeros_like(photon_bg_per_channel2)
+                    log10_sb_n_cd2, sigma_log10_sb_n_cd2 = _sb_and_sigma(signal2, neutron_bg_per_channel2, _n_std2)
+                    _step_band_linear(ax_sb, channel_edges2, log10_sb_n_cd2, sigma_log10_sb_n_cd2, color='tab:green')
+                    _step(ax_sb, channel_edges2, log10_sb_n_cd2,
                           color='tab:green', linestyle='--', label='neutron (d)', linewidth=3)
-                    sb_photon_cd2 = np.where(photon_bg_per_channel2 > 0, signal2 / photon_bg_per_channel2, np.nan)
-                    _step(ax_sb, channel_edges2, np.log10(sb_photon_cd2),
+                    log10_sb_ph_cd2, sigma_log10_sb_ph_cd2 = _sb_and_sigma(signal2, photon_bg_per_channel2, _ph_std2)
+                    _step_band_linear(ax_sb, channel_edges2, log10_sb_ph_cd2, sigma_log10_sb_ph_cd2, color='tab:purple')
+                    _step(ax_sb, channel_edges2, log10_sb_ph_cd2,
                           color='tab:purple', linestyle='--', label='photon (d)', linewidth=3)
 
             ax_sb.set_xlabel('Horizontal Position [cm]')
@@ -796,7 +809,9 @@ class SpectrometerPlotter:
                 filename_time_windows,
                 time_bins=time_bins,
                 neutron_background_vs_time=neutron_background_vs_time,
+                neutron_background_std_vs_time=neutron_background_std_vs_time,
                 photon_background_vs_time=photon_background_vs_time,
+                photon_background_std_vs_time=photon_background_std_vs_time,
             )
 
         # Plot 5 (time-gating only, background data required): background E_dep vs time.
@@ -824,7 +839,9 @@ class SpectrometerPlotter:
         n_kde_points: int = 300,
         time_bins: Optional[np.ndarray] = None,
         neutron_background_vs_time: Optional[np.ndarray] = None,
+        neutron_background_std_vs_time: Optional[np.ndarray] = None,
         photon_background_vs_time: Optional[np.ndarray] = None,
+        photon_background_std_vs_time: Optional[np.ndarray] = None,
     ) -> None:
         """Ridgeline plot of the detector arrival-time PDF for each hodoscope channel.
 
@@ -851,7 +868,7 @@ class SpectrometerPlotter:
             arr_s = beam[:, 4]
             x_cm = beam[:, 0] * 100
             y_cm = beam[:, 2] * 100
-            local_y_ctrs_cm = hod.channel_y_centers * 100 if hod.channel_y_centers is not None else np.full(hod.total_channels, hod.y_center * 100)
+            local_y_ctrs_cm = hod.channel_y_centers * 100
             local_heights_cm = hod.channel_heights * 100
             local_edges_cm = hod.channel_edges * 100
             idx = np.digitize(x_cm, local_edges_cm) - 1
@@ -965,10 +982,24 @@ class SpectrometerPlotter:
             overlap = np.maximum(0.0, np.minimum(bin_right, global_t_max) - np.maximum(bin_left, global_t_min)) / dt
             mask = overlap > 0
             ax_bg = ax.twinx()
-            ax_bg.step(time_ns_bg[mask], neutron_background_vs_time[mask] * overlap[mask], where='mid',
+            n_vals = neutron_background_vs_time[mask] * overlap[mask]
+            ph_vals = photon_background_vs_time[mask] * overlap[mask]
+            ax_bg.step(time_ns_bg[mask], n_vals, where='mid',
                        color='tab:green', linewidth=2, label='neutron', alpha=0.8)
-            ax_bg.step(time_ns_bg[mask], photon_background_vs_time[mask] * overlap[mask], where='mid',
+            ax_bg.step(time_ns_bg[mask], ph_vals, where='mid',
                        color='tab:purple', linewidth=2, label='photon', alpha=0.8)
+            if neutron_background_std_vs_time is not None:
+                n_std = neutron_background_std_vs_time[mask] * overlap[mask]
+                ax_bg.fill_between(time_ns_bg[mask],
+                                   n_vals - n_std,
+                                   n_vals + n_std,
+                                   step='mid', color='tab:green', alpha=0.25, linewidth=0)
+            if photon_background_std_vs_time is not None:
+                ph_std = photon_background_std_vs_time[mask] * overlap[mask]
+                ax_bg.fill_between(time_ns_bg[mask],
+                                   ph_vals - ph_std,
+                                   ph_vals + ph_std,
+                                   step='mid', color='tab:purple', alpha=0.25, linewidth=0)
             ax_bg.set_yscale('log')
             ax_bg.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
             ax_bg.text(0.90, 0.5, 'neutron', transform=ax_bg.transAxes,
@@ -1126,7 +1157,12 @@ class SpectrometerPlotter:
             filename = f'{self.spectrometer.figure_directory}/particle_density_heatmap.png'
 
         particle = self.spectrometer.conversion_foil.particle
-        density_map, response, X_mesh, Y_mesh = self.performance_analyzer.get_recoil_density_map(dx, dy, particle_yield=incident_particle_yield)
+        primary_response = self.performance_analyzer.get_channel_response(
+            incident_particle_yield, compute_density=True, dx=dx, dy=dy,
+        )
+        density_map = primary_response.density_map
+        X_mesh = primary_response.density_x
+        Y_mesh = primary_response.density_y
 
         fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -1139,14 +1175,19 @@ class SpectrometerPlotter:
         cbar.set_label(f'log$_{{10}}$(Fluence {units})')
 
         # Add dual data if available
+        density_map2 = response_map2 = X_mesh2 = Y_mesh2 = None
         if self.dual_data:
-            performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
-            density2, response2, X_mesh2, Y_mesh2 = performance_analyzer2.get_recoil_density_map(dx, dy, particle_yield=incident_particle_yield)
-            im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
+            secondary_response = self.dual_data['performance_analyzer'].get_channel_response(
+                incident_particle_yield, compute_density=True, dx=dx, dy=dy,
+            )
+            density_map2 = secondary_response.density_map
+            X_mesh2 = secondary_response.density_x
+            Y_mesh2 = secondary_response.density_y
+            im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density_map2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
             cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-            units = f'[{particle2}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle2}/cm$^2$]'
-            cbar2.set_label(f'log$_{{10}}$(Fluence {units})')
+            units2 = f'[{particle2}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle2}/cm$^2$]'
+            cbar2.set_label(f'log$_{{10}}$(Fluence {units2})')
 
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
@@ -1160,14 +1201,14 @@ class SpectrometerPlotter:
         # If detector is used, also plot response map
         if self.spectrometer.hodoscope.detector_used:
             fig, ax = plt.subplots(figsize=(10, 8))
-            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(response), cmap=self.primary_cmap, shading='auto')
+            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(primary_response.response_map_2d), cmap=self.primary_cmap, shading='auto')
             cbar = fig.colorbar(im, ax=ax, shrink=0.6)
             response_units = '[MeV/cm$^2$-source]' if incident_particle_yield is None else '[MeV/cm$^2$]'
             cbar.set_label(f'log$_{{10}}$(Energy Deposited {response_units})')
 
             # Add dual data if available
-            if self.dual_data:
-                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(response2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
+            if self.dual_data and secondary_response.response_map_2d is not None:
+                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(secondary_response.response_map_2d), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
                 cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
                 cbar2.set_label(f'log$_{{10}}$(Energy Deposited {response_units})')
 
@@ -1179,153 +1220,6 @@ class SpectrometerPlotter:
             fig.savefig(response_filename, dpi=150, bbox_inches='tight')
             print(f'Detector response heatmap saved to {response_filename}')
         
-    def plot_synthetic_incident_histogram(
-        self,
-        filename: Optional[str] = None,
-    ):
-        if filename == None:
-            filename = f'{self.spectrometer.figure_directory}/synthetic_{self.spectrometer.conversion_foil.incident_particle}_histogram.png'
-        dsr, plasma_temperature, left_edge, right_edge, dsr_energy_range, primary_energy_range, energies, energies_std, response, background = self.performance_analyzer.get_plasma_parameters()
-        fwhm = right_edge - left_edge
-        
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        # Plot histogram
-        ax.step(
-            energies,
-            response,
-            where='pre',
-            color=self.primary_color
-        )
-        ax.fill_between(
-            energies,
-            response - background,
-            response + background,
-            step='pre',
-            color=self.primary_color,
-            alpha=0.3,
-        )
-        # hist, bins, _ = ax.hist(energies, bins=n_bins, histtype='step', color='tab:blue', density=True)
-        # Add energy standard deviation
-        # hist_std = self._get_histogram_std(bins, energies, energies_std)
-        # ax.fill_between(
-        #     bins[1:],
-        #     hist - hist_std,
-        #     hist + hist_std,
-        #     color='tab:blue',
-        #     alpha=0.3,
-        #     step='pre'
-        # )
-        
-        # Add dual data if available
-        if self.dual_data:
-            performance_analyzer2: PerformanceAnalyzer = self.dual_data['performance_analyzer']
-            dsr2, plasma_temperature2, left_edge2, right_edge2, dsr_energy_range2, primary_energy_range2, energies2, energies_std2, response2, background2 = performance_analyzer2.get_plasma_parameters()
-            fwhm2 = right_edge2 - left_edge2
-            ax.step(
-                energies2,
-                response2,
-                where='pre',
-                color=self.dual_data['secondary_color'],
-            )
-            ax.fill_between(
-                energies2,
-                response2 - background2,
-                response2 + background2,
-                step='pre',
-                color=self.dual_data['secondary_color'],
-                alpha=0.3,
-            )
-            
-        
-        # Highlight dsr and primary range
-        ax.axvspan(dsr_energy_range[0], dsr_energy_range[1], color='tab:orange', alpha=0.2)
-        ax.axvspan(primary_energy_range[0], primary_energy_range[1], color='tab:green', alpha=0.2)
-        
-        # Add text to indicate dsr and primary range
-        ax.text(
-            dsr_energy_range[0] + (dsr_energy_range[1] - dsr_energy_range[0]) / 2,
-            max(response) / 1000,
-            'DSR',
-            ha='center',
-            va='top',
-            color='tab:red',
-            fontsize=12
-        )
-        
-        ax.text(
-            primary_energy_range[0] + (primary_energy_range[1] - primary_energy_range[0]) / 2,
-            max(response) / 1000,
-            'Primary',
-            ha='center',
-            va='top',
-            color='tab:green',
-            fontsize=12
-        )
-        
-        # Add double sided arrow to indicate fwhm
-        height = max(response)
-        ax.annotate(
-            f'FWHM = {int(fwhm*1000):3d} keV  \n$T_i$ = {plasma_temperature:.2f} keV   ',
-            xy=(right_edge, height/2),
-            xytext=(left_edge, height/2),
-            arrowprops=dict(
-                arrowstyle='<->',
-                color='black',
-                shrinkA=0,
-                shrinkB=0,
-            ),
-            ha='right',
-            va='center',
-            fontsize=12
-        )
-        
-        # Add dsr text
-        ax.text(
-            dsr_energy_range[0] + (dsr_energy_range[1] - dsr_energy_range[0]) / 2,
-            height/50,
-            f'$dsr$={dsr*100:.1f}%',
-            ha='center',
-            va='bottom',
-            color='black',
-            fontsize=12
-        )
-        
-        ax.set_xlabel(f'{self.spectrometer.conversion_foil.incident_particle.capitalize()} Energy [MeV]')
-        ax.set_ylabel('PDF')
-        ax.set_yscale('log')
-        ax.grid(True, alpha=0.3)
-        
-        fig.tight_layout()
-        fig.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f'Synthetic {self.spectrometer.conversion_foil.incident_particle} histogram saved to {filename}')
-        
-    def _get_histogram_std(self, bins, energies, energies_std, density=True):
-        """Helper function to compute histogram standard deviation."""
-        # Get which bin each energy falls into
-        bin_indices = np.digitize(energies, bins) - 1
-        hist_std = np.zeros(len(bins) - 1)
-        
-        for i, energy_std in enumerate(energies_std):
-            # Find the bin index for this energy
-            bin_index = bin_indices[i]
-            if 0 <= bin_index < len(hist_std):
-                # Accumulate variance
-                hist_std[bin_index] += (energy_std ** 2)
-        
-        # Take square root to get standard deviation
-        hist_std = np.sqrt(hist_std)
-        
-        # TODO: Add background contribution — call hodoscope.get_background(neutron_file, photon_file)
-        #       and sum per-channel arrays once background files are available here.
-        
-        # Normalize if density is True
-        if density:
-            bin_widths = np.diff(bins)
-            hist_std /= (len(energies) * bin_widths)
-        
-        return hist_std
-    
     def plot_monoenergetic_analysis(
         self,  
         incident_energy: float,
@@ -1867,7 +1761,15 @@ class SpectrometerPlotter:
         color: str = 'tab:blue',
         filename: Optional[str] = None,
     ) -> Axes:
-        """Plot a forward-fit result with optional true-spectrum and component overlays.
+        """Plot a forward-fit result with per-channel data points and optional overlays.
+
+        Per-channel data points are always plotted when result.raw_counts and
+        result.response_matrix are available (populated automatically by SpectrumFitter.fit()).
+        Each data point shows:
+          - X error bar: rms spread of incident energies contributing to that channel
+            (energy resolution, derived from the response matrix).
+          - Y error bar: combined counting + background uncertainty converted to spectrum
+            units.
 
         Parameters
         ----------
@@ -1915,7 +1817,7 @@ class SpectrometerPlotter:
             ylabel = r'Probability density [MeV$^{-1}$]'
 
         f = result.spectrum / fit_norm
-        sigma = result.uncertainties / fit_norm
+        sigma_spectrum = result.uncertainties / fit_norm
 
         _comp_label_positions = [
             (0.68, 0.96),
@@ -1925,6 +1827,7 @@ class SpectrometerPlotter:
         ]
         _ff_label_pos = (0.86, 0.27)
         _ts_label_pos = (0.84, 0.4)
+        _data_label_pos = (0.86, 0.15)
 
         _label_kw = dict(transform=ax.transAxes, fontsize=13, ha='center', va='center')
         _stroke = [pe.withStroke(linewidth=3, foreground='white')]
@@ -1939,8 +1842,26 @@ class SpectrometerPlotter:
                 pos = _comp_label_positions[i] if i < len(_comp_label_positions) else (0.5, 0.5)
                 ax.text(*pos, label, color=col, **_label_kw).set_path_effects(_stroke)
 
+        # Per-channel data points with x (energy resolution) and y (count uncertainty) error bars.
+        if result.raw_counts is not None and result.response_matrix is not None:
+            spectrum_data, spectrum_data_sigma, nominal_energy, energy_spread = compute_spectrum_data_points(result)
+            # Apply same normalization as the fitted spectrum so axes are consistent.
+            # Interpolate fit_norm to the channel nominal energies.
+            if np.ndim(fit_norm) == 0:
+                data_norm = float(fit_norm)
+            else:
+                data_norm = np.interp(nominal_energy, E, fit_norm)
+            data_norm_safe = np.where(data_norm > 0, data_norm, 1.0)
+            ax.errorbar(
+                nominal_energy, spectrum_data / data_norm_safe,
+                xerr=energy_spread, yerr=spectrum_data_sigma / data_norm_safe,
+                fmt='o', color='k', capsize=3, markersize=5, linewidth=1.5,
+                zorder=5, label='Data',
+            )
+            ax.text(*_data_label_pos, 'Data', color='k', **_label_kw).set_path_effects(_stroke)
+
         if show_uncertainties:
-            ax.fill_between(E, f - sigma, f + sigma, color=color, alpha=0.25, zorder=2)
+            ax.fill_between(E, f - sigma_spectrum, f + sigma_spectrum, color=color, alpha=0.25, zorder=2)
         ax.plot(E, f, color=color, linewidth=2, zorder=3, label='Forward fit')
         ax.text(*_ff_label_pos, 'Forward fit', color=color, **_label_kw).set_path_effects(_stroke)
 

@@ -1,10 +1,15 @@
 """Forward-fitting of parametric spectral models to hodoscope count data."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .performance import HodoscopeResponse
 from scipy.interpolate import LinearNDInterpolator
 from scipy.optimize import least_squares
 
@@ -220,7 +225,6 @@ def nonstop_model(
 
     return model, components_model, param_names, param_bounds
 
-
 @dataclass
 class ForwardFittingResult:
     """Container for the output of a forward-fitting calculation.
@@ -239,6 +243,13 @@ class ForwardFittingResult:
     covariance_matrix : full (n_params, n_params) parameter covariance.
     message : optimizer termination message.
     bin_widths : energy bin widths [MeV] for converting spectrum to spectral density.
+    raw_counts : per-channel measured counts before background subtraction (valid channels only),
+        shape (n_valid_channels,). Used by compute_spectrum_data_points for visualization.
+    sigma_counts : per-channel 1-sigma weights used in the chi-square (valid channels only),
+        shape (n_valid_channels,).
+    response_matrix : response matrix restricted to valid channels, shape (n_energies, n_valid_channels).
+    background : per-channel background that was subtracted before fitting (valid channels only),
+        shape (n_valid_channels,). None if no background was supplied.
     """
     spectrum: np.ndarray
     uncertainties: np.ndarray
@@ -253,6 +264,10 @@ class ForwardFittingResult:
     message: str
     model_name: str = ''
     bin_widths: Optional[np.ndarray] = None
+    raw_counts: Optional[np.ndarray] = None
+    sigma_counts: Optional[np.ndarray] = None
+    response_matrix: Optional[np.ndarray] = None
+    background: Optional[np.ndarray] = None
 
     def summary(self, true_params: Optional[np.ndarray] = None) -> None:
         width = 22 if true_params is not None else 18
@@ -290,22 +305,46 @@ class SpectrumFitter:
 
     Parameters
     ----------
-    response_matrix : ndarray of shape (n_energies, n_channels), or a 2-tuple of such
-        arrays for dual-foil setups (stacked column-wise via hstack).
-    energy_grid : ndarray, shape (n_energies,)
+    response : HodoscopeResponse or dict[str, HodoscopeResponse]
+        Single response object for single-foil setups, or a dict mapping foil
+        material name to HodoscopeResponse for dual-foil setups (matrices are
+        stacked column-wise).  Each response must have ``response_matrix`` and
+        ``energy_grid`` set (use ``PerformanceAnalyzer.get_channel_response()``).
     """
 
     def __init__(
         self,
-        response_matrix: Union[np.ndarray, Dict[str, np.ndarray]],
-        energy_grid: np.ndarray,
+        response: Union[HodoscopeResponse, Dict[str, HodoscopeResponse]],
     ) -> None:
-        if isinstance(response_matrix, dict):
-            self.R = np.hstack(list(response_matrix.values()))
-        else:
-            self.R = response_matrix
-        self.energy_grid = energy_grid
 
+        if isinstance(response, dict):
+            responses = list(response.values())
+            R_list = [resp.response_matrix for resp in responses]
+            if any(R is None for R in R_list):
+                raise ValueError(
+                    'All HodoscopeResponse objects in a dual-foil dict must have '
+                    'response_matrix set.'
+                )
+            self.R = np.hstack(R_list)
+            self.energy_grid = responses[0].energy_grid
+            self._signal = np.concatenate([resp.signal for resp in responses])
+            self._signal_std = np.concatenate([resp.signal_std for resp in responses])
+            self._background = np.concatenate([resp.background for resp in responses])
+            self._background_std = np.concatenate([resp.background_std for resp in responses])
+        else:
+            if response.response_matrix is None:
+                raise ValueError(
+                    'HodoscopeResponse must have response_matrix set to use SpectrumFitter.'
+                )
+            self.R = response.response_matrix
+            self.energy_grid = response.energy_grid
+            self._signal = response.signal
+            self._signal_std = response.signal_std
+            self._background = response.background
+            self._background_std = response.background_std
+
+        if self.energy_grid is None:
+            raise ValueError('energy_grid must be set in HodoscopeResponse.')
         if self.R.shape[0] != len(self.energy_grid):
             raise ValueError(
                 f'response_matrix has {self.R.shape[0]} rows but '
@@ -314,13 +353,12 @@ class SpectrumFitter:
 
     def fit(
         self,
-        measured_signal: np.ndarray,
         model: Callable[[np.ndarray], np.ndarray],
         initial_params: Union[np.ndarray, List[float]],
-        uncertainties: Optional[np.ndarray] = None,
+        signal: Optional[np.ndarray] = None,
         param_names: Optional[List[str]] = None,
         bounds: Optional[Tuple] = None,
-        background: Optional[np.ndarray] = None,
+        true_params: Optional[np.ndarray] = None,
     ) -> ForwardFittingResult:
         """Fit a parametric model to measured hodoscope counts.
 
@@ -332,19 +370,22 @@ class SpectrumFitter:
             cov = pinv(J^T J) * chi^2_nu
         which is exact in the linear limit and approximate otherwise.
 
+        Signal, background, and per-channel sigma are taken from the
+        HodoscopeResponse passed to the constructor.  Pass ``signal`` to
+        override (e.g. when fitting a synthetic count vector).
+
         Parameters
         ----------
-        measured_signal : shape (n_channels,)
-        uncertainties : shape (n_channels,) per-channel 1-sigma errors.
-            If None, all channels are weighted equally (unit sigma).
         model : callable ``params -> spectrum``
             Returns the incident spectrum on ``self.energy_grid``.
             Use the first element of any model factory's return tuple.
         initial_params : shape (n_params,)
+        signal : shape (n_channels,), optional
+            Override the signal stored in the HodoscopeResponse.  Useful for
+            testing with synthetic count vectors.
         param_names : display labels (defaults to p0, p1, ...).
         bounds : ``(lower_bounds, upper_bounds)`` for scipy. Use the ``param_bounds``
             returned by the model factory as a starting point.
-        background : optional per-channel background subtracted before fitting.
 
         Returns
         -------
@@ -352,26 +393,41 @@ class SpectrumFitter:
             Call ``components_model(result.params)`` on the factory's second return
             value to decompose the fitted spectrum for plotting.
         """
-        if background is not None:
-            measured_signal = measured_signal - background
+        if signal is not None:
+            # Explicit signal override: treat as net signal, no background subtraction.
+            # Useful for synthetic count vectors (e.g. R.T @ f_true) that carry no background.
+            raw_counts = np.asarray(signal, dtype=float)
+            bg = None
+            signal_std = np.sqrt(np.maximum(raw_counts, 1.0))
+        else:
+            # Use stored signal from response.  Background (if any) is subtracted so the
+            # fitter sees the net signal.  Signal should be raw counts (signal + background)
+            # when using this path with real data.
+            raw_counts = np.asarray(self._signal, dtype=float)
+            bg = np.asarray(self._background, dtype=float) if self._background is not None else None
+            signal_std = self._signal_std
+
+        if bg is not None:
+            measured_signal = raw_counts - bg
+        else:
+            measured_signal = raw_counts.copy()
 
         if param_names is None:
             param_names = [f'p{i}' for i in range(len(initial_params))]
 
         bounds = (-np.inf, np.inf) if bounds is None else bounds
-
-        sigma = uncertainties if uncertainties is not None else np.ones(len(measured_signal))
-        valid = sigma > 0
+        valid = signal_std > 0
         if not np.any(valid):
-            raise ValueError('All channels have sigma == 0; cannot fit.')
+            raise ValueError('All channels have signal_std == 0; cannot fit.')
 
-        measured_signal = measured_signal[valid]
-        sigma = sigma[valid]
-        self.R = self.R[:, valid]
+        measured_signal_valid = measured_signal[valid]
+        signal_std_valid = signal_std[valid]
+        # Use a local copy of R restricted to valid channels so self.R is never mutated.
+        R_valid = self.R[:, valid]
 
         def _residuals(params: np.ndarray) -> np.ndarray:
-            predicted = self.R.T @ model(params)
-            return (predicted - measured_signal) / sigma
+            predicted = R_valid.T @ model(params)
+            return (predicted - measured_signal_valid) / signal_std_valid
 
         opt = least_squares(
             _residuals,
@@ -402,7 +458,7 @@ class SpectrumFitter:
             dp[i] = eps[i]
             # Second order central difference for Jacobian of model w.r.t. parameters
             J_model[:, i] = (model(p_opt + dp) - model(p_opt - dp)) / (2.0 * eps[i])
-        # Mathemtically: var(f_j) = sum_{k,l} (df_j/dp_k) * cov[k,l] * (df_j/dp_l)
+        # Mathematically: var(f_j) = sum_{k,l} (df_j/dp_k) * cov[k,l] * (df_j/dp_l)
         spec_cov_diag = np.einsum('ij,jk,ik->i', J_model, cov, J_model)
         spectrum_uncertainties = np.sqrt(np.maximum(spec_cov_diag, 0.0))
 
@@ -424,6 +480,73 @@ class SpectrumFitter:
             message=opt.message,
             model_name=getattr(model, 'model_name', ''),
             bin_widths=bw,
+            raw_counts=raw_counts[valid],
+            sigma_counts=signal_std_valid,
+            response_matrix=R_valid,
+            background=bg[valid] if bg is not None else None,
         )
-        result.summary()
+        result.summary(true_params=true_params)
         return result
+
+
+def compute_spectrum_data_points(
+    result: 'ForwardFittingResult',
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Convert per-channel hodoscope counts to approximate spectrum units for visualization.
+
+    For each hodoscope channel k this computes:
+      - A nominal incident energy E_k as the response-matrix weighted mean over the energy grid.
+      - An energy spread sigma_E_k as the response-matrix weighted rms (x error bar).
+      - A background-subtracted spectrum estimate in the same units as the fitted spectrum.
+      - A propagated 1-sigma uncertainty on that estimate (y error bar).
+
+    This function is a **visualization utility only**.  It uses a single-channel approximation
+    (dividing by the total column response) and does not replace the parametric forward fit.
+
+    Parameters
+    ----------
+    result : ForwardFittingResult
+        Must contain result.raw_counts, result.sigma_counts, result.response_matrix,
+        result.energy_grid, and result.background.  These are populated automatically
+        by SpectrumFitter.fit().
+
+    Returns
+    -------
+    spectrum_data : shape (n_valid_channels,)
+        Background-subtracted signal divided by total column response.  Same units as
+        result.spectrum (particles or MeV, depending on the response matrix).
+    spectrum_data_sigma : shape (n_valid_channels,)
+        1-sigma uncertainty on spectrum_data.
+    nominal_energy : shape (n_valid_channels,)
+        Response-matrix weighted mean incident energy per channel [MeV].
+    energy_spread : shape (n_valid_channels,)
+        Response-matrix weighted rms energy width per channel [MeV] (x error bar).
+    """
+    if result.raw_counts is None or result.response_matrix is None or result.sigma_counts is None:
+        raise ValueError(
+            'ForwardFittingResult is missing raw_counts, sigma_counts, or response_matrix. '
+            'Re-run SpectrumFitter.fit() to populate these fields.'
+        )
+
+    R = result.response_matrix  # (n_energies, n_valid_channels)
+    energy_grid = result.energy_grid  # (n_energies,)
+    raw_counts = result.raw_counts    # (n_valid_channels,)
+    sigma = result.sigma_counts       # (n_valid_channels,)
+    bg = result.background if result.background is not None else np.zeros(len(raw_counts))
+
+    n_channels = R.shape[1]
+
+    # Per-channel weighted mean and rms energy from the response matrix columns.
+    col_sums = R.sum(axis=0)  # (n_valid_channels,) - total response per channel
+    col_sums_safe = np.where(col_sums > 0, col_sums, 1.0)
+
+    nominal_energy = (energy_grid[:, np.newaxis] * R).sum(axis=0) / col_sums_safe
+    energy_variance = ((energy_grid[:, np.newaxis] - nominal_energy[np.newaxis, :]) ** 2 * R).sum(axis=0) / col_sums_safe
+    energy_spread = np.sqrt(np.maximum(energy_variance, 0.0))
+
+    # Background-subtracted signal and its uncertainty in spectrum units.
+    signal = raw_counts - bg
+    spectrum_data = signal / col_sums_safe
+    spectrum_data_sigma = sigma / col_sums_safe
+
+    return spectrum_data, spectrum_data_sigma, nominal_energy, energy_spread

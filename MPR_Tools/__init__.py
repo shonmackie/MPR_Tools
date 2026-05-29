@@ -16,6 +16,7 @@ from .analysis.forward_fitting import (
     SpectrumFitter, ForwardFittingResult,
     ballabio_model, nonstop_model
 )
+from .analysis.performance import HodoscopeResponse
 
 __version__ = "1.0.0"
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter',
     'PerformanceAnalyzer', 'HodoscopeCreator',
     'SpectrumFitter', 'ForwardFittingResult',
-    'ballabio_model', 'nonstop_model'
+    'ballabio_model', 'nonstop_model',
+    'HodoscopeResponse',
 ]
