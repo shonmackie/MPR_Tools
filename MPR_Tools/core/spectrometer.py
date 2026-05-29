@@ -242,14 +242,6 @@ class MPRSpectrometer:
         particles_per_process = num_recoil_particles // max_workers
         remaining_particles = num_recoil_particles % max_workers
         
-        # Narrow energy distribution unless doing monoenergetic performance analysis.
-        if len(incident_energies) > 1:
-            # Only use incident energies that can possibly produce recoil energies within acceptance range.
-            # Both min and max bounds are applied so out-of-acceptance bins don't influence the distribution.
-            idx = (incident_energies >= self.min_energy) & (incident_energies <= self.max_energy)
-            incident_energies = incident_energies[idx]
-            probability_distribution = probability_distribution[idx]
-
         # Weight energy distribution by scattering cross section
         interaction_probability = np.zeros_like(probability_distribution)
         for interaction in self.conversion_foil.interactions:
@@ -278,6 +270,8 @@ class MPRSpectrometer:
                     self.burn_duration,
                     y_restriction,
                     continuous_energy_sampling,
+                    self.min_energy,
+                    self.max_energy,
                 ))
         
         output_batches = run_concurrently(
@@ -309,6 +303,8 @@ class MPRSpectrometer:
         burn_duration: Optional[float],
         y_restriction: Optional[Literal['positive', 'negative']],
         continuous_energy_sampling: bool,
+        min_energy: float,
+        max_energy: float,
         progress_counter,
         progress_lock,
     ) -> np.ndarray:
@@ -341,23 +337,30 @@ class MPRSpectrometer:
                     )
                 )
 
+                # Reject recoil particles outside the spectrometer acceptance window.
+                # This is the correct place to filter: for heavier recoils (e.g. deuterons),
+                # high-energy neutrons can still produce accepted recoils at large lab angles,
+                # so filtering on incident energy instead would wrongly exclude them.
+                if not (min_energy <= recoil_energy <= max_energy):
+                    continue
+
                 # Convert foil position and scattering angles to COSY phase-space coordinates
                 x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
                 y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
-                
+
                 total_distance = np.sqrt(
                     (x_aperture - x0)**2 + (y_aperture - y0)**2 +
                     conversion_foil.aperture_distance**2)
                 sin_angle_x = (x_aperture - x0) / total_distance
                 sin_angle_y = (y_aperture - y0) / total_distance
-                
+
                 gamma = 1 + recoil_energy/particle_rest_energy  # Lorentz factor of the ray
                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
                 p_x_relative = p_relative * sin_angle_x
                 p_y_relative = p_relative * sin_angle_y
-                
+
                 energy_relative = (recoil_energy - reference_energy) / reference_energy
-                
+
                 # Calculate foil arrival time
                 if conversion_foil.incident_particle == 'photon':
                     velocity = LIGHT_SPEED  # m/s
@@ -369,7 +372,7 @@ class MPRSpectrometer:
                 else:
                     raise ValueError(f"Unsupported incident particle type: {conversion_foil.incident_particle}")
                 foil_time = target_to_foil_distance / velocity if target_to_foil_distance else 0.0
-                
+
                 # Add Gaussian timing noise if burn duration is provided
                 if burn_duration:
                     # Convert FWHM burn duration to standard deviation for Gaussian noise
@@ -381,7 +384,7 @@ class MPRSpectrometer:
                     batch_results,
                     np.array([x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy])
                 ))
-                
+
                 # Update progress counter thread-safely
                 with progress_lock:
                     progress_counter.value += 1
