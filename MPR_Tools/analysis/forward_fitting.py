@@ -11,7 +11,8 @@ import pandas as pd
 if TYPE_CHECKING:
     from .performance import HodoscopeResponse
 from scipy.interpolate import LinearNDInterpolator
-from scipy.optimize import least_squares
+from scipy.optimize import differential_evolution, least_squares
+from tqdm import tqdm
 
 
 def ballabio_model(
@@ -177,7 +178,7 @@ def nonstop_model(
         'primary': 'Primary',
         'downscatter_DT': 'DT downscatter',
         'downscatter_Liner': 'Liner downscatter',
-        'tertiary': 'Tertiary',
+        'tertiary': 'AKN',
     }
     interpolators: Dict[str, LinearNDInterpolator] = {}
     _LOG_EPS = 1e-30  # floor before log10 to avoid -inf on near-zero spectral bins
@@ -250,6 +251,7 @@ class ForwardFittingResult:
     response_matrix : response matrix restricted to valid channels, shape (n_energies, n_valid_channels).
     background : per-channel background that was subtracted before fitting (valid channels only),
         shape (n_valid_channels,). None if no background was supplied.
+
     """
     spectrum: np.ndarray
     uncertainties: np.ndarray
@@ -268,7 +270,6 @@ class ForwardFittingResult:
     sigma_counts: Optional[np.ndarray] = None
     response_matrix: Optional[np.ndarray] = None
     background: Optional[np.ndarray] = None
-
     def summary(self, true_params: Optional[np.ndarray] = None) -> None:
         width = 22 if true_params is not None else 18
         header = f'=== {self.model_name} ===' if self.model_name else '==='
@@ -359,6 +360,7 @@ class SpectrumFitter:
         param_names: Optional[List[str]] = None,
         bounds: Optional[Tuple] = None,
         true_params: Optional[np.ndarray] = None,
+        use_global_optimizer: bool = False,
     ) -> ForwardFittingResult:
         """Fit a parametric model to measured hodoscope counts.
 
@@ -396,26 +398,26 @@ class SpectrumFitter:
         if signal is not None:
             # Explicit signal override: treat as net signal, no background subtraction.
             # Useful for synthetic count vectors (e.g. R.T @ f_true) that carry no background.
-            raw_counts = np.asarray(signal, dtype=float)
             bg = None
-            signal_std = np.sqrt(np.maximum(raw_counts, 1.0))
+            signal_std = np.sqrt(np.maximum(signal, 1.0))
         else:
             # Use stored signal from response.  Background (if any) is subtracted so the
             # fitter sees the net signal.  Signal should be raw counts (signal + background)
             # when using this path with real data.
-            raw_counts = np.asarray(self._signal, dtype=float)
-            bg = np.asarray(self._background, dtype=float) if self._background is not None else None
+            signal = self._signal
+            bg = self._background
             signal_std = self._signal_std
 
         if bg is not None:
-            measured_signal = raw_counts - bg
+            measured_signal = signal - bg
         else:
-            measured_signal = raw_counts.copy()
+            measured_signal = signal.copy()
 
         if param_names is None:
             param_names = [f'p{i}' for i in range(len(initial_params))]
 
         bounds = (-np.inf, np.inf) if bounds is None else bounds
+        lo, hi = bounds[0], bounds[1]
         valid = signal_std > 0
         if not np.any(valid):
             raise ValueError('All channels have signal_std == 0; cannot fit.')
@@ -429,11 +431,29 @@ class SpectrumFitter:
             predicted = R_valid.T @ model(params)
             return (predicted - measured_signal_valid) / signal_std_valid
 
-        opt = least_squares(
-            _residuals,
-            initial_params,
-            bounds=bounds
-        )
+        if use_global_optimizer and bounds != (-np.inf, np.inf):
+            hi_de = np.where(np.isinf(hi), np.abs(initial_params) * 1e3, hi)
+            lo_de = np.where(np.isinf(lo), 0.0, lo)
+            de_bounds = list(zip(lo_de, hi_de))
+            def _de_objective(p):
+                try:
+                    return float(np.sum(_residuals(p) ** 2))
+                except ValueError:
+                    return 1e30
+
+            de_result = differential_evolution(
+                _de_objective,
+                de_bounds,
+                seed=42,
+                maxiter=500,
+                tol=1e-6,
+                polish=False,
+            )
+            p0 = de_result.x
+        else:
+            p0 = initial_params
+
+        opt = least_squares(_residuals, p0, bounds=bounds)
 
         p_opt = opt.x
         # Degrees of freedom: valid channels minus fitted parameters
@@ -458,7 +478,7 @@ class SpectrumFitter:
             dp[i] = eps[i]
             # Second order central difference for Jacobian of model w.r.t. parameters
             J_model[:, i] = (model(p_opt + dp) - model(p_opt - dp)) / (2.0 * eps[i])
-        # Mathematically: var(f_j) = sum_{k,l} (df_j/dp_k) * cov[k,l] * (df_j/dp_l)
+        # Mathematically, to first order: var(f_j) = sum_{k,l} (df_j/dp_k) * cov[k,l] * (df_j/dp_l)
         spec_cov_diag = np.einsum('ij,jk,ik->i', J_model, cov, J_model)
         spectrum_uncertainties = np.sqrt(np.maximum(spec_cov_diag, 0.0))
 
@@ -480,14 +500,13 @@ class SpectrumFitter:
             message=opt.message,
             model_name=getattr(model, 'model_name', ''),
             bin_widths=bw,
-            raw_counts=raw_counts[valid],
+            raw_counts=signal[valid],
             sigma_counts=signal_std_valid,
             response_matrix=R_valid,
             background=bg[valid] if bg is not None else None,
         )
         result.summary(true_params=true_params)
         return result
-
 
 def compute_spectrum_data_points(
     result: 'ForwardFittingResult',

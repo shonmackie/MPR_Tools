@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.axes import Axes
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize, LogNorm
 from scipy.stats import gaussian_kde
@@ -60,15 +61,41 @@ class SpectrometerPlotter:
         else:
             raise ValueError(f'Invalid spectrometer type: {type(spectrometer)}. Should be MPRSpectrometer or DualFoilSpectrometer.')
     
+    @staticmethod
+    def _overlay_hodoscope(ax: Axes, hodoscope, color: str = 'black') -> None:
+        """Draw the full envelope and channel boundaries for one hodoscope on ax."""
+        heights = hodoscope.channel_heights * 100  # cm, shape (N,)
+        edges = hodoscope.channel_edges * 100       # cm, shape (N+1,)
+        y_ctrs = hodoscope.channel_y_centers * 100  # cm, per-channel (N,)
+
+        tops = y_ctrs + heights / 2
+        bots = y_ctrs - heights / 2
+        n = len(heights)
+
+        x_env = np.empty(2 * n)
+        x_env[0::2] = edges[:-1]
+        x_env[1::2] = edges[1:]
+
+        ax.plot(x_env, np.repeat(tops, 2), color=color, linewidth=1.0)
+        ax.plot(x_env, np.repeat(bots, 2), color=color, linewidth=1.0)
+        ax.plot([edges[0], edges[0]], [bots[0], tops[0]], color=color, linewidth=1.0)
+        ax.plot([edges[-1], edges[-1]], [bots[-1], tops[-1]], color=color, linewidth=1.0)
+
+        for i in range(1, n):
+            y_lo = max(bots[i - 1], bots[i])
+            y_hi = min(tops[i - 1], tops[i])
+            if y_hi > y_lo:
+                ax.vlines(edges[i], y_lo, y_hi, color=color, linestyle='--', linewidth=0.5)
+
     def plot_focal_plane_distribution(
-        self, 
+        self,
         filename: Optional[str] = None,
         include_hodoscope: bool = False,
         point_size: float = 1.0
     ) -> None:
         """
         Plot focal particle distribution in the detector plane.
-        
+
         Args:
             filename: Output filename
             include_hodoscope: Whether to overlay hodoscope geometry
@@ -76,46 +103,13 @@ class SpectrometerPlotter:
         """
         if filename == None:
             filename = f'{self.spectrometer.figure_directory}/focal_plane_distribution.png'
-        
+
         fig, ax = plt.subplots(figsize=(10, 8))
-        
-        # Draw hodoscope if requested
+
         if include_hodoscope:
-            def _draw_hodoscope(hod, color='black'):
-                """Draw the full envelope and channel boundaries for one hodoscope."""
-                heights = hod.channel_heights * 100  # cm, shape (N,)
-                edges = hod.channel_edges * 100       # cm, shape (N+1,)
-                y_ctrs = hod.channel_y_centers * 100  # cm, per-channel (N,)
-
-                tops = y_ctrs + heights / 2  # top edge per channel
-                bots = y_ctrs - heights / 2  # bottom edge per channel
-                n = len(heights)
-
-                # Step-function x coords: each internal edge appears twice so the
-                # line steps horizontally then jumps vertically at each boundary.
-                x_env = np.empty(2 * n)
-                x_env[0::2] = edges[:-1]
-                x_env[1::2] = edges[1:]
-
-                # Top and bottom step-function envelopes
-                ax.plot(x_env, np.repeat(tops, 2), color=color, linewidth=1.0)
-                ax.plot(x_env, np.repeat(bots, 2), color=color, linewidth=1.0)
-                # Left and right end caps
-                ax.plot([edges[0], edges[0]], [bots[0], tops[0]], color=color, linewidth=1.0)
-                ax.plot([edges[-1], edges[-1]], [bots[-1], tops[-1]], color=color, linewidth=1.0)
-
-                # Internal channel-edge lines (span the overlap of adjacent channels)
-                for i in range(1, n):
-                    y_lo = max(bots[i - 1], bots[i])
-                    y_hi = min(tops[i - 1], tops[i])
-                    if y_hi > y_lo:
-                        ax.vlines(edges[i], y_lo, y_hi,
-                                  color=color, linestyle='--', linewidth=0.5)
-
-            
-            _draw_hodoscope(self.spectrometer.hodoscope)
+            self._overlay_hodoscope(ax, self.spectrometer.hodoscope)
             if self.dual_data:
-                _draw_hodoscope(self.dual_data['spectrometer'].hodoscope)
+                self._overlay_hodoscope(ax, self.dual_data['spectrometer'].hodoscope)
 
         # Scatter plot of focal particle positions
         particle_energies = self.spectrometer.input_beam[:, 5] * self.spectrometer.reference_energy + self.spectrometer.reference_energy
@@ -611,7 +605,7 @@ class SpectrometerPlotter:
             ax_top.text(0.2, 0.82, particle_label, color=self.primary_color,
                         transform=ax_top.transAxes, **_label_kw).set_path_effects(_stroke)
             if neutron_bg_per_channel is not None:
-                ax_top.text(0.38, 0.39, 'neutron', color='tab:green',
+                ax_top.text(0.38, 0.6, 'neutron', color='tab:green',
                             transform=ax_top.transAxes, **_label_kw).set_path_effects(_stroke)
             if photon_bg_per_channel is not None:
                 ax_top.text(0.74, 0.47, 'photon', color='tab:purple',
@@ -648,7 +642,7 @@ class SpectrometerPlotter:
                 ax_bot.text(0.35, 0.3, 'neutron', color='tab:green',
                             transform=ax_bot.transAxes, **_label_kw).set_path_effects(_stroke)
             if photon_bg_per_channel2 is not None:
-                ax_bot.text(0.68, 0.32, 'photon', color='tab:purple',
+                ax_bot.text(0.68, 0.37, 'photon', color='tab:purple',
                             transform=ax_bot.transAxes, **_label_kw).set_path_effects(_stroke)
             _add_energy_axis(ax_bot, which='secondary')
 
@@ -683,7 +677,7 @@ class SpectrometerPlotter:
                 ax_counts.text(0.55, 0.55, 'neutron', color='tab:green',
                                transform=ax_counts.transAxes, **_label_kw).set_path_effects(_stroke)
             if photon_bg_per_channel is not None:
-                ax_counts.text(0.80, 0.30, 'photon', color='tab:purple',
+                ax_counts.text(0.80, 0.35, 'photon', color='tab:purple',
                                transform=ax_counts.transAxes, **_label_kw).set_path_effects(_stroke)
             _add_energy_axis(ax_counts)
             fig.tight_layout()
@@ -1005,9 +999,9 @@ class SpectrometerPlotter:
             if len(_sig_vals) > 0:
                 ax_bg.set_ylim(bottom=_sig_vals.min() * 0.5)
             ax_bg.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
-            ax_bg.text(0.90, 0.5, 'neutron', transform=ax_bg.transAxes,
+            ax_bg.text(0.90, 0.52, 'neutron', transform=ax_bg.transAxes,
                        color='tab:green', fontsize=13, ha='right', va='center').set_path_effects(_stroke)
-            ax_bg.text(0.38, 0.93, 'photon', transform=ax_bg.transAxes,
+            ax_bg.text(0.25, 0.93, 'photon', transform=ax_bg.transAxes,
                        color='tab:purple', fontsize=13, ha='right', va='center').set_path_effects(_stroke)
 
         fig.tight_layout()
@@ -1140,12 +1134,80 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Input ray geometry plot saved to {filename}')
 
+    def _overlay_energy_contours(self, ax, spec, X_mesh, Y_mesh, dx, dy) -> None:
+        """Overlay white contour lines of mean recoil energy on an existing heatmap axes."""
+        x_cm = spec.output_beam[:, 0] * 100
+        y_cm = spec.output_beam[:, 2] * 100
+        energies = spec.reference_energy * (1 + spec.output_beam[:, 5])
+        x_coords = X_mesh[0, :]
+        y_coords = Y_mesh[:, 0]
+        x_edges = np.concatenate([[x_coords[0] - dx / 2], x_coords + dx / 2])
+        y_edges = np.concatenate([[y_coords[0] - dy / 2], y_coords + dy / 2])
+        energy_sum, _, _ = np.histogram2d(x_cm, y_cm, bins=[x_edges, y_edges], weights=energies)
+        count_hist, _, _ = np.histogram2d(x_cm, y_cm, bins=[x_edges, y_edges])
+        mean_E = np.where(count_hist.T > 0, energy_sum.T / count_hist.T, np.nan)
+
+        particle = spec.conversion_foil.particle
+        if particle == 'deuteron':
+            step, fmt, contour_color = 0.5, '%.1f', '#C04000'
+        else:
+            step, fmt, contour_color = 1.0, '%.0f', 'midnightblue'
+
+        e_min = np.floor(np.nanmin(mean_E) / step) * step
+        e_max = np.ceil(np.nanmax(mean_E) / step) * step
+        levels = np.arange(e_min, e_max + step / 2, step)
+
+        cs = ax.contour(x_coords, y_coords, mean_E,
+                        levels=levels, colors=contour_color, linewidths=2.0, alpha=0.85)
+
+        # Place each label at the midpoint of its own contour's y-range, interpolating
+        # x along the contour at that y. Labels will naturally slope across levels.
+        manual_positions = []
+        for level_segs in cs.allsegs:
+            # Find the longest segment for this level to determine target_y
+            best_seg = None
+            best_span = 0.0
+            for seg in level_segs:
+                if len(seg) < 2:
+                    continue
+                span = float(seg[:, 1].max() - seg[:, 1].min())
+                if span > best_span:
+                    best_span = span
+                    best_seg = seg
+            if best_seg is None:
+                continue
+            target_y = float((best_seg[:, 1].max() + best_seg[:, 1].min()) / 2)
+            x_at_target = None
+            for seg in level_segs:
+                xs, ys = seg[:, 0], seg[:, 1]
+                for i in range(len(xs) - 1):
+                    y0, y1 = float(ys[i]), float(ys[i + 1])
+                    if (y0 - target_y) * (y1 - target_y) <= 0 and abs(y1 - y0) > 1e-12:
+                        t = (target_y - y0) / (y1 - y0)
+                        x_at_target = float(xs[i] + t * (xs[i + 1] - xs[i]))
+                        break
+                if x_at_target is not None:
+                    break
+            if x_at_target is not None:
+                manual_positions.append((x_at_target, target_y))
+
+        clabel_kwargs = dict(fmt=fmt, fontsize=12, inline=True)
+        if manual_positions:
+            clabel_kwargs['manual'] = manual_positions
+        labels = ax.clabel(cs, **clabel_kwargs)
+        for label in labels:
+            label.set_rotation(0)
+            label.set_fontweight('bold')
+            label.set_path_effects([pe.withStroke(linewidth=1.5, foreground='white')])
+
     def plot_particle_density_heatmap(
         self,
         filename: Optional[str] = None,
-        dx: float = 0.5,
-        dy: float = 0.5,
+        dx: float = 0.2,
+        dy: float = 0.2,
         incident_particle_yield: Optional[float] = None,
+        include_hodoscope: bool = False,
+        overlay_energy: bool = False,
     ) -> None:
         """
         Plot a heatmap of focal particle density in the detector plane.
@@ -1155,8 +1217,10 @@ class SpectrometerPlotter:
             dx: X-direction resolution in cm.
             dy: Y-direction resolution in cm.
             incident_particle_yield: Total particle yield (particles/source). Scales the density map.
+            include_hodoscope: Whether to overlay hodoscope channel boundaries.
+            overlay_energy: If True, overlay contour lines showing mean recoil energy per spatial bin.
         """
-        if filename == None:
+        if filename is None:
             filename = f'{self.spectrometer.figure_directory}/particle_density_heatmap.png'
 
         particle = self.spectrometer.conversion_foil.particle
@@ -1168,17 +1232,19 @@ class SpectrometerPlotter:
         Y_mesh = primary_response.density_y
 
         fig, ax = plt.subplots(figsize=(10, 8))
+        divider = make_axes_locatable(ax)
 
-        # Create heatmap
-        im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(density_map), cmap=self.primary_cmap, shading='auto')
-
-        # Add colorbar
-        cbar = fig.colorbar(im, ax=ax, shrink=0.6)
+        im = ax.pcolormesh(X_mesh, Y_mesh, density_map, cmap=self.primary_cmap, shading='auto', norm=LogNorm())
+        cax = divider.append_axes("bottom", size="5%", pad=0.65)
+        cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
         units = f'[{particle}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle}/cm$^2$]'
-        cbar.set_label(f'log$_{{10}}$(Fluence {units})')
+        cbar.set_label(f'Fluence {units}')
 
-        # Add dual data if available
+        if overlay_energy:
+            self._overlay_energy_contours(ax, self.spectrometer, X_mesh, Y_mesh, dx, dy)
+
         density_map2 = response_map2 = X_mesh2 = Y_mesh2 = None
+        secondary_response = None
         if self.dual_data:
             particle2 = self.dual_data['spectrometer'].conversion_foil.particle
             secondary_response = self.dual_data['performance_analyzer'].get_channel_response(
@@ -1187,10 +1253,25 @@ class SpectrometerPlotter:
             density_map2 = secondary_response.density_map
             X_mesh2 = secondary_response.density_x
             Y_mesh2 = secondary_response.density_y
-            im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(density_map2), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
-            cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
+            im2 = ax.pcolormesh(X_mesh2, Y_mesh2, density_map2, cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5, norm=LogNorm())
+            cax2 = divider.append_axes("bottom", size="5%", pad=0.75)
+            cbar2 = fig.colorbar(im2, cax=cax2, orientation='horizontal')
             units2 = f'[{particle2}/cm$^2$-source]' if incident_particle_yield is None else f'[{particle2}/cm$^2$]'
-            cbar2.set_label(f'log$_{{10}}$(Fluence {units2})')
+            cbar2.set_label(f'Fluence {units2}')
+
+            if overlay_energy:
+                self._overlay_energy_contours(ax, self.dual_data['spectrometer'], X_mesh2, Y_mesh2, dx, dy)
+
+        y_lim = max(abs(float(Y_mesh.min())), abs(float(Y_mesh.max())))
+        if Y_mesh2 is not None:
+            y_lim = max(y_lim, abs(float(Y_mesh2.min())), abs(float(Y_mesh2.max())))
+        ax.set_ylim(-y_lim, y_lim)
+
+        ax.grid(True, alpha=0.4)
+        if include_hodoscope:
+            self._overlay_hodoscope(ax, self.spectrometer.hodoscope)
+            if self.dual_data:
+                self._overlay_hodoscope(ax, self.dual_data['spectrometer'].hodoscope)
 
         ax.set_xlabel('X Position [cm]')
         ax.set_ylabel('Y Position [cm]')
@@ -1204,16 +1285,32 @@ class SpectrometerPlotter:
         # If detector is used, also plot response map
         if self.spectrometer.hodoscope.detector_used:
             fig, ax = plt.subplots(figsize=(10, 8))
-            im = ax.pcolormesh(X_mesh, Y_mesh, np.log10(primary_response.response_map_2d), cmap=self.primary_cmap, shading='auto')
-            cbar = fig.colorbar(im, ax=ax, shrink=0.6)
+            divider = make_axes_locatable(ax)
+            im = ax.pcolormesh(X_mesh, Y_mesh, primary_response.response_map_2d, cmap=self.primary_cmap, shading='auto', norm=LogNorm())
+            cax = divider.append_axes("bottom", size="5%", pad=0.65)
+            cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
             response_units = '[MeV/cm$^2$-source]' if incident_particle_yield is None else '[MeV/cm$^2$]'
-            cbar.set_label(f'log$_{{10}}$(Energy Deposited {response_units})')
+            cbar.set_label(f'$E_{{dep}}$ {response_units}')
 
-            # Add dual data if available
-            if self.dual_data and secondary_response.response_map_2d is not None:
-                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, np.log10(secondary_response.response_map_2d), cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5)
-                cbar2 = fig.colorbar(im2, ax=ax, shrink=0.6)
-                cbar2.set_label(f'log$_{{10}}$(Energy Deposited {response_units})')
+            if overlay_energy:
+                self._overlay_energy_contours(ax, self.spectrometer, X_mesh, Y_mesh, dx, dy)
+
+            if self.dual_data and secondary_response is not None and secondary_response.response_map_2d is not None:
+                im2 = ax.pcolormesh(X_mesh2, Y_mesh2, secondary_response.response_map_2d, cmap=self.dual_data['secondary_cmap'], shading='auto', alpha=0.5, norm=LogNorm())
+                cax2 = divider.append_axes("bottom", size="5%", pad=0.75)
+                cbar2 = fig.colorbar(im2, cax=cax2, orientation='horizontal')
+                cbar2.set_label(f'$E_{{dep}}$ {response_units}')
+
+                if overlay_energy:
+                    self._overlay_energy_contours(ax, self.dual_data['spectrometer'], X_mesh2, Y_mesh2, dx, dy)
+
+            ax.set_ylim(-y_lim, y_lim)
+
+            ax.grid(True, alpha=0.4)
+            if include_hodoscope:
+                self._overlay_hodoscope(ax, self.spectrometer.hodoscope)
+                if self.dual_data:
+                    self._overlay_hodoscope(ax, self.dual_data['spectrometer'].hodoscope)
 
             ax.set_xlabel('X Position [cm]')
             ax.set_ylabel('Y Position [cm]')
@@ -1221,6 +1318,7 @@ class SpectrometerPlotter:
             fig.tight_layout()
             response_filename = filename.replace('.png', '_response.png')
             fig.savefig(response_filename, dpi=150, bbox_inches='tight')
+            plt.close(fig)
             print(f'Detector response heatmap saved to {response_filename}')
         
     def plot_monoenergetic_analysis(
@@ -1313,9 +1411,9 @@ class SpectrometerPlotter:
         
         ax3 = ax1.twinx()
         # Offset the third axis to the right
-        ax3.spines['right'].set_position(('outward', 60))
+        ax3.spines['right'].set_position(('outward', 80))
         color_efficiency = 'tab:green'
-        ax3.set_ylabel(r'Total Efficiency ($\times$1e6)', color=color_efficiency)
+        ax3.set_ylabel(r'Total Efficiency ($\times 10^{-6}$)', color=color_efficiency)
         ax3.tick_params(axis='y', labelcolor=color_efficiency)
         
         # Loop over foils (either one or two)
@@ -1326,11 +1424,25 @@ class SpectrometerPlotter:
             band_lower = grp['position lower [m]'].to_numpy()
             band_upper = grp['position upper [m]'].to_numpy()
             total_efficiencies = grp['total efficiency'].to_numpy()
+            widths = grp['position width [m]'].to_numpy()
+
+            # Trim edge points to remove numerical artifacts from one-sided gradient
+            # estimates and poor MC statistics at extreme energies
+            trim = 2
+            energies = energies[trim:-trim]
+            positions = positions[trim:-trim]
+            band_lower = band_lower[trim:-trim]
+            band_upper = band_upper[trim:-trim]
+            total_efficiencies = total_efficiencies[trim:-trim]
+            widths = widths[trim:-trim]
 
             # Compute resolution
-            widths = grp['position width [m]'].to_numpy()
             gradients = np.gradient(positions, energies)
             energy_resolutions = widths / gradients * 1000
+
+            # Apply a cubic fit to smooth the resolution curve
+            # coeffs = np.polyfit(energies, energy_resolutions, 3)
+            # energy_resolutions = np.polyval(coeffs, energies)
 
             # Plot position curve (KDE peak) with asymmetric FWHM band
             position_line = ax1.plot(energies, positions * 100, color=color_position,
@@ -1339,7 +1451,7 @@ class SpectrometerPlotter:
                             alpha=0.3, color=color_position)
             ax1.grid(True, alpha=0.3)
             ax1.tick_params(axis='y', labelcolor=color_position)
-            
+
             resolution_line = ax2.plot(energies, energy_resolutions, color=color_resolution,
                             label=f'Resolution')
 
@@ -1348,9 +1460,9 @@ class SpectrometerPlotter:
             
             # Label lines on their respective axes
             range = energies.max() - energies.min()
-            labelLines(position_line, xvals=[energies.min() + 0.25 * range], align=True, fontsize=12, yoffsets=2.5)
-            labelLines(resolution_line, xvals=[energies.min() + 0.85 * range], align=True, fontsize=12, yoffsets=35)
-            labelLines(efficiency_line, xvals=[energies.min() + 0.75 * range], align=True, fontsize=12, yoffsets=-0.025)
+            labelLines(position_line, xvals=[energies.min() + 0.65 * range], align=True, fontsize=12, yoffsets=2.2)
+            labelLines(resolution_line, xvals=[energies.min() + 0.85 * range], align=True, fontsize=12, yoffsets=-45)
+            labelLines(efficiency_line, xvals=[energies.min() + 0.3 * range], align=True, fontsize=12, yoffsets=0.025)
             
             # Add shading and label to indicate foil energy regions
             if self.dual_data:
@@ -1822,15 +1934,20 @@ class SpectrometerPlotter:
         f = result.spectrum / fit_norm
         sigma_spectrum = result.uncertainties / fit_norm
 
+        # Pre-compute data points so we know the xlim before plotting.
+        spectrum_data = spectrum_data_sigma = nominal_energy = energy_spread = None
+        if result.raw_counts is not None and result.response_matrix is not None:
+            spectrum_data, spectrum_data_sigma, nominal_energy, energy_spread = compute_spectrum_data_points(result)
+
         _comp_label_positions = [
-            (0.68, 0.96),
-            (0.45, 0.40),
-            (0.40, 0.65),
-            (0.52, 0.15),
+            (0.58, 0.96),
+            (0.25, 0.40),
+            (0.33, 0.65),
+            (0.39, 0.15),
         ]
-        _ff_label_pos = (0.86, 0.27)
-        _ts_label_pos = (0.84, 0.4)
-        _data_label_pos = (0.86, 0.15)
+        _ff_label_pos = (0.82, 0.27)
+        _ts_label_pos = (0.80, 0.4)
+        _data_label_pos = (0.86, 0.17)
 
         _label_kw = dict(transform=ax.transAxes, fontsize=13, ha='center', va='center')
         _stroke = [pe.withStroke(linewidth=3, foreground='white')]
@@ -1845,29 +1962,28 @@ class SpectrometerPlotter:
                 pos = _comp_label_positions[i] if i < len(_comp_label_positions) else (0.5, 0.5)
                 ax.text(*pos, label, color=col, **_label_kw).set_path_effects(_stroke)
 
-        # Per-channel data points with x (energy resolution) and y (count uncertainty) error bars.
-        if result.raw_counts is not None and result.response_matrix is not None:
-            spectrum_data, spectrum_data_sigma, nominal_energy, energy_spread = compute_spectrum_data_points(result)
-            # Apply same normalization as the fitted spectrum so axes are consistent.
-            # Interpolate fit_norm to the channel nominal energies.
+        if spectrum_data is not None:
             if np.ndim(fit_norm) == 0:
                 data_norm = float(fit_norm)
             else:
                 data_norm = np.interp(nominal_energy, E, fit_norm)
             data_norm_safe = np.where(data_norm > 0, data_norm, 1.0)
+            # Exclude zero-response channels (nominal_energy == 0 is the fallback value).
+            valid_ne = nominal_energy > 0
             ax.errorbar(
-                nominal_energy, spectrum_data / data_norm_safe,
-                xerr=energy_spread, yerr=spectrum_data_sigma / data_norm_safe,
-                fmt='o', color='k', capsize=3, markersize=5, linewidth=1.5,
+                nominal_energy[valid_ne], (spectrum_data / data_norm_safe)[valid_ne],
+                xerr=energy_spread[valid_ne], yerr=(spectrum_data_sigma / data_norm_safe)[valid_ne],
+                fmt='o', color='tab:gray', capsize=3, markersize=5, linewidth=1.5,
                 zorder=5, label='Data',
             )
-            ax.text(*_data_label_pos, 'Data', color='k', **_label_kw).set_path_effects(_stroke)
+            ax.text(*_data_label_pos, 'Data', color='tab:gray', **_label_kw).set_path_effects(_stroke)
 
         if show_uncertainties:
             ax.fill_between(E, f - sigma_spectrum, f + sigma_spectrum, color=color, alpha=0.25, zorder=2)
         ax.plot(E, f, color=color, linewidth=2, zorder=3, label='Forward fit')
         ax.text(*_ff_label_pos, 'Forward fit', color=color, **_label_kw).set_path_effects(_stroke)
 
+        ts_arr = None
         if true_spectrum is not None:
             ts_arr = _norm_overlay(np.asarray(true_spectrum))
             ax.plot(E_overlay, ts_arr, 'k--', linewidth=2, zorder=4, label='True spectrum')
@@ -1878,7 +1994,7 @@ class SpectrometerPlotter:
         ax.set_yscale('log')
         peak_vals = [f[f > 0].max() if np.any(f > 0) else np.nan]
         ymin = None
-        if true_spectrum is not None:
+        if ts_arr is not None:
             peak_vals.append(ts_arr[ts_arr > 0].max() if np.any(ts_arr > 0) else np.nan)
             ymin = ts_arr[ts_arr > 0].min() if np.any(ts_arr > 0) else None
         ymax = np.nanmax(peak_vals) * 3
@@ -1886,6 +2002,13 @@ class SpectrometerPlotter:
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
+        if nominal_energy is not None:
+            valid_ne = nominal_energy > 0
+            x_lo = nominal_energy[valid_ne].min()
+            x_hi = nominal_energy[valid_ne].max()
+            margin = 0.04 * (x_hi - x_lo)
+            ax.set_xlim(x_lo - margin, x_hi + margin)
+            ax.autoscale(False)
         if filename:
             plt.savefig(filename, dpi=150, bbox_inches='tight')
         return ax

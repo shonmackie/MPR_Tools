@@ -137,9 +137,11 @@ class HodoscopeResponse:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Bin the output beam into hodoscope channels.
 
-        Returns (signal, count, total, channel_time_windows) per channel, normalized per MC
-        particle and scaled by foil_geometric_factor — no yield scaling applied.
+        Returns (signal, count, total, channel_time_windows) per channel, normalized per source
+        particle (foil_geometric_factor already applied) — no yield scaling applied.
         signal: weighted by foil_efficiency × detector_sensitivity.
+                Units: MeV deposited/source particle (detector_used=True) or
+                       counts/source particle (detector_used=False).
         count:  weighted by foil_efficiency only (denominator for Poisson std).
         total:  signal summed over all x-accepted particles (denominator for coverage).
         channel_time_windows: shape (n_bins, 2) arrival-time percentile bounds [s]; NaN when
@@ -204,7 +206,7 @@ class HodoscopeResponse:
         """Compute the 2-D focal-plane density map.
 
         Returns (density_map, response_map_2d, density_x, density_y) — all shape (ny, nx).
-        Normalized per MC particle and scaled by foil_geometric_factor. No yield scaling.
+        Normalized per source particle (foil_geometric_factor already applied). No yield scaling.
         density_map is weighted by foil_efficiency; response_map_2d also by detector_sensitivity.
         """
         hodoscope = spec.hodoscope
@@ -612,17 +614,23 @@ class PerformanceAnalyzer:
         Build the instrument response matrix for each foil.
 
         Returns a dict mapping foil material name to R of shape (n_energies, n_channels).
-        R[i, k] is the expected signal in hodoscope channel k per foil-face incident particle
-        at energy energy_grid[i]. To convert to per-source-particle, multiply by
-        foil_geometric_factor. Files are cached as <base>_<foil>.npy.
+        R[i, k] is the expected signal in hodoscope channel k per source particle at energy
+        energy_grid[i]. foil_geometric_factor is already baked in.
+
+        Units of R[i, k]:
+            detector_used=True  -> MeV deposited per source particle
+            detector_used=False -> counts per source particle (dimensionless)
+
+        Files are cached as <base>_<foil>.npz.
 
         Args:
             energy_grid: 1-D array of incident energies [MeV].
             num_recoils_per_energy: Monte Carlo rays per energy point.
             include_kinematics: Passed to generate_monte_carlo_rays.
             include_stopping_power_loss: Passed to generate_monte_carlo_rays.
-            output_filename: Base path for .npy cache files (foil name appended).
+            output_filename: Base path for .npz cache files (foil name appended).
                              Defaults to <data_directory>/response_matrix.
+                             Each file contains arrays: R, energy_grid, bin_edges_cm.
             reset: If True, regenerate and save. If False, load from file.
             executor: Worker pool (if None, a fresh pool is created).
             max_workers: Maximum worker processes.
@@ -635,10 +643,11 @@ class PerformanceAnalyzer:
 
         def _build_for_spec(spec: MPRSpectrometer) -> tuple[str, np.ndarray]:
             key = spec.conversion_foil.foil_material
-            cache_path = f'{base}_{key}.npy'
+            cache_path = f'{base}_{key}.npz'
 
             if not reset:
-                R = np.load(cache_path)
+                data = np.load(cache_path)
+                R = data['R']
                 print(f'Response matrix {key} loaded from {cache_path}')
                 return key, R
 
@@ -667,7 +676,8 @@ class PerformanceAnalyzer:
                 signal, _, _, _ = HodoscopeResponse._bin_to_channels(spec, foil_efficiencies)
                 R[i, :] = signal
 
-            np.save(cache_path, R)
+            bin_edges_cm = spec.hodoscope.channel_edges * 100  # m → cm
+            np.savez(cache_path, R=R, energy_grid=energy_grid, bin_edges_cm=bin_edges_cm)
             print(f'Response matrix {key} saved to {cache_path}')
             return key, R
 
@@ -685,8 +695,8 @@ class PerformanceAnalyzer:
         response_matrices: Optional[Dict[str, np.ndarray]] = None,
         energy_grid: Optional[np.ndarray] = None,
         compute_density: bool = False,
-        dx: float = 0.5,
-        dy: float = 0.5,
+        dx: float = 0.2,
+        dy: float = 0.2,
     ) -> Union[HodoscopeResponse, Dict[str, HodoscopeResponse]]:
         """Build a HodoscopeResponse (or dict for dual-foil) for this spectrometer.
 
