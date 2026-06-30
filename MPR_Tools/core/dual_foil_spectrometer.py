@@ -150,7 +150,6 @@ class DualFoilSpectrometer:
         save_beam: bool = True,
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
-        continuous_energy_sampling: bool = True,
         importance_sampling: bool = False,
     ) -> None:
         """
@@ -166,16 +165,14 @@ class DualFoilSpectrometer:
             save_beam: Whether to save beams to CSV
             executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes
-            continuous_energy_sampling: If True, sample energy continuously via inverse CDF. If False,
-                                        sample from discrete bin centres.
             importance_sampling: If True, sample all energies uniformly and weight each particle
                                  by p_weighted(E) / p_uniform(E) (source biasing).
         """
         # Split recoil events between foils.
-        # With importance_sampling, allocate proportional to the rage of energy bins each foil covers.
+        # With importance_sampling, allocate proportional to the range of energy bins each foil covers.
         # Without importance_sampling, allocate proportional to integrated probability.
-        ch2_idx = (incident_energies >= self.ch2_min_energy) & (incident_energies <= self.ch2_max_energy)
-        cd2_idx = (incident_energies >= self.cd2_min_energy) & (incident_energies <= self.cd2_max_energy)
+        ch2_idx = (incident_energies >= self.spec_ch2.min_incident_energy) & (incident_energies <= self.spec_ch2.max_incident_energy)
+        cd2_idx = (incident_energies >= self.spec_cd2.min_incident_energy) & (incident_energies <= self.spec_cd2.max_incident_energy)
         if importance_sampling:
             ch2_weight = np.sum(ch2_idx)
             cd2_weight = np.sum(cd2_idx)
@@ -196,7 +193,6 @@ class DualFoilSpectrometer:
             save_beam=False,
             executor=executor,
             max_workers=max_workers,
-            continuous_energy_sampling=continuous_energy_sampling,
             importance_sampling=importance_sampling,
         )
 
@@ -205,7 +201,23 @@ class DualFoilSpectrometer:
 
         print(f'\nGenerating {num_cd2} CD2 (deuteron) rays with negative y restriction...')
         self.spec_cd2.generate_monte_carlo_rays(**shared_mc_kwargs, num_recoil_particles=num_cd2, y_restriction='negative')
-        
+
+        # Scale importance weights to correct for conditional energy sampling: each foil's beam
+        # is drawn from the full probability distribution but only particles in the foil's energy
+        # range pass the energy acceptance filter. _bin_to_channels divides by len(beam), treating
+        # it as if it represents the full distribution, but it only represents the conditional.
+        # Multiply the stored weights by sum(sampling_dist[in_range]) to restore the correct scale.
+        n_E = len(incident_energies)
+        if importance_sampling:
+            ch2_norm = float(np.sum(ch2_idx)) / n_E
+            cd2_norm = float(np.sum(cd2_idx)) / n_E
+        else:
+            prob_norm = probability_distribution / np.sum(probability_distribution)
+            ch2_norm = float(np.sum(prob_norm[ch2_idx]))
+            cd2_norm = float(np.sum(prob_norm[cd2_idx]))
+        self.spec_ch2.input_beam[:, 7] *= ch2_norm
+        self.spec_cd2.input_beam[:, 7] *= cd2_norm
+
         # Combine beams
         self._combine_input_beams()
         

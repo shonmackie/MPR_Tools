@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Executor
-from typing import Dict, Tuple, Optional, Union
+from typing import TYPE_CHECKING, Dict, Tuple, Optional, Union
 import warnings
 import numpy as np
 import pandas as pd
@@ -14,7 +14,8 @@ from tqdm import tqdm
 from ..core.spectrometer import MPRSpectrometer
 from ..core.dual_foil_spectrometer import DualFoilSpectrometer
 
-
+if TYPE_CHECKING:
+    from ..core.hodoscope import Hodoscope
 
 
 class HodoscopeResponse:
@@ -75,7 +76,7 @@ class HodoscopeResponse:
         self.foil_material = spectrometer.conversion_foil.foil_material
         hodoscope = spectrometer.hodoscope
 
-        self.signal, count, total, self.channel_time_windows = self._bin_to_channels(
+        self.signal, signal_std_per_source, self.count, total, self.channel_time_windows = self._bin_to_channels(
             spectrometer, foil_efficiencies, time_gate_percentiles
         )
 
@@ -84,11 +85,10 @@ class HodoscopeResponse:
 
         if particle_yield is not None:
             self.signal *= particle_yield
-            count = count * particle_yield
-            total = total * particle_yield
+            self.count *= particle_yield
             self.signal_std = np.where(
-                count > 0,
-                self.signal / np.sqrt(count) if hodoscope.detector_used else np.sqrt(count),
+                signal_std_per_source > 0,
+                signal_std_per_source * np.sqrt(particle_yield),
                 np.nan,
             )
         else:
@@ -101,6 +101,10 @@ class HodoscopeResponse:
             n_bg, ph_bg, n_bg_std, ph_bg_std = self._compute_background(hodoscope, _bg_yield)
             self.neutron_background = n_bg
             self.photon_background = ph_bg
+            # shot std is only meaningful with a real yield
+            if particle_yield is None:
+                n_bg_std = np.zeros_like(n_bg)
+                ph_bg_std = np.zeros_like(ph_bg)
             self.neutron_background_std = n_bg_std
             self.photon_background_std = ph_bg_std
         else:
@@ -134,7 +138,7 @@ class HodoscopeResponse:
         spec: MPRSpectrometer,
         foil_efficiencies: np.ndarray,
         time_gate_percentiles: Tuple[float, float] = (0, 100),
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Bin the output beam into hodoscope channels.
 
         Returns (signal, count, total, channel_time_windows) per channel, normalized per source
@@ -171,30 +175,30 @@ class HodoscopeResponse:
         count_per_bin = np.zeros(n_bins)
         total_per_bin = np.zeros(n_bins)
         channel_time_windows = np.full((n_bins, 2), np.nan)
+        sq_weight_per_bin = np.zeros(n_bins)
         for b in range(n_bins):
             in_bin = bin_indices == b
             accepted = in_bin & (
                 np.abs(y_positions - channel_y_centers_cm[b]) <= bin_heights_cm[b] / 2
             )
-            total_per_bin[b] = np.sum(weights[in_bin])
-            signal_per_bin[b] = np.sum(weights[accepted])
-            count_per_bin[b] = np.sum(foil_efficiencies[accepted] * importance_weights[accepted])
+            total_per_bin[b] = np.sum(weights[in_bin]) / total_particles
+            signal_per_bin[b] = np.sum(weights[accepted]) / total_particles
+            count_per_bin[b] = np.sum(foil_efficiencies[accepted] * importance_weights[accepted]) / total_particles
+            sq_weight_per_bin[b] = np.sum(weights[accepted] * sensitivities[accepted]) / total_particles
             if hodoscope.use_time_gating:
                 times_in_channel = arrival_times[accepted]
                 if len(times_in_channel) > 0:
                     channel_time_windows[b, 0] = np.percentile(times_in_channel, time_gate_percentiles[0])
                     channel_time_windows[b, 1] = np.percentile(times_in_channel, time_gate_percentiles[1])
 
-        signal_per_bin /= total_particles
-        count_per_bin /= total_particles
-        total_per_bin /= total_particles
-
         if spec.foil_geometric_factor:
             signal_per_bin *= spec.foil_geometric_factor
             count_per_bin *= spec.foil_geometric_factor
             total_per_bin *= spec.foil_geometric_factor
+            sq_weight_per_bin *= spec.foil_geometric_factor
 
-        return signal_per_bin, count_per_bin, total_per_bin, channel_time_windows
+        signal_std_per_source = np.sqrt(sq_weight_per_bin)
+        return signal_per_bin, signal_std_per_source, count_per_bin, total_per_bin, channel_time_windows
 
     @staticmethod
     def _compute_density_map(
@@ -248,7 +252,7 @@ class HodoscopeResponse:
 
     def _compute_background(
         self,
-        hodoscope,
+        hodoscope: Hodoscope,
         particle_yield: float,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Integrate time-resolved background into per-channel counts.
@@ -258,19 +262,20 @@ class HodoscopeResponse:
         time-gating is disabled).  Uses fractional bin overlap so windows
         narrower than a time bin are handled correctly at the edges.
 
+        The compound-Poisson shot (MeV^2/cm^2/source per time bin) is integrated
+        over the same time gate, then sqrt'd into a per-channel shot std [MeV].
+
         Returns n_bg, ph_bg, n_bg_std, ph_bg_std — each shape (n_channels,).
         """
-        time_bins, n_bg_ts, n_bg_std_ts, ph_bg_ts, ph_bg_std_ts = hodoscope.get_background()
+        time_bins, n_bg_ts, ph_bg_ts, n_var_ts, ph_var_ts = hodoscope.get_background()
         channel_widths_cm = hodoscope.channel_widths * 100
         channel_heights_cm = hodoscope.channel_heights * 100
         n_ch = len(channel_widths_cm)
         dt = float(np.median(np.diff(time_bins))) if len(time_bins) > 1 else 1.0
-        _n_std = n_bg_std_ts if n_bg_std_ts is not None else np.zeros_like(n_bg_ts)
-        _ph_std = ph_bg_std_ts if ph_bg_std_ts is not None else np.zeros_like(ph_bg_ts)
         n_bg = np.zeros(n_ch)
         ph_bg = np.zeros(n_ch)
-        n_bg_std = np.zeros(n_ch)
-        ph_bg_std = np.zeros(n_ch)
+        n_bg_var = np.zeros(n_ch)
+        ph_bg_var = np.zeros(n_ch)
         for k in range(n_ch):
             area = channel_widths_cm[k] * channel_heights_cm[k]
             if hodoscope.use_time_gating and not np.isnan(self.channel_time_windows[k, 0]):
@@ -284,9 +289,9 @@ class HodoscopeResponse:
                 overlap = np.ones(len(time_bins))
             n_bg[k] = np.dot(n_bg_ts, overlap) * particle_yield * area
             ph_bg[k] = np.dot(ph_bg_ts, overlap) * particle_yield * area
-            n_bg_std[k] = np.sqrt(np.dot(overlap ** 2, _n_std ** 2)) * particle_yield * area
-            ph_bg_std[k] = np.sqrt(np.dot(overlap ** 2, _ph_std ** 2)) * particle_yield * area
-        return n_bg, ph_bg, n_bg_std, ph_bg_std
+            n_bg_var[k] = np.dot(n_var_ts, overlap) * particle_yield * area
+            ph_bg_var[k] = np.dot(ph_var_ts, overlap) * particle_yield * area
+        return n_bg, ph_bg, np.sqrt(n_bg_var), np.sqrt(ph_bg_var)
 
     @property
     def background(self) -> np.ndarray:
@@ -641,7 +646,7 @@ class PerformanceAnalyzer:
         base = output_filename if output_filename is not None else f'{self.spectrometer.data_directory}/response_matrix'
         performance_df = self._load_performance_curve()
 
-        def _build_for_spec(spec: MPRSpectrometer) -> tuple[str, np.ndarray]:
+        def _build_for_spec(spec: MPRSpectrometer, y_restriction=None) -> tuple[str, np.ndarray]:
             key = spec.conversion_foil.foil_material
             cache_path = f'{base}_{key}.npz'
 
@@ -651,30 +656,49 @@ class PerformanceAnalyzer:
                 print(f'Response matrix {key} loaded from {cache_path}')
                 return key, R
 
+            # Save polychromatic beams so the R-matrix loop doesn't overwrite them.
+            saved_input = spec.input_beam.copy() if spec.input_beam.size > 0 else np.empty((0, 8))
+            saved_output = spec.output_beam.copy() if spec.output_beam.size > 0 else np.empty((0, 6))
+
             n_energies = len(energy_grid)
             R = np.zeros((n_energies, spec.hodoscope.total_channels))
             print(f'\nBuilding response matrix for {key}...')
-            for i, energy in enumerate(tqdm(energy_grid, desc=key)):
-                if energy < spec.min_incident_energy or energy > spec.max_incident_energy:
+
+            in_range = (energy_grid >= spec.min_incident_energy) & (energy_grid <= spec.max_incident_energy)
+            n_in_range = int(in_range.sum())
+
+            spec.generate_monte_carlo_rays(
+                energy_grid[in_range],
+                np.ones(n_in_range),
+                num_recoils_per_energy * n_in_range,
+                include_kinematics,
+                include_stopping_power_loss,
+                save_beam=False,
+                executor=executor,
+                max_workers=max_workers,
+                y_restriction=y_restriction,
+            )
+            spec.apply_transfer_map(
+                save_beam=False,
+                executor=executor,
+                max_workers=max_workers,
+            )
+
+            foil_efficiencies = self._get_foil_efficiencies(spec, performance_df)
+            bin_idx = np.searchsorted(energy_grid, spec.input_beam[:, 6])
+            full_input, full_output = spec.input_beam, spec.output_beam
+            for i in tqdm(range(n_energies), desc=key):
+                m = bin_idx == i
+                if not m.any():
                     continue
-                spec.generate_monte_carlo_rays(
-                    np.array([energy]),
-                    np.array([1.0]),
-                    num_recoils_per_energy,
-                    include_kinematics,
-                    include_stopping_power_loss,
-                    save_beam=False,
-                    executor=executor,
-                    max_workers=max_workers,
-                )
-                spec.apply_transfer_map(
-                    save_beam=False,
-                    executor=executor,
-                    max_workers=max_workers,
-                )
-                foil_efficiencies = self._get_foil_efficiencies(spec, performance_df)
-                signal, _, _, _ = HodoscopeResponse._bin_to_channels(spec, foil_efficiencies)
+                spec.input_beam, spec.output_beam = full_input[m], full_output[m]
+                signal, _, _, _, _ = HodoscopeResponse._bin_to_channels(spec, foil_efficiencies[m])
                 R[i, :] = signal
+            spec.input_beam, spec.output_beam = full_input, full_output
+
+            # Restore the polychromatic beams.
+            spec.input_beam = saved_input
+            spec.output_beam = saved_output
 
             bin_edges_cm = spec.hodoscope.channel_edges * 100  # m → cm
             np.savez(cache_path, R=R, energy_grid=energy_grid, bin_edges_cm=bin_edges_cm)
@@ -682,10 +706,11 @@ class PerformanceAnalyzer:
             return key, R
 
         result = {}
-        k, R = _build_for_spec(self.spectrometer)
+        is_dual = hasattr(self, 'dual_spectrometer')
+        k, R = _build_for_spec(self.spectrometer, y_restriction='positive' if is_dual else None)
         result[k] = R
-        if hasattr(self, 'dual_spectrometer'):
-            k2, R2 = _build_for_spec(self.dual_spectrometer)
+        if is_dual:
+            k2, R2 = _build_for_spec(self.dual_spectrometer, y_restriction='negative')
             result[k2] = R2
         return result
 

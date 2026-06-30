@@ -3,8 +3,6 @@
 #NUCLEUS    C-12
 #MF         3
 #MT         2
-#EN-MIN     1e-05
-#EN-MAX     1.5e+08
 E,eV        Sig,b        Interpolation
  1E-05       78.207       Lin-Lin
  1.10304E-05 74.4768      Lin-Lin

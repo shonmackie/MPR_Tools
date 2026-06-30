@@ -34,9 +34,8 @@ class GenericInteraction:
     
     def get_cross_section(self, energy_MeV: float | np.ndarray) -> float | np.ndarray:
         """ get the total macroscopic cross section, for calculating attenuation, in m^-1 """
-        energy_eV = energy_MeV * 1e6
-        if np.any(energy_eV < self.cross_section_data[0][0]) or np.any(energy_eV > self.cross_section_data[0][-1]):
-            raise ValueError(f"I don't have {self.name} cross section data for {energy_MeV} MeV")
+        # clamp to data range
+        energy_eV = np.clip(energy_MeV * 1e6, self.cross_section_data[0][0], self.cross_section_data[0][-1])
         cross_section_barns = np.interp(
             energy_eV,
             self.cross_section_data[0],
@@ -154,8 +153,9 @@ class ElasticScattering(GenericInteraction):
         Returns:
             Lab-frame differential cross section
         """
-        # Convert to energy in eV and use interpolator
-        energy_eV = energy_MeV * 1e6
+        # Convert to energy in eV and use interpolator.
+        # clamp to the data range
+        energy_eV = np.clip(energy_MeV * 1e6, self.differential_xs_data[0][0], self.differential_xs_data[0][-1])
         return self.diff_xs_recoil_interpolator(energy_eV)*np.sin(self.theta_lab)
     
     def get_angle_distribution(self, incident_energy: float) -> Optional[ProbabilityDistribution]:

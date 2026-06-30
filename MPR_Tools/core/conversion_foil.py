@@ -347,7 +347,6 @@ class ConversionFoil:
         z_sampling: Literal['exp', 'uni'] = 'exp',
         rng: Optional[np.random.Generator] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None,
-        continuous_energy_sampling: bool = True,
     ) -> Tuple[float, float, float, float, float, float]:
         """
         Generate a scattered charged particle from incident particle interaction.
@@ -362,8 +361,6 @@ class ConversionFoil:
             z_sampling: Depth sampling method ('exp' for exponential, 'uni' for uniform).
             rng: Random number generator (pass the worker's RNG for thread safety).
             y_restriction: Restrict sampled y position to 'positive' or 'negative' half of foil.
-            continuous_energy_sampling: If True, sample energy continuously via inverse CDF
-                                        interpolation. If False, sample from the discrete bin centres.
 
         Returns:
             Tuple of (x0, y0, theta_scatter, phi_scatter, incident_energy, recoil_energy)
@@ -385,56 +382,35 @@ class ConversionFoil:
             if interaction.generates_recoil_particles:
                 recoil_interactions.append(interaction)
 
-        # Cache energy-dependent quantities to avoid recomputing them when the same energy is
-        # sampled twice in a row (i.e. for monoenergetic inputs).
-        previous_incident_energy = None
-        angle_distributions = None
-        interaction_weights = None
-        attenuation = 0.0
-        
-        # Precompute inverse CDF for continuous energy sampling (multi-energy case only).
-        _cdf = None
-        if len(incident_energies) > 1 and continuous_energy_sampling:
-            _cdf = np.concatenate([[0.0], np.cumsum(probability_distribution[:-1] * np.diff(incident_energies))])
-            _cdf /= _cdf[-1]
+        # Sample incident energy ONCE per particle.
+        if len(incident_energies) > 1:
+            incident_energy = float(rng.choice(incident_energies, p=probability_distribution))
+        else:
+            incident_energy = float(incident_energies[0])
 
-        # Generate rays until one passes through aperture
+        # Compute energy-dependent cross sections and angle distributions once for this energy.
+        angle_distributions = {}
+        interaction_weights = []
+        for interaction in recoil_interactions:
+            angle_distributions[interaction] = interaction.get_angle_distribution(incident_energy)
+            weight = (interaction.get_cross_section(incident_energy) *
+                      angle_distributions[interaction].integral(0, max_angle))
+            interaction_weights.append(weight)
+        interaction_weights = np.array(interaction_weights) / sum(interaction_weights)
+
+        if z_sampling == 'exp':
+            attenuation = float(sum(
+                interaction.get_cross_section(incident_energy)
+                for interaction in self.interactions
+            ))
+        else:
+            attenuation = 0.0
+
+        # Retry angle only until a recoil passes through the aperture.
         accepted = False
         # Limit number of rejections to avoid infinite loops
         rejected = 0
-        while not accepted and rejected < 100:
-            # Sample incident particle energy from weighted distribution
-            if _cdf is not None:
-                incident_energy = float(np.interp(rng.uniform(), _cdf, incident_energies))
-            elif len(incident_energies) > 1:
-                incident_energy = float(rng.choice(incident_energies, p=probability_distribution))
-            else:
-                incident_energy = float(incident_energies[0])
-            
-            # Only recompute energy-dependent cross sections and angle distributions when the
-            # incident energy changes
-            if incident_energy != previous_incident_energy:
-                # Do the cross section calculations
-                angle_distributions = {}
-                interaction_weights = []
-                for interaction in recoil_interactions:
-                    angle_distributions[interaction] = interaction.get_angle_distribution(incident_energy)
-                    weight = (interaction.get_cross_section(incident_energy) *
-                              angle_distributions[interaction].integral(0, max_angle))
-                    interaction_weights.append(weight)
-                interaction_weights = np.array(interaction_weights) / sum(interaction_weights)
-
-                # Attenuation coefficient for exponential depth sampling; 0 gives uniform sampling
-                if z_sampling == 'exp':
-                    attenuation = float(sum(
-                        interaction.get_cross_section(incident_energy)
-                        for interaction in self.interactions
-                    ))
-                else:
-                    attenuation = 0.0
-
-                previous_incident_energy = incident_energy
-
+        while not accepted and rejected < 1000:
             interaction = rng.choice(recoil_interactions, p=interaction_weights)
             x0, y0, z0, theta_scatter, phi_scatter = self._sample_scattered_ray(
                 rng, angle_distributions[interaction], attenuation, max_angle, y_restriction,
@@ -447,7 +423,7 @@ class ConversionFoil:
                     incident_energy,
                     theta_scatter if include_kinematics else 0,
                     rng)
-                
+
                 # Apply stopping power energy loss
                 if include_stopping_power_loss:
                     path_length = (-z0) / np.cos(theta_scatter)

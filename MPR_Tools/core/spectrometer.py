@@ -214,7 +214,6 @@ class MPRSpectrometer:
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None,
-        continuous_energy_sampling: bool = True,
         importance_sampling: bool = False,
     ) -> None:
         """
@@ -231,12 +230,10 @@ class MPRSpectrometer:
             executor: Pool of workers to use (if None, a new pool is created).
             max_workers: Maximum number of worker processes (None -> CPU count).
             y_restriction: Restrict sampled foil y position to 'positive' or 'negative' half.
-            continuous_energy_sampling: If True, sample energy continuously via inverse CDF. If False,
-                                        sample from discrete bin centres.
             importance_sampling: If True, sample all energies with equal (uniform) probability and
-                                 attach a per-particle weight w = p_weighted(E) / p_uniform(E) so
-                                 that low-probability energies are sampled more uniformly while
-                                 preserving the correct weighted response.
+                                 attach a per-particle weight w = p(E) * n so that each energy's
+                                 contribution is correctly probability-weighted. Without IS, energies
+                                 are sampled directly from the probability distribution.
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
@@ -247,13 +244,7 @@ class MPRSpectrometer:
         particles_per_process = num_recoil_particles // max_workers
         remaining_particles = num_recoil_particles % max_workers
 
-        # Weight energy distribution by scattering cross section
-        interaction_probability = np.zeros_like(probability_distribution)
-        for interaction in self.conversion_foil.interactions:
-            if interaction.generates_recoil_particles:
-                interaction_probability += interaction.get_cross_section(incident_energies)
-        weighted_distribution = probability_distribution * interaction_probability
-        weighted_distribution /= np.sum(weighted_distribution)
+        weighted_distribution = probability_distribution / np.sum(probability_distribution)
 
         # With importance sampling, draw energies from a flat distribution and weight each
         # particle by weighted_distribution / uniform_distribution (source biasing).
@@ -281,7 +272,6 @@ class MPRSpectrometer:
                     self.target_to_foil_distance,
                     self.burn_duration,
                     y_restriction,
-                    continuous_energy_sampling,
                     self.min_energy,
                     self.max_energy,
                     importance_sampling,
@@ -316,7 +306,6 @@ class MPRSpectrometer:
         target_to_foil_distance: Optional[float],
         burn_duration: Optional[float],
         y_restriction: Optional[Literal['positive', 'negative']],
-        continuous_energy_sampling: bool,
         min_energy: float,
         max_energy: float,
         importance_sampling: bool,
@@ -349,7 +338,6 @@ class MPRSpectrometer:
                         z_sampling=z_sampling,
                         rng=rng,
                         y_restriction=y_restriction,
-                        continuous_energy_sampling=continuous_energy_sampling,
                     )
                 )
 
@@ -395,19 +383,9 @@ class MPRSpectrometer:
                     timing_noise = rng.normal(0, burn_duration / (2 * np.sqrt(2 * np.log(2))))
                     foil_time += timing_noise
 
-                # Compute importance sampling weight: w = p_weighted(E) / p_uniform(E).
                 if importance_sampling:
-                    if continuous_energy_sampling and len(incident_energies) > 1:
-                        e_range = incident_energies[-1] - incident_energies[0]
-                        particle_weight = float(
-                            np.interp(incident_energy, incident_energies, importance_weights)
-                        ) * e_range
-                    else:
-                        idx = int(np.clip(
-                            np.searchsorted(incident_energies, incident_energy),
-                            0, len(incident_energies) - 1,
-                        ))
-                        particle_weight = importance_weights[idx] * len(incident_energies)
+                    idx = int(np.searchsorted(incident_energies, incident_energy))
+                    particle_weight = importance_weights[idx] * len(incident_energies)
                 else:
                     particle_weight = 1.0
 

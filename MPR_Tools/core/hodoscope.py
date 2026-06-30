@@ -232,17 +232,16 @@ class Hodoscope:
     def _load_background_2d(
         self,
         filepath: str
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Load a time- and energy-resolved background spectrum from a CSV.
 
-        The CSV must have an 'energy' and 'mean' column, and optionally 'time' and 'std' columns:
+        The CSV must have an 'energy' and 'mean' column, and optionally a 'time' column:
             time: time bin centre [s]  (optional)
             energy: energy bin centre [MeV]
             mean: background fluence [particles / cm^2 / source particle] for that (time, energy) bin
-            std: 1-sigma MC uncertainty on mean (optional; zeros assumed if absent)
 
-        The data are pivoted into 2-D arrays so that downstream code can index them as
+        The data are pivoted into a 2-D array so that downstream code can index it as
         bg_mean_2d[time_index, energy_index].
 
         Args:
@@ -252,36 +251,25 @@ class Hodoscope:
             time_bins: 1-D array of unique sorted time values [s]
             energy_bins: 1-D array of unique sorted energy values [MeV]
             bg_mean_2d: 2-D array of shape (n_time_bins, n_energy_bins) [particles / cm^2 / source]
-            bg_std_2d: 2-D array same shape as bg_mean_2d; zeros if 'std' column absent
         """
         df = pd.read_csv(filepath)
         energy_bins = np.sort(df['energy'].unique())
-        has_std = 'std' in df.columns
 
         if 'time' in df.columns:
             time_bins = np.sort(df['time'].unique())
             bg_mean_2d = np.zeros((len(time_bins), len(energy_bins)))
-            bg_std_2d = np.zeros((len(time_bins), len(energy_bins)))
             time_index = {t: i for i, t in enumerate(time_bins)}
             energy_index = {e: i for i, e in enumerate(energy_bins)}
             for _, row in df.iterrows():
-                time_i = time_index[row['time']]
-                energy_i = energy_index[row['energy']]
-                bg_mean_2d[time_i, energy_i] = row['mean']
-                if has_std:
-                    bg_std_2d[time_i, energy_i] = row['std']
+                bg_mean_2d[time_index[row['time']], energy_index[row['energy']]] = row['mean']
         else:
             time_bins = np.array([0.0])
             bg_mean_2d = np.zeros((1, len(energy_bins)))
-            bg_std_2d = np.zeros((1, len(energy_bins)))
             energy_index = {e: i for i, e in enumerate(energy_bins)}
             for _, row in df.iterrows():
-                energy_i = energy_index[row['energy']]
-                bg_mean_2d[0, energy_i] += row['mean']
-                if has_std:
-                    bg_std_2d[0, energy_i] += row['std']
+                bg_mean_2d[0, energy_index[row['energy']]] += row['mean']
 
-        return time_bins, energy_bins, bg_mean_2d, bg_std_2d
+        return time_bins, energy_bins, bg_mean_2d
 
     def get_background(
         self,
@@ -292,19 +280,21 @@ class Hodoscope:
         Background spectra are loaded from self.neutron_background_file and
         self.photon_background_file. They can be time-resolved if use_time_gating is True.
         For each time bin the energy axis is contracted against the
-        detector sensitivity:
-            deposited(t) = sum_E  bg(t, E) * sensitivity(E) * E   [MeV / cm^2 / source]
+        detector sensitivity, where w(E)=sensitivity(E)*E:
+            deposited(t) = sum_E  bg(t, E) * w(E)   [MeV / cm^2 / source]
 
-        If the CSV files contain a 'std' column, the uncertainty is propagated in the same manner.
+        The physical shot-noise variance of the response is returned alongside the mean. The
+        background is a compound-Poisson process:
+            shot_var(t) = sum_E  bg(t, E) * w(E)^2   [MeV^2 / cm^2 / source]
 
         Always returns a 5-tuple of arrays so callers are uniform regardless of use_time_gating.
 
         Returns:
             time_bins: 1-D array; length 1 (value 0.0) when use_time_gating=False
             neutron_background: 1-D array same length as time_bins [MeV / cm^2 / source]
-            neutron_background_std: 1-D array, 1-sigma uncertainty on neutron_background
             photon_background: 1-D array same length as time_bins [MeV / cm^2 / source]
-            photon_background_std: 1-D array, 1-sigma uncertainty on photon_background
+            neutron_background_var: 1-D array, compound-Poisson shot variance [MeV^2 / cm^2 / source]
+            photon_background_var: 1-D array, compound-Poisson shot variance [MeV^2 / cm^2 / source]
 
         Raises:
             ValueError: If the detector has not been configured, if use_time_gating=True but a
@@ -324,8 +314,8 @@ class Hodoscope:
                         f"use_time_gating=True but background file has no 'time' column: {filepath}"
                     )
 
-        neutron_time_bins, neutron_energy_bins, neutron_bg_mean_2d, neutron_bg_std_2d = self._load_background_2d(self.neutron_background_file)
-        photon_time_bins, photon_energy_bins, photon_bg_mean_2d, photon_bg_std_2d = self._load_background_2d(self.photon_background_file)
+        neutron_time_bins, neutron_energy_bins, neutron_bg_mean_2d = self._load_background_2d(self.neutron_background_file)
+        photon_time_bins, photon_energy_bins, photon_bg_mean_2d = self._load_background_2d(self.photon_background_file)
 
         if not np.array_equal(neutron_time_bins, photon_time_bins):
             raise ValueError(
@@ -334,30 +324,26 @@ class Hodoscope:
             )
 
         # Contract the energy axis against the detector sensitivity to get energy deposited per
-        # unit area per source particle as a function of time [MeV / cm^2 / source].
+        # unit area per source particle as a function of time.
         neutron_weight = self.sensitivity['neutron'](neutron_energy_bins) * neutron_energy_bins
         neutron_background = neutron_bg_mean_2d @ neutron_weight
-        neutron_background_std = np.sqrt((neutron_bg_std_2d ** 2) @ (neutron_weight ** 2))
+        neutron_background_var = neutron_bg_mean_2d @ (neutron_weight ** 2)
 
         photon_weight = self.sensitivity['gamma'](photon_energy_bins) * photon_energy_bins
         photon_background = photon_bg_mean_2d @ photon_weight
-        photon_background_std = np.sqrt((photon_bg_std_2d ** 2) @ (photon_weight ** 2))
+        photon_background_var = photon_bg_mean_2d @ (photon_weight ** 2)
 
         if self.use_time_gating:
             # Return full time-resolved arrays so the caller can apply per-channel time windows.
-            return neutron_time_bins, neutron_background, neutron_background_std, photon_background, photon_background_std
+            return (neutron_time_bins, neutron_background, photon_background,
+                    neutron_background_var, photon_background_var)
         else:
             # Collapse to a single time bin at t=0 so the return type is always a 5-tuple of
-            # arrays.  The caller can treat both cases uniformly: time_bins has length 1 and
-            # each background array contains the total energy deposited over all time.
-            n_bg_total = float(np.sum(neutron_background))
-            n_bg_std_total = float(np.sqrt(np.sum(neutron_background_std ** 2)))
-            ph_bg_total = float(np.sum(photon_background))
-            ph_bg_std_total = float(np.sqrt(np.sum(photon_background_std ** 2)))
+            # arrays.  Means and variances both sum linearly over time.
             return (
                 np.array([0.0]),
-                np.array([n_bg_total]),
-                np.array([n_bg_std_total]),
-                np.array([ph_bg_total]),
-                np.array([ph_bg_std_total]),
+                np.array([float(np.sum(neutron_background))]),
+                np.array([float(np.sum(photon_background))]),
+                np.array([float(np.sum(neutron_background_var))]),
+                np.array([float(np.sum(photon_background_var))]),
             )
