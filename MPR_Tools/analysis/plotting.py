@@ -1973,7 +1973,7 @@ class SpectrometerPlotter:
             ax.plot(E_overlay, ts_arr, 'k--', linewidth=2, zorder=4, label='True spectrum')
             ax.text(*_ts_label_pos, 'True spectrum', color='k', **_label_kw).set_path_effects(_stroke)
 
-        ax.set_xlabel('Incident energy [MeV]')
+        ax.set_xlabel(f'{incident_particle.capitalize()} Energy [MeV]')
         ax.set_ylabel(ylabel)
         ax.set_yscale('log')
         peak_vals = [f[f > 0].max() if np.any(f > 0) else np.nan]

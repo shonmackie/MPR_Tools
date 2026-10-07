@@ -574,4 +574,11 @@ def compute_spectrum_data_points(
     spectrum_data = signal / col_sums_safe
     spectrum_data_sigma = sigma / col_sums_safe
 
+    # Edge-of-acceptance channels have noisy MC response; flag them like empty ones (nominal_energy == 0)
+    has_response = col_sums > 0
+    left_edge = np.r_[True, ~has_response[:-1]]
+    right_edge = np.r_[~has_response[1:], True]
+    boundary_artifact = has_response & (left_edge | right_edge)
+    nominal_energy[boundary_artifact] = 0.0
+
     return spectrum_data, spectrum_data_sigma, nominal_energy, energy_spread
