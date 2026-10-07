@@ -12,7 +12,7 @@ from tqdm import tqdm
 from .matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, PairProduction, \
     ProbabilityDistribution
 from .parallelization import run_concurrently
-from ..config.constants import AVOGADRO, FOIL_MATERIALS, NEUTRON_MASS
+from ..config.constants import AVOGADRO, FOIL_MATERIALS
 
 
 class ConversionFoil:
@@ -31,6 +31,7 @@ class ConversionFoil:
         aperture_width: Optional[float] = None,
         aperture_height: Optional[float] = None,
         foil_material: Literal['CH2', 'CD2', 'LiH', 'Be', 'B'] = 'CH2',
+        particle: Optional[str] = None,
         aperture_type: Literal['circ', 'rect'] = 'circ',
     ):
         """
@@ -45,6 +46,7 @@ class ConversionFoil:
             aperture_width: Aperture width (in dispersion direction [x]) in cm (required for rectangular apertures)
             aperture_height: Aperture height (in non-dispersion direction [y]) in cm (required for rectangular apertures)
             foil_material: Foil material to use ('CH2' or 'CD2')
+            particle: Recoil particle species to use (or None to infer from the foil material)
             aperture_type: Type of aperture ('circ' or 'rect')
         """
         print('Initializing conversion foil...')
@@ -67,17 +69,28 @@ class ConversionFoil:
 
         self.aperture_type = aperture_type
         
-        # Calculate particle densities in CH2
+        # Load particle densities
         self.foil_material = foil_material
-        self.incident_particle = FOIL_MATERIALS[foil_material]['incident_particle']
-        self.particle = FOIL_MATERIALS[foil_material]['particle']
         self.foil_density = FOIL_MATERIALS[foil_material]['density'] # g/cm^3
         self.molecular_weight = FOIL_MATERIALS[foil_material]['molecular_weight'] # g/mol
         self.particle_mass = FOIL_MATERIALS[foil_material]['particle_mass'] # amu
-        self.stopping_data_path = FOIL_MATERIALS[foil_material]['stopping_power']
         self.interaction_info = FOIL_MATERIALS[self.foil_material]['interactions']
         
+        # Set or infer the incident and recoil particle species
+        self.incident_particle, self.particle = None, None
+        for interaction in self.interaction_info:
+            if 'recoil_particle' in interaction and (particle is None or interaction['recoil_particle'] == particle):
+                self.incident_particle = interaction['incident_particle']
+                self.particle = interaction['recoil_particle']
+                break
+        if self.particle is None or self.incident_particle is None:
+            raise ValueError(f"The material '{foil_material}' has no interactions that produce {particle}s.")
+        
         # Load cross section and stopping power data
+        if self.particle == 'electron':
+            self.stopping_data_path = FOIL_MATERIALS[foil_material]['electron_stopping_power']
+        else:
+            self.stopping_data_path = FOIL_MATERIALS[foil_material]['ion_stopping_power']
         self._load_data_files()
         
         print('Conversion foil initialization complete.\n')
@@ -101,6 +114,8 @@ class ConversionFoil:
         # Load cross section data
         self.interactions: list[Interaction] = []
         for interaction_info in self.interaction_info:
+            if interaction_info['incident_particle'] != self.incident_particle:
+                continue
             molecular_density = self.foil_density / self.molecular_weight * AVOGADRO * 1e6  # molecules/m^3
             target_density = interaction_info['target_abundance'] * molecular_density  # targets/m^3
             if interaction_info['type'] == 'generic':
@@ -108,15 +123,21 @@ class ConversionFoil:
                     interaction_info['name'],
                     target_density, data_dir / interaction_info['total_cross_section']))
             elif interaction_info['type'] == 'elastic_scattering':
+                assert interaction_info['incident_particle'] == 'neutron'
                 self.interactions.append(ElasticScattering(
                     f'(n,{self.particle[0]}) elastic',
+                    interaction_info['recoil_particle'],
                     target_density,
                     data_dir / interaction_info['total_cross_section'],
                     data_dir / interaction_info['diff_cross_section'],
                     self.particle_mass))
             elif interaction_info['type'] == 'compton_scattering':
+                assert interaction_info['incident_particle'] == 'photon'
+                assert interaction_info['recoil_particle'] == 'electron'
                 self.interactions.append(ComptonScattering(target_density))
             elif interaction_info['type'] == 'pair_production':
+                assert interaction_info['incident_particle'] == 'photon'
+                assert interaction_info['recoil_particle'] == 'electron'
                 self.interactions.append(PairProduction(target_density, interaction_info['target_charge']))
             else:
                 raise ValueError(f"I don't know the interaction type {interaction_info['type']!r}.")
@@ -382,7 +403,7 @@ class ConversionFoil:
         # Limit scattering to the interactions that actually scatter
         recoil_interactions = []
         for interaction in self.interactions:
-            if interaction.generates_recoil_particles:
+            if interaction.recoil_particle == self.particle:
                 recoil_interactions.append(interaction)
 
         # Cache energy-dependent quantities to avoid recomputing them when the same energy is
@@ -453,7 +474,7 @@ class ConversionFoil:
                     path_length = (-z0) / np.cos(theta_scatter)
                     recoil_energy = self.calculate_stopping_power_loss(recoil_energy, path_length)
 
-                accepted = True
+                accepted = recoil_energy > 0
             else:
                 rejected += 1
 
@@ -530,7 +551,7 @@ class ConversionFoil:
         recoil_interactions = []
         for interaction in self.interactions:
             total_xs += interaction.get_cross_section(incident_energy)
-            if interaction.generates_recoil_particles:
+            if interaction.recoil_particle == self.particle:
                 effective_xs += interaction.get_cross_section(incident_energy)
                 angle_distributions[interaction] = interaction.get_angle_distribution(incident_energy)
                 interaction_weights.append(
@@ -674,7 +695,7 @@ class ConversionFoil:
         # Weight distribution by scattering cross section and normalize
         interaction_probability = np.zeros_like(energy_distribution)
         for interaction in self.interactions:
-            if interaction.generates_recoil_particles:
+            if interaction.recoil_particle == self.particle:
                 interaction_probability += interaction.get_cross_section(incident_energies)
         weighted_distribution = energy_distribution * interaction_probability
         weighted_distribution = weighted_distribution / np.sum(weighted_distribution)

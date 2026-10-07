@@ -253,7 +253,7 @@ class MPRSpectrometer:
         # Weight energy distribution by scattering cross section
         interaction_probability = np.zeros_like(probability_distribution)
         for interaction in self.conversion_foil.interactions:
-            if interaction.generates_recoil_particles:
+            if interaction.recoil_particle == self.conversion_foil.particle:
                 interaction_probability += interaction.get_cross_section(incident_energies)
         weighted_distribution = probability_distribution * interaction_probability
         weighted_distribution /= np.sum(weighted_distribution)
@@ -424,7 +424,7 @@ class MPRSpectrometer:
         # COSY Eq. 1: l = -(t - t0) * v0 * gamma / (1 + gamma)
         particle_rest_energy = self.conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1.0 + self.reference_energy / particle_rest_energy
-        reference_velocity = LIGHT_SPEED * np.sqrt(1.0 - 1.0 / reference_gamma**2)        # m/s
+        reference_velocity = LIGHT_SPEED * np.sqrt(1.0 - 1.0 / reference_gamma**2)  # m/s
         reference_detector_time = (
             self.central_ray_length / reference_velocity if self.central_ray_length is not None else 0.0
         )
@@ -484,14 +484,14 @@ class MPRSpectrometer:
         Worker method to apply the COSY transfer map to a batch of recoil particles.
 
         Args:
-            input_batch: Input rays [N x 7]: x0, p_x_rel, y0, p_y_rel, foil_time, energy_rel, incident_energy.
+            input_batch: Input rays [N x 7]: x0 (m), p0_x_rel, y0 (m), p0_y_rel, ~ignored~, energy_rel, incident_energy (MeV).
             transfer_map: COSY transfer map coefficients.
             map_order: Maximum polynomial order of terms to include.
             progress_counter: Shared counter for progress tracking.
             progress_lock: Lock for thread-safe progress updates.
 
         Returns:
-            Output rays [N x 6]: x, p_x_rel, y, p_y_rel, detector_time, energy_rel.
+            Output rays [N x 6]: x (m), p_x_rel, y (m), p_y_rel, l (m), energy_rel.
         """
         batch_size = len(input_batch)
 
@@ -515,8 +515,8 @@ class MPRSpectrometer:
         output_batch[:, 5] = input_batch[:, 5]
 
         # input_batch[:, 4] is the foil arrival time in seconds
-        # But for simplicity, the COSY map uses the l coordinate. We will assume that all particles arrive at the foil at the same time (t0) so that l_i=0.
-        # We will correct for the transit time to the foil and convert l_f to a detector time.
+        # But for simplicity, since the COSY map uses the l coordinate, we will assume that all particles arrive at the foil at the same time (t0) so that l_i=0.
+        # We will correct for the transit time to the foil later and convert l_f to a detector time.
         # Accumulate the polynomial transfer map term by term
         for j, term_powers in enumerate(term_powers_array):
             # Only include terms up to specified order
@@ -540,15 +540,9 @@ class MPRSpectrometer:
         if self.hodoscope.tilt_angle != 0 or not np.isinf(self.hodoscope.arc_radius):
             angle = np.radians(self.hodoscope.tilt_angle)  # convert this to radians
             curvature = -1/(self.hodoscope.arc_radius*1e-2)  # convert this to signed inverse meters (now positive means bending away from the magnets)
-            cosy_plane_rays = np.concatenate([  # add a time column so that the output batch can be used as an input batch
-                output_batch[:, 0:4], np.zeros((batch_size, 1)), output_batch[:, 4:],
-            ], axis=1)
-            detector_plane_rays = ray_cylinder_intersection(
-                cosy_plane_rays, 0, angle, curvature,
+            output_batch = ray_cylinder_intersection(
+                output_batch, 0, angle, curvature,
                 self.reference_energy, self.conversion_foil.particle_mass)
-            output_batch = np.concatenate([  # re-remove the time column
-                detector_plane_rays[:, 0:4], detector_plane_rays[:, 5:],
-            ], axis=1)
         
         return output_batch
     
@@ -669,7 +663,7 @@ def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float,
                     - x-momentum as a fraction of the central ray momentum
                     - y-position relative to the central ray in meters
                     - y-momentum as a fraction of the central ray momentum
-                    - some deranged time-of-flight metric in meters
+                    - some deranged negative time-of-flight metric in meters
                     - energy difference from the central ray as a fraction of the central ray energy
         shift: distance along the central ray from the input plane to the detector, in meters.
                positive shift means the rays have to keep going forward to hit the detector;
@@ -688,7 +682,7 @@ def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float,
         - momentum that is transverse to both the detector and the y-axis, in the same units as before
         - y-position in meters
         - y-momentum in the same units as before
-        - some deranged time-of-flight metric, updated to account for any additional or removed time-of-flight
+        - some deranged negative time-of-flight metric, updated to account for any additional or removed time-of-flight
         - the same as before (propagation to a new detector location doesn't change the energy)
     """
     # Unpack the input coordinates
@@ -704,7 +698,7 @@ def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float,
     a = px_relative / p_relative  # this is like COSY's a but sensically defined
     b = py_relative / p_relative
     v_relative = np.sqrt((gamma**-2 - 1)/(reference_gamma**-2 - 1))
-    l_0 = tau_0 * v_relative / (gamma/(1 + gamma))
+    l_0 = -tau_0 * v_relative / (gamma/(1 + gamma))  # this is like COSY's l but without the garbage nonsense factors
     
     # Pre-calculate some angles and ratios
     extraneous_angle = np.maximum(np.hypot(a, b)/0.999, 1)  # fix COSY's mistake if it gives you nonphysical angles
@@ -746,7 +740,7 @@ def ray_cylinder_intersection(input_rays: np.ndarray, shift: float, tilt: float,
     else:
         x_D = q
     px_D_relative = np.sqrt(1 - b**2) * np.sin(yaw_D) * p_relative
-    tau = l / v_relative * gamma/(1 + gamma)
+    tau = -l / v_relative * gamma/(1 + gamma)
     
     # pack it up and return
     return np.stack([x_D, px_D_relative, y, py_relative, tau, energy_relative], axis=1)

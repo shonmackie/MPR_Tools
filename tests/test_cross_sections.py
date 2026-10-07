@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
-from numpy import random, pi, isclose, empty, degrees, log, exp, hypot, median, array, full
+from numpy import random, pi, isclose, empty, degrees, log, exp, hypot, median, array
 
 from MPR_Tools import ConversionFoil
 from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
@@ -22,12 +22,13 @@ def test_nC12_scatter():
     
     assert isclose(carbon_scatter.get_cross_section(14.0), 0.819214e-28, rtol=1e-9, atol=0)
     
-    assert not carbon_scatter.generates_recoil_particles
+    assert carbon_scatter.recoil_particle == None
 
 
 def test_np_scatter():
     proton_scatter = ElasticScattering(
         name='(n,p)',
+        recoil_particle='proton',
         target_density=1,
         particle_mass=1.007,
         cross_section_path=Path('MPR_Tools/data/np_crosssection.txt'),
@@ -42,7 +43,7 @@ def test_np_scatter():
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 14))
     
-    assert proton_scatter.generates_recoil_particles
+    assert proton_scatter.recoil_particle == "proton"
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -57,6 +58,7 @@ def test_np_scatter():
 def test_nd_scatter():
     deuteron_scatter = ElasticScattering(
         name='(n,d)',
+        recoil_particle='deuteron',
         target_density=1,
         particle_mass=2.014,
         cross_section_path=Path('MPR_Tools/data/nd_crosssection.txt'),
@@ -71,7 +73,7 @@ def test_nd_scatter():
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 12.5))
     
-    assert deuteron_scatter.generates_recoil_particles
+    assert deuteron_scatter.recoil_particle == "deuteron"
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)
@@ -96,7 +98,7 @@ def test_compton_scatter():
     assert all((angles >= 0) & (angles <= pi/2))
     assert all((energies >= 0) & (energies <= 16.45))
     
-    assert compton_scatter.generates_recoil_particles
+    assert compton_scatter.recoil_particle == "electron"
     
     plt.figure()
     plt.hist(degrees(angles), density=True, bins=100)
@@ -120,7 +122,7 @@ def test_pair_production():
     assert all((angles >= 0) & (angles <= pi))
     assert all((energies >= 0) & (energies <= 15.7))
     
-    assert pair_production.generates_recoil_particles
+    assert pair_production.recoil_particle == "electron"
     
     plt.figure()
     plt.hist(energies, density=True, bins=50)

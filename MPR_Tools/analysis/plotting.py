@@ -1396,7 +1396,7 @@ class SpectrometerPlotter:
         angles_deg = np.degrees(angles_rad)
         
         for interaction in foil.interactions:
-            if interaction.generates_recoil_particles:
+            if interaction.recoil_particle == foil.particle:
                 diff_xs_lab = interaction.get_angle_distribution(energy_MeV).pdf(angles_rad)
                 axs[0].plot(angles_deg, diff_xs_lab, 'tab:blue')
                 
@@ -1437,7 +1437,7 @@ class SpectrometerPlotter:
             title = f'{foil.particle} and {foil2.particle} at {dual_energy_MeV:.2f} MeV'
             
             for interaction in foil2.interactions:
-                if interaction.generates_recoil_particles:
+                if interaction.recoil_particle == foil2.particle:
                     diff_xs_lab2 = interaction.get_angle_distribution(dual_energy_MeV).pdf(angles_rad)
                     axs[0].plot(angles_deg, diff_xs_lab2, 'darkorange')
             

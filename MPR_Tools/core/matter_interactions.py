@@ -29,7 +29,7 @@ class GenericInteraction:
         self.name = name
         self.target_density = target_density
         self.cross_section_data = np.genfromtxt(cross_section_path, skip_header=6, usecols=(0, 1), unpack=True)
-        self.generates_recoil_particles = False
+        self.recoil_particle = None
         print(f'Loaded cross sections from {cross_section_path}')
     
     def get_cross_section(self, energy_MeV: float | np.ndarray) -> float | np.ndarray:
@@ -64,23 +64,25 @@ class ElasticScattering(GenericInteraction):
     def __init__(
             self,
             name: str,
+            recoil_particle: str,
             target_density: float,
             cross_section_path: Path,
             differential_xs_path: Path,
             particle_mass: float,
     ):
         """
-        Initialize an elastic scattering process and load its cross sections from an ENDF data file
+        Initialize an elastic neutron-ion scattering process and load its cross sections from an ENDF data file
         
         Args:
             name: a uniquely identifying string, for plotting purposes
+            recoil_particle: Name of the recoil particle species this produces
             target_density: Number density of the targets being scattered off of in m^-3
             cross_section_path: Name of the data file with the total cross section data
             differential_xs_path: Name of the data file with the angular distribution data
             particle_mass: Mass of the particle getting scattered in amu
         """
         super().__init__(name, target_density, cross_section_path)
-        self.generates_recoil_particles = True
+        self.recoil_particle = recoil_particle
         
         # Need to read as a pandas df and convert to numpy because some
         # differential cross sections have different number of Legendre
@@ -197,7 +199,7 @@ class ComptonScattering:
         """
         self.name = "Compton"
         self.target_density = target_density
-        self.generates_recoil_particles = True
+        self.recoil_particle = "electron"
         
         incident_energies = np.linspace(1, 25, 25)
         self.photon_angles = np.linspace(np.pi, 0, 73)
@@ -294,7 +296,7 @@ class PairProduction:
         """
         self.name = "pair production"
         self.target_density = target_density
-        self.generates_recoil_particles = True
+        self.recoil_particle = "electron"
         
         # photon energies at which to calculate the cross section
         self.incident_energy_table = np.geomspace(2*ELECTRON_REST_ENERGY, 25, 11)  # MeV

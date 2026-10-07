@@ -52,8 +52,21 @@ class PerformanceAnalyzer:
         bandwidth_factor = kde.factor
         bandsigma = bandwidth_factor * np.std(data)
         bandwidth = 2*np.sqrt(2*np.log(2)) * bandsigma
-        
-        x = np.linspace(data.min(), data.max(), round(5 * (data.max() - data.min()) / bandwidth))
+
+        # Estimate the peak location so that we can clip the data if it's extremely broad compared to the bandwidth
+        data_min, data_max = data.min(), data.max()
+        if data_max - data_min > 1e9*bandwidth:
+            approximate_position = np.median(data)
+        else:
+            coarse_bin_edges = np.linspace(data.min(), data.max(), round((data.max() - data.min()) / bandwidth))
+            coarse_bin_centers = (coarse_bin_edges[0:-1] + coarse_bin_edges[1:])/2
+            coarse_histogram, _ = np.histogram(data, coarse_bin_edges)
+            approximate_position = coarse_bin_centers[np.argmax(coarse_histogram)]
+        lower_bound = data[data >= approximate_position - 100*bandwidth].min()  # this limits it to 1000 samples
+        upper_bound = data[data <= approximate_position + 100*bandwidth].max()
+
+        # Calculate the density curve
+        x = np.linspace(lower_bound, upper_bound, max(4, round(5 * (upper_bound - lower_bound) / bandwidth)))
         y = kde(x)
 
         # Find the most extreme data points where y >= y_cutoff
@@ -172,6 +185,7 @@ class PerformanceAnalyzer:
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
         output_filename: Optional[str] = None,
+        map_order: int = 5,
         reset: bool = True,
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
@@ -188,6 +202,7 @@ class PerformanceAnalyzer:
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
             output_filename: Name for output data file
+            map_order: Order of transfer map to apply (1-5 typically)
             reset: Whether to regenerate the dataset rather than loading an existing one
             executor: Pool of workers to use (if None, we will make our own)
             max_workers: Maximum number of worker processes (None for CPU count)
@@ -238,7 +253,8 @@ class PerformanceAnalyzer:
                         max_workers=max_workers,)
                     spec.apply_transfer_map(save_beam=False,
                         executor=executor,
-                        max_workers=max_workers)
+                        max_workers=max_workers,
+                        map_order=map_order)
                     
                     positions = spec.output_beam[:,0]
                     positions_width[i], positions_mean[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
