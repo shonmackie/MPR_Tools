@@ -86,10 +86,10 @@ class MPRSpectrometer:
         print(f'Loaded COSY transfer map from {transfer_map_path}\n')
         
         # Initialize recoil beam arrays
-        # columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy
-        self.input_beam: np.ndarray = np.zeros(0)
+        # columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy, weight
+        self.input_beam: np.ndarray = np.zeros((0, 8))
         # columns: x0, p_x_relative, y0, p_y_relative, detector_time, energy_relative
-        self.output_beam: np.ndarray = np.zeros(0)
+        self.output_beam: np.ndarray = np.zeros((0, 6))
         
         print(f'MPR spectrometer initialization complete.\n')
     
@@ -134,7 +134,7 @@ class MPRSpectrometer:
         # 7 columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy
         # Characteristic rays carry no time information, so foil_time is set to 0.
         # incident_energy is set to 0 (no single incident energy for characteristic rays).
-        self.input_beam = np.zeros((num_rays, 7))
+        self.input_beam = np.zeros((num_rays, 8))
         print(f'Characteristic ray energy range: {min_energy:.3f}-{max_energy:.3f} MeV')
         
         ray_index = 0
@@ -145,7 +145,7 @@ class MPRSpectrometer:
             
             if radial_points == 0:
                 # On-axis ray only; foil_time = 0 (no time info for characteristic rays)
-                self.input_beam[ray_index] = [0, 0, 0, 0, 0, energy_offset, 0]
+                self.input_beam[ray_index] = [0, 0, 0, 0, 0, energy_offset, 0, 1]
                 ray_index += 1
             else:
                 # Full phase space grid
@@ -186,7 +186,7 @@ class MPRSpectrometer:
                                 p_y_relative = p_relative * sin_angle_y
 
                                 # foil_time = 0 (no time info for characteristic rays); incident_energy = 0
-                                ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, 0, energy_offset, 0]
+                                ray = [x_foil, -p_x_relative, y_foil, -p_y_relative, 0, energy_offset, 0, 1]
                                 is_duplicate = False
                                 
                                 for prev_idx in range(ray_index):
