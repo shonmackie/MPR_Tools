@@ -10,9 +10,11 @@ from MPR_Tools.core.matter_interactions import ProbabilityDistribution
 def test_gaussian_fwhm():
     rng = random.default_rng(seed=0)
     x = rng.normal(loc=100, scale=10, size=10000)
-    width, center = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
+    width, center, lower, upper = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
     assert isclose(width, 23.55, atol=0.3, rtol=0.1)  # the standard deviation is about 30, so the random error is about 0.3
     assert isclose(center, 100, atol=0.3, rtol=0.1)  # and there can be significant relative errors due to broadening from the KDE
+    assert isclose(lower, 100 - 23.55/2, atol=0.3, rtol=0.1)  # so that's why I chose atol=0.3 and rtol=0.1
+    assert isclose(upper, 100 + 23.55/2, atol=0.3, rtol=0.1)  # so that's why I chose atol=0.3 and rtol=0.1
 
 
 def test_long_tailed_gaussian_fwhm():
@@ -21,25 +23,31 @@ def test_long_tailed_gaussian_fwhm():
         rng.normal(loc=100, scale=10, size=10000),
         rng.normal(loc=100, scale=100, size=10000),  # this distribution forms long tails that shouldn't affect the width much
     ])
-    width, center = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
+    width, center, lower, upper = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
     assert isclose(width, 25.25, atol=0.3, rtol=0.1)  # I found this 25.25 numerically; idk if there's an analytic solution
     assert isclose(center, 100, atol=0.3, rtol=0.1)
+    assert isclose(lower, 100 - 25.25/2, atol=0.3, rtol=0.1)
+    assert isclose(upper, 100 + 25.25/2, atol=0.3, rtol=0.1)
 
 
 def test_uniform_fwhm():
     rng = random.default_rng(seed=0)
     x = rng.uniform(low=10, high=30, size=10000)
-    width, center = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
+    width, center, lower, upper = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
     assert isclose(width, 20, atol=0.3, rtol=0.1)
     assert isclose(center, 20, atol=0.3, rtol=0.1)
+    assert isclose(lower, 10, atol=0.3, rtol=0.1)
+    assert isclose(upper, 30, atol=0.3, rtol=0.1)
 
 
 def test_gamma_fwhm():
     rng = random.default_rng(seed=0)
     x = rng.gamma(shape=1/2, scale=10, size=10000)
-    width, center = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
+    width, center, lower, upper = PerformanceAnalyzer.fwfm(x, fractional_max=1/2)
     assert 0 < width < 10  # the width of this distribution isn't really defined, but any reasonable estimate will be < 10
     assert isclose(center, width/2, atol=0, rtol=1e-3)
+    assert isclose(lower, 0, atol=width*1e-3)
+    assert upper < 10
 
 
 def test_probability_distribution():
