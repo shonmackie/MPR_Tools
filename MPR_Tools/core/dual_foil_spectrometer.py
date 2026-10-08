@@ -151,6 +151,7 @@ class DualFoilSpectrometer:
         executor: Optional[Executor] = None,
         max_workers: Optional[int] = None,
         continuous_energy_sampling: bool = True,
+        importance_sampling: bool = False,
     ) -> None:
         """
         Generate recoil rays for both foils with y-restrictions.
@@ -167,11 +168,21 @@ class DualFoilSpectrometer:
             max_workers: Maximum number of worker processes
             continuous_energy_sampling: If True, sample energy continuously via inverse CDF. If False,
                                         sample from discrete bin centres.
+            importance_sampling: If True, sample all energies uniformly and weight each particle
+                                 by p_weighted(E) / p_uniform(E) (source biasing).
         """
-        # Split recoil events between foils based on probability_distribution
+        # Split recoil events between foils.
+        # With importance_sampling, allocate proportional to the rage of energy bins each foil covers.
+        # Without importance_sampling, allocate proportional to integrated probability.
         ch2_idx = (incident_energies >= self.ch2_min_energy) & (incident_energies <= self.ch2_max_energy)
         cd2_idx = (incident_energies >= self.cd2_min_energy) & (incident_energies <= self.cd2_max_energy)
-        ch2_fraction = np.sum(probability_distribution[ch2_idx]) / (np.sum(probability_distribution[ch2_idx]) + np.sum(probability_distribution[cd2_idx]))
+        if importance_sampling:
+            ch2_weight = np.sum(ch2_idx)
+            cd2_weight = np.sum(cd2_idx)
+        else:
+            ch2_weight = np.sum(probability_distribution[ch2_idx])
+            cd2_weight = np.sum(probability_distribution[cd2_idx])
+        ch2_fraction = ch2_weight / (ch2_weight + cd2_weight)
         num_ch2 = int(num_recoil_particles * ch2_fraction)
         num_cd2 = num_recoil_particles - num_ch2
         
@@ -186,6 +197,7 @@ class DualFoilSpectrometer:
             executor=executor,
             max_workers=max_workers,
             continuous_energy_sampling=continuous_energy_sampling,
+            importance_sampling=importance_sampling,
         )
 
         print(f'\nGenerating {num_ch2} CH2 (proton) rays with positive y restriction...')
@@ -338,7 +350,8 @@ class DualFoilSpectrometer:
             'foil_time': self.combined_input_beam[:, 4],
             'energy_relative': self.combined_input_beam[:, 5],
             'incident_energy': self.combined_input_beam[:, 6],
-            'particle_type': self.combined_input_beam[:, 7].astype(int)  # 1=proton, 2=deuteron
+            'importance_weight': self.combined_input_beam[:, 7],
+            'particle_type': self.combined_input_beam[:, 8].astype(int)  # 1=proton, 2=deuteron
         })
         df.to_csv(filepath, index=False)
         print(f'Combined input beam saved to {filepath}')
@@ -385,11 +398,11 @@ class DualFoilSpectrometer:
         self.combined_output_beam = output_df.to_numpy()
         
         # Split by particle type: protons = 1, deuterons = 2
-        proton_mask_in = self.combined_input_beam[:, 7] == 1
-        deuteron_mask_in = self.combined_input_beam[:, 7] == 2
+        proton_mask_in = self.combined_input_beam[:, 8] == 1
+        deuteron_mask_in = self.combined_input_beam[:, 8] == 2
 
-        self.spec_ch2.input_beam = self.combined_input_beam[proton_mask_in, :7]
-        self.spec_cd2.input_beam = self.combined_input_beam[deuteron_mask_in, :7]
+        self.spec_ch2.input_beam = self.combined_input_beam[proton_mask_in, :8]
+        self.spec_cd2.input_beam = self.combined_input_beam[deuteron_mask_in, :8]
         
         # Split by particle type
         proton_mask_out = self.combined_output_beam[:, 6] == 1

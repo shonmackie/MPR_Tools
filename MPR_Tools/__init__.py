@@ -12,6 +12,18 @@ from .analysis.parameter_sweep import FoilSweeper
 from .analysis.plotting import SpectrometerPlotter, SweepPlotter
 from .analysis.performance import PerformanceAnalyzer
 from .analysis.hodoscope_creation import HodoscopeCreator
+from .analysis.forward_fitting import (
+    SpectrumFitter, ForwardFittingResult,
+    ballabio_model, nonstop_model
+)
+from .analysis.performance import HodoscopeResponse
 
 __version__ = "1.0.0"
-__all__ = ['ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper', 'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter', 'PerformanceAnalyzer', 'HodoscopeCreator']
+__all__ = [
+    'ConversionFoil', 'Hodoscope', 'MPRSpectrometer', 'FoilSweeper',
+    'DualFoilSpectrometer', 'SpectrometerPlotter', 'SweepPlotter',
+    'PerformanceAnalyzer', 'HodoscopeCreator',
+    'SpectrumFitter', 'ForwardFittingResult',
+    'ballabio_model', 'nonstop_model',
+    'HodoscopeResponse',
+]

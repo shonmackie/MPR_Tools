@@ -215,6 +215,7 @@ class MPRSpectrometer:
         max_workers: Optional[int] = None,
         y_restriction: Optional[Literal['positive', 'negative']] = None,
         continuous_energy_sampling: bool = True,
+        importance_sampling: bool = False,
     ) -> None:
         """
         Generate recoil rays from incident particle energy distribution using Monte Carlo with multiprocessing.
@@ -232,23 +233,19 @@ class MPRSpectrometer:
             y_restriction: Restrict sampled foil y position to 'positive' or 'negative' half.
             continuous_energy_sampling: If True, sample energy continuously via inverse CDF. If False,
                                         sample from discrete bin centres.
+            importance_sampling: If True, sample all energies with equal (uniform) probability and
+                                 attach a per-particle weight w = p_weighted(E) / p_uniform(E) so
+                                 that low-probability energies are sampled more uniformly while
+                                 preserving the correct weighted response.
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
-        
+
         print(f'Generating {num_recoil_particles} Monte Carlo {self.conversion_foil.particle} trajectories using {max_workers} processes...')
-        
+
         # Calculate recoil events per process
         particles_per_process = num_recoil_particles // max_workers
         remaining_particles = num_recoil_particles % max_workers
-        
-        # Narrow energy distribution unless doing monoenergetic performance analysis.
-        if len(incident_energies) > 1:
-            # Only use incident energies that can possibly produce recoil energies within acceptance range.
-            # Both min and max bounds are applied so out-of-acceptance bins don't influence the distribution.
-            idx = (incident_energies >= self.min_energy) & (incident_energies <= self.max_energy)
-            incident_energies = incident_energies[idx]
-            probability_distribution = probability_distribution[idx]
 
         # Weight energy distribution by scattering cross section
         interaction_probability = np.zeros_like(probability_distribution)
@@ -257,6 +254,13 @@ class MPRSpectrometer:
                 interaction_probability += interaction.get_cross_section(incident_energies)
         weighted_distribution = probability_distribution * interaction_probability
         weighted_distribution /= np.sum(weighted_distribution)
+
+        # With importance sampling, draw energies from a flat distribution and weight each
+        # particle by weighted_distribution / uniform_distribution (source biasing).
+        if importance_sampling:
+            sampling_distribution = np.ones_like(weighted_distribution) / len(weighted_distribution)
+        else:
+            sampling_distribution = weighted_distribution
 
         # Execute in parallel
         worker_args = []
@@ -268,7 +272,7 @@ class MPRSpectrometer:
                     batch_size,
                     12345 + i * 1000,  # seed_offset
                     incident_energies,
-                    weighted_distribution,
+                    sampling_distribution,
                     include_kinematics,
                     include_stopping_power_loss,
                     z_sampling,
@@ -278,6 +282,10 @@ class MPRSpectrometer:
                     self.burn_duration,
                     y_restriction,
                     continuous_energy_sampling,
+                    self.min_energy,
+                    self.max_energy,
+                    importance_sampling,
+                    weighted_distribution,
                 ))
         
         output_batches = run_concurrently(
@@ -299,7 +307,7 @@ class MPRSpectrometer:
         batch_size: int,
         seed_offset: int,
         incident_energies: np.ndarray,
-        weighted_distribution: np.ndarray,
+        sampling_distribution: np.ndarray,
         include_kinematics: bool,
         include_stopping_power_loss: bool,
         z_sampling: Literal['exp', 'uni'],
@@ -309,6 +317,10 @@ class MPRSpectrometer:
         burn_duration: Optional[float],
         y_restriction: Optional[Literal['positive', 'negative']],
         continuous_energy_sampling: bool,
+        min_energy: float,
+        max_energy: float,
+        importance_sampling: bool,
+        importance_weights: np.ndarray,
         progress_counter,
         progress_lock,
     ) -> np.ndarray:
@@ -316,7 +328,7 @@ class MPRSpectrometer:
         Generate a batch of recoil particles in a separate process.
 
         Each row of the returned array is:
-            [x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy]
+            [x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy, importance_weight]
         """
         # Create an independent RNG for this worker to ensure reproducibility
         rng = np.random.default_rng(seed_offset)
@@ -324,14 +336,14 @@ class MPRSpectrometer:
         particle_rest_energy = conversion_foil.particle_mass * MASS_TO_MEV  # MeV
         reference_gamma = 1 + reference_energy / particle_rest_energy   # Lorentz factor of the central ray
 
-        batch_results = np.empty((0, 7), dtype=float)
+        batch_results = np.empty((0, 8), dtype=float)
 
         while len(batch_results) < batch_size:
             try:
                 x0, y0, theta_s, phi_s, incident_energy, recoil_energy = (
                     conversion_foil.generate_recoil_particle(
                         incident_energies,
-                        weighted_distribution,
+                        sampling_distribution,
                         include_kinematics,
                         include_stopping_power_loss,
                         z_sampling=z_sampling,
@@ -341,23 +353,30 @@ class MPRSpectrometer:
                     )
                 )
 
+                # Reject recoil particles outside the spectrometer acceptance window.
+                # This is the correct place to filter: for heavier recoils (e.g. deuterons),
+                # high-energy neutrons can still produce accepted recoils at large lab angles,
+                # so filtering on incident energy instead would wrongly exclude them.
+                if not (min_energy <= recoil_energy <= max_energy):
+                    continue
+
                 # Convert foil position and scattering angles to COSY phase-space coordinates
                 x_aperture = x0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.cos(phi_s)
                 y_aperture = y0 + conversion_foil.aperture_distance * np.tan(theta_s) * np.sin(phi_s)
-                
+
                 total_distance = np.sqrt(
                     (x_aperture - x0)**2 + (y_aperture - y0)**2 +
                     conversion_foil.aperture_distance**2)
                 sin_angle_x = (x_aperture - x0) / total_distance
                 sin_angle_y = (y_aperture - y0) / total_distance
-                
+
                 gamma = 1 + recoil_energy/particle_rest_energy  # Lorentz factor of the ray
                 p_relative = np.sqrt((gamma**2 - 1)/(reference_gamma**2 - 1))
                 p_x_relative = p_relative * sin_angle_x
                 p_y_relative = p_relative * sin_angle_y
-                
+
                 energy_relative = (recoil_energy - reference_energy) / reference_energy
-                
+
                 # Calculate foil arrival time
                 if conversion_foil.incident_particle == 'photon':
                     velocity = LIGHT_SPEED  # m/s
@@ -369,19 +388,36 @@ class MPRSpectrometer:
                 else:
                     raise ValueError(f"Unsupported incident particle type: {conversion_foil.incident_particle}")
                 foil_time = target_to_foil_distance / velocity if target_to_foil_distance else 0.0
-                
+
                 # Add Gaussian timing noise if burn duration is provided
                 if burn_duration:
                     # Convert FWHM burn duration to standard deviation for Gaussian noise
                     timing_noise = rng.normal(0, burn_duration / (2 * np.sqrt(2 * np.log(2))))
                     foil_time += timing_noise
 
-                # Row: [x0, px, y0, py, foil_time, energy_relative, incident_energy]
+                # Compute importance sampling weight: w = p_weighted(E) / p_uniform(E).
+                if importance_sampling:
+                    if continuous_energy_sampling and len(incident_energies) > 1:
+                        e_range = incident_energies[-1] - incident_energies[0]
+                        particle_weight = float(
+                            np.interp(incident_energy, incident_energies, importance_weights)
+                        ) * e_range
+                    else:
+                        idx = int(np.clip(
+                            np.searchsorted(incident_energies, incident_energy),
+                            0, len(incident_energies) - 1,
+                        ))
+                        particle_weight = importance_weights[idx] * len(incident_energies)
+                else:
+                    particle_weight = 1.0
+
+                # Row: [x0, px, y0, py, foil_time, energy_relative, incident_energy, importance_weight]
                 batch_results = np.vstack((
                     batch_results,
-                    np.array([x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy])
+                    np.array([x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative,
+                               incident_energy, particle_weight])
                 ))
-                
+
                 # Update progress counter thread-safely
                 with progress_lock:
                     progress_counter.value += 1
@@ -559,6 +595,7 @@ class MPRSpectrometer:
             'foil_time': self.input_beam[:, 4],
             'energy_relative': self.input_beam[:, 5],
             'incident_energy': self.input_beam[:, 6],
+            'importance_weight': self.input_beam[:, 7],
         })
         df.to_csv(filepath, index=False)
         print(f'Input beam saved to {filepath}')
@@ -610,17 +647,18 @@ class MPRSpectrometer:
     def bin_hodoscope_response(self) -> Tuple[np.ndarray, np.ndarray]:
         """
         Bin recoil particle hits into hodoscope channels.
-        
+
         Returns:
             Tuple of (channel_numbers, counts_per_channel)
         """
         channel_counts = np.zeros(self.hodoscope.total_channels)
-        
-        for x_position in self.output_beam[:, 0]:
+        importance_weights = self.input_beam[:, 7]
+
+        for i, x_position in enumerate(self.output_beam[:, 0]):
             channel = self.hodoscope.get_channel_for_position(x_position)
             if channel:
-                channel_counts[channel] += 1
-        
+                channel_counts[channel] += importance_weights[i]
+
         channel_numbers = np.arange(self.hodoscope.total_channels)
         return channel_numbers, channel_counts
     
