@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from .performance import HodoscopeResponse
 from scipy.interpolate import LinearNDInterpolator
 from scipy.optimize import differential_evolution, least_squares
-from tqdm import tqdm
 
 
 def ballabio_model(
@@ -276,11 +275,11 @@ class ForwardFittingResult:
         print(f'\n{header}')
         print(f'  Converged: {self.converged}  |  chi_square: {self.chi_square:.3f}  |  nfev: {self.n_iterations}')
         if true_params is not None:
-            print(f'  {"Parameter":<{width}} {"True":>14} {"Fitted":>14} {'±1σ':>14}')
+            print(f'  {"Parameter":<{width}} {"True":>14} {"Fitted":>14} {"±1σ":>14}')
             for name, tv, fv, unc in zip(self.param_names, true_params, self.params, self.param_uncertainties):
                 print(f'  {name:<{width}} {tv:>14.4g}  {fv:>14.4g}  {unc:>14.4g}')
         else:
-            print(f'  {"Parameter":<{width}} {"Value":>12}  {'±1σ':>12}')
+            print(f'  {"Parameter":<{width}} {"Value":>12}  {"±1σ":>12}')
             for name, val, unc in zip(self.param_names, self.params, self.param_uncertainties):
                 print(f'  {name:<{width}} {val:>12.4g}  {unc:>12.4g}')
 
