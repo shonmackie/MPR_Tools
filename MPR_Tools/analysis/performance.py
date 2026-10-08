@@ -364,7 +364,7 @@ class PerformanceAnalyzer:
             upper = roots[-1]
             
         full_width = upper - lower
-        position = np.mean(data)
+        position = (upper + lower)/2
         
         # If the kernel seems like it could be smaller
         if full_width < 3*bandwidth and _recursions < 5:
@@ -430,20 +430,20 @@ class PerformanceAnalyzer:
             spectrometer.apply_transfer_map(
                 map_order=map_order, save_beam=False, executor=executor, max_workers=max_workers)
             positions = spectrometer.output_beam[:, 0]
-            position_width, position_mean, _, _ = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
-            return position_mean, position_width
+            width, center, _, _ = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
+            return center, width
         
         # Analyze focal plane distribution of target energy +/- delta
         E_low = incident_energy * (1 - delta_energy)
         E_high = incident_energy * (1 + delta_energy)
         # To save compute time, since we're only interested in the mean, use less recoils
-        position_mean_low, position_width_low = _get_positions(E_low, num_recoil_particles // 10)
-        position_mean_high, position_width_high = _get_positions(E_high, num_recoil_particles // 10)
+        position_center_low, _ = _get_positions(E_low, num_recoil_particles // 10)
+        position_center_high, _ = _get_positions(E_high, num_recoil_particles // 10)
         
         # Analyze focal plane distribution of target energy beamlet
-        position_mean_0, position_width_0 = _get_positions(incident_energy, num_recoil_particles)
+        position_center_0, position_width_0 = _get_positions(incident_energy, num_recoil_particles)
 
-        position_means = np.r_[position_mean_low, position_mean_0, position_mean_high]
+        position_means = np.r_[position_center_low, position_center_0, position_center_high]
         energies = np.r_[E_low, incident_energy, E_high]
 
         dispersion = np.gradient(position_means, energies)[1]
@@ -452,11 +452,11 @@ class PerformanceAnalyzer:
 
         if verbose:
             print('Ion Optical Image Parameters:')
-            print(f'  Mean position [cm]: {position_mean_0 * 100:.3f}')
+            print(f'  Position [cm]: {position_center_0 * 100:.3f}')
             print(f'  fwfm [cm]: {position_width_0 * 100:.3f}')
             print(f'  Energy resolution [keV]: {energy_resolution:.2f}')
         
-        return position_mean_0, position_width_0, energy_resolution, dispersion
+        return position_center_0, position_width_0, energy_resolution, dispersion
     
     def generate_performance_curve(
         self,
@@ -515,7 +515,7 @@ class PerformanceAnalyzer:
                 # Energy range
                 energies = np.linspace(spec.min_incident_energy, spec.max_incident_energy, num_energies)
 
-                positions_mean = np.zeros_like(energies)
+                positions_center = np.zeros_like(energies)
                 positions_width = np.zeros_like(energies)
                 positions_lower = np.zeros_like(energies)
                 positions_upper = np.zeros_like(energies)
@@ -541,7 +541,7 @@ class PerformanceAnalyzer:
                         map_order=map_order)
                     
                     positions = spec.output_beam[:,0]
-                    positions_width[i], positions_mean[i], positions_lower[i], positions_upper[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
+                    positions_width[i], positions_center[i], positions_lower[i], positions_upper[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
                     
                     # Calculate efficiency for this energy
                     scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
@@ -554,14 +554,14 @@ class PerformanceAnalyzer:
                     geometric_efficiencies[i] = geometric_efficiency
                     total_efficiencies[i] = total_efficiency
                 
-                gradients = np.gradient(positions_mean, energies)
+                gradients = np.gradient(positions_center, energies)
                 energy_resolutions = positions_width / gradients * 1000
 
                 # Create DataFrame for this foil
                 foil_df = pd.DataFrame({
                     'foil': foil_name,
                     'energy [MeV]': energies,
-                    'position [m]': positions_mean,
+                    'position [m]': positions_center,
                     'position lower [m]': positions_lower,
                     'position upper [m]': positions_upper,
                     'position width [m]': positions_width,
