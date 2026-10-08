@@ -519,8 +519,6 @@ class PerformanceAnalyzer:
                 positions_width = np.zeros_like(energies)
                 positions_lower = np.zeros_like(energies)
                 positions_upper = np.zeros_like(energies)
-                gradients = np.zeros_like(energies)
-                energy_resolutions = np.zeros_like(energies)
                 scattering_efficiencies = np.zeros_like(energies)
                 geometric_efficiencies = np.zeros_like(energies)
                 total_efficiencies = np.zeros_like(energies)
