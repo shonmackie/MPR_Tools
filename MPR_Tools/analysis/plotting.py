@@ -28,6 +28,8 @@ from ..config.constants import MASS_TO_MEV
 
 from ..analysis.forward_fitting import compute_spectrum_data_points
 
+SPECIES_COLORS = {'proton': 'tab:red', 'deuteron': 'tab:blue', 'neutron': 'tab:green', 'photon': 'tab:purple'}
+
 if TYPE_CHECKING:
     from ..analysis.parameter_sweep import FoilSweeper
     from ..analysis.forward_fitting import ForwardFittingResult
@@ -41,7 +43,7 @@ class SpectrometerPlotter:
             self.spectrometer = spectrometer
             self.dual_data = None  # Will be set for dual-foil mode
             self.performance_analyzer = PerformanceAnalyzer(spectrometer)
-            self.primary_color = 'tab:red'
+            self.primary_color = SPECIES_COLORS['proton']
             self.primary_cmap = 'plasma'
             
         elif isinstance(spectrometer, DualFoilSpectrometer):
@@ -53,11 +55,11 @@ class SpectrometerPlotter:
                 'performance_analyzer': PerformanceAnalyzer(spectrometer.spec_cd2),
                 'primary_label': 'protons',
                 'secondary_label': 'deuterons',
-                'secondary_color': 'tab:blue',
+                'secondary_color': SPECIES_COLORS['deuteron'],
                 'secondary_cmap': 'GnBu'
             }
             self.dual_spectrometer = spectrometer
-            self.primary_color = 'tab:red'
+            self.primary_color = SPECIES_COLORS['proton']
             self.primary_cmap = 'YlOrRd'
         else:
             raise ValueError(f'Invalid spectrometer type: {type(spectrometer)}. Should be MPRSpectrometer or DualFoilSpectrometer.')
@@ -601,25 +603,25 @@ class SpectrometerPlotter:
             if neutron_bg_per_channel is not None:
                 if neutron_bg_std_per_channel is not None:
                     _step_band(ax_top, channel_edges, neutron_bg_per_channel,
-                               neutron_bg_std_per_channel, color='tab:green')
+                               neutron_bg_std_per_channel, color=SPECIES_COLORS['neutron'])
                 _step(ax_top, channel_edges, neutron_bg_per_channel,
-                      color='tab:green', label='neutron', linewidth=3)
+                      color=SPECIES_COLORS['neutron'], label='neutron', linewidth=3)
             if photon_bg_per_channel is not None:
                 if photon_bg_std_per_channel is not None:
                     _step_band(ax_top, channel_edges, photon_bg_per_channel,
-                               photon_bg_std_per_channel, color='tab:purple')
+                               photon_bg_std_per_channel, color=SPECIES_COLORS['photon'])
                 _step(ax_top, channel_edges, photon_bg_per_channel,
-                      color='tab:purple', label='photon', linewidth=3)
+                      color=SPECIES_COLORS['photon'], label='photon', linewidth=3)
             ax_top.set_yscale('log')
             ax_top.set_ylabel(label)
             ax_top.grid(True, alpha=0.3)
             ax_top.text(0.2, 0.82, particle_label, color=self.primary_color,
                         transform=ax_top.transAxes, **_label_kw).set_path_effects(_stroke)
             if neutron_bg_per_channel is not None:
-                ax_top.text(0.38, 0.6, 'neutron', color='tab:green',
+                ax_top.text(0.38, 0.6, 'neutron', color=SPECIES_COLORS['neutron'],
                             transform=ax_top.transAxes, **_label_kw).set_path_effects(_stroke)
             if photon_bg_per_channel is not None:
-                ax_top.text(0.74, 0.47, 'photon', color='tab:purple',
+                ax_top.text(0.74, 0.47, 'photon', color=SPECIES_COLORS['photon'],
                             transform=ax_top.transAxes, **_label_kw).set_path_effects(_stroke)
             _add_energy_axis(ax_top, which='primary')
 
@@ -632,15 +634,15 @@ class SpectrometerPlotter:
             if neutron_bg_per_channel2 is not None:
                 if neutron_bg_std_per_channel2 is not None:
                     _step_band(ax_bot, channel_edges2, neutron_bg_per_channel2,
-                               neutron_bg_std_per_channel2, color='tab:green')
+                               neutron_bg_std_per_channel2, color=SPECIES_COLORS['neutron'])
                 _step(ax_bot, channel_edges2, neutron_bg_per_channel2,
-                      color='tab:green', label='neutron', linewidth=3)
+                      color=SPECIES_COLORS['neutron'], label='neutron', linewidth=3)
             if photon_bg_per_channel2 is not None:
                 if photon_bg_std_per_channel2 is not None:
                     _step_band(ax_bot, channel_edges2, photon_bg_per_channel2,
-                               photon_bg_std_per_channel2, color='tab:purple')
+                               photon_bg_std_per_channel2, color=SPECIES_COLORS['photon'])
                 _step(ax_bot, channel_edges2, photon_bg_per_channel2,
-                      color='tab:purple', label='photon', linewidth=3)
+                      color=SPECIES_COLORS['photon'], label='photon', linewidth=3)
             ax_bot.set_yscale('log')
             ax_bot.set_xlabel('Horizontal Position [cm]')
             ax_bot.set_ylabel(label)
@@ -650,10 +652,10 @@ class SpectrometerPlotter:
                             color=self.dual_data['secondary_color'],
                             transform=ax_bot.transAxes, **_label_kw).set_path_effects(_stroke)
             if neutron_bg_per_channel2 is not None:
-                ax_bot.text(0.35, 0.3, 'neutron', color='tab:green',
+                ax_bot.text(0.35, 0.3, 'neutron', color=SPECIES_COLORS['neutron'],
                             transform=ax_bot.transAxes, **_label_kw).set_path_effects(_stroke)
             if photon_bg_per_channel2 is not None:
-                ax_bot.text(0.68, 0.37, 'photon', color='tab:purple',
+                ax_bot.text(0.68, 0.37, 'photon', color=SPECIES_COLORS['photon'],
                             transform=ax_bot.transAxes, **_label_kw).set_path_effects(_stroke)
             _add_energy_axis(ax_bot, which='secondary')
 
@@ -668,15 +670,15 @@ class SpectrometerPlotter:
             if neutron_bg_per_channel is not None:
                 if neutron_bg_std_per_channel is not None:
                     _step_band(ax_counts, channel_edges, neutron_bg_per_channel,
-                               neutron_bg_std_per_channel, color='tab:green')
+                               neutron_bg_std_per_channel, color=SPECIES_COLORS['neutron'])
                 _step(ax_counts, channel_edges, neutron_bg_per_channel,
-                      color='tab:green', label='neutron', linewidth=3)
+                      color=SPECIES_COLORS['neutron'], label='neutron', linewidth=3)
             if photon_bg_per_channel is not None:
                 if photon_bg_std_per_channel is not None:
                     _step_band(ax_counts, channel_edges, photon_bg_per_channel,
-                               photon_bg_std_per_channel, color='tab:purple')
+                               photon_bg_std_per_channel, color=SPECIES_COLORS['photon'])
                 _step(ax_counts, channel_edges, photon_bg_per_channel,
-                      color='tab:purple', label='photon', linewidth=3)
+                      color=SPECIES_COLORS['photon'], label='photon', linewidth=3)
             ax_counts.set_yscale('log')
             ax_counts.set_xlabel('Horizontal Position [cm]')
             ax_counts.set_ylabel(label)
@@ -685,10 +687,10 @@ class SpectrometerPlotter:
             ax_counts.text(0.15, 0.82, particle_label, color=self.primary_color,
                            transform=ax_counts.transAxes, **_label_kw).set_path_effects(_stroke)
             if neutron_bg_per_channel is not None:
-                ax_counts.text(0.55, 0.55, 'neutron', color='tab:green',
+                ax_counts.text(0.55, 0.55, 'neutron', color=SPECIES_COLORS['neutron'],
                                transform=ax_counts.transAxes, **_label_kw).set_path_effects(_stroke)
             if photon_bg_per_channel is not None:
-                ax_counts.text(0.80, 0.35, 'photon', color='tab:purple',
+                ax_counts.text(0.80, 0.35, 'photon', color=SPECIES_COLORS['photon'],
                                transform=ax_counts.transAxes, **_label_kw).set_path_effects(_stroke)
             _add_energy_axis(ax_counts)
             fig.tight_layout()
@@ -730,54 +732,54 @@ class SpectrometerPlotter:
                 if is_dual:
                     # Gated S/B for CH2 (solid) and CD2 (dashed).
                     log10_sb_n_ch2, sigma_log10_sb_n_ch2 = _sb_and_sigma(signal, signal_std, neutron_bg_per_channel, _n_std)
-                    _step_band_linear(ax_sb, channel_edges, log10_sb_n_ch2, sigma_log10_sb_n_ch2, color='tab:green')
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_n_ch2, sigma_log10_sb_n_ch2, color=SPECIES_COLORS['neutron'])
                     _step(ax_sb, channel_edges, log10_sb_n_ch2,
-                          color='tab:green', linestyle='-', label='neutron (p)', linewidth=3)
+                          color=SPECIES_COLORS['neutron'], linestyle='-', label='neutron (p)', linewidth=3)
                     log10_sb_ph_ch2, sigma_log10_sb_ph_ch2 = _sb_and_sigma(signal, signal_std, photon_bg_per_channel, _ph_std)
-                    _step_band_linear(ax_sb, channel_edges, log10_sb_ph_ch2, sigma_log10_sb_ph_ch2, color='tab:purple')
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_ph_ch2, sigma_log10_sb_ph_ch2, color=SPECIES_COLORS['photon'])
                     _step(ax_sb, channel_edges, log10_sb_ph_ch2,
-                          color='tab:purple', linestyle='-', label='photon (p)', linewidth=3)
+                          color=SPECIES_COLORS['photon'], linestyle='-', label='photon (p)', linewidth=3)
                     if neutron_bg_per_channel2 is not None and photon_bg_per_channel2 is not None and signal2 is not None:
                         _n_std2 = neutron_bg_std_per_channel2 if neutron_bg_std_per_channel2 is not None else np.zeros_like(neutron_bg_per_channel2)
                         _ph_std2 = photon_bg_std_per_channel2 if photon_bg_std_per_channel2 is not None else np.zeros_like(photon_bg_per_channel2)
                         log10_sb_n_cd2, sigma_log10_sb_n_cd2 = _sb_and_sigma(signal2, signal_std2, neutron_bg_per_channel2, _n_std2)
-                        _step_band_linear(ax_sb, channel_edges2, log10_sb_n_cd2, sigma_log10_sb_n_cd2, color='tab:green')
+                        _step_band_linear(ax_sb, channel_edges2, log10_sb_n_cd2, sigma_log10_sb_n_cd2, color=SPECIES_COLORS['neutron'])
                         _step(ax_sb, channel_edges2, log10_sb_n_cd2,
-                              color='tab:green', linestyle='--', label='neutron (d)', linewidth=3)
+                              color=SPECIES_COLORS['neutron'], linestyle='--', label='neutron (d)', linewidth=3)
                         log10_sb_ph_cd2, sigma_log10_sb_ph_cd2 = _sb_and_sigma(signal2, signal_std2, photon_bg_per_channel2, _ph_std2)
-                        _step_band_linear(ax_sb, channel_edges2, log10_sb_ph_cd2, sigma_log10_sb_ph_cd2, color='tab:purple')
+                        _step_band_linear(ax_sb, channel_edges2, log10_sb_ph_cd2, sigma_log10_sb_ph_cd2, color=SPECIES_COLORS['photon'])
                         _step(ax_sb, channel_edges2, log10_sb_ph_cd2,
-                              color='tab:purple', linestyle='--', label='photon (d)', linewidth=3)
+                              color=SPECIES_COLORS['photon'], linestyle='--', label='photon (d)', linewidth=3)
                 else:
                     # Gated S/B: use the per-channel time-windowed background.
                     log10_sb_n, sigma_log10_sb_n = _sb_and_sigma(signal, signal_std, neutron_bg_per_channel, _n_std)
-                    _step_band_linear(ax_sb, channel_edges, log10_sb_n, sigma_log10_sb_n, color='tab:green')
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_n, sigma_log10_sb_n, color=SPECIES_COLORS['neutron'])
                     _step(ax_sb, channel_edges, log10_sb_n,
-                          color='tab:green', linestyle='-', label='neutron', linewidth=3)
+                          color=SPECIES_COLORS['neutron'], linestyle='-', label='neutron', linewidth=3)
                     log10_sb_ph, sigma_log10_sb_ph = _sb_and_sigma(signal, signal_std, photon_bg_per_channel, _ph_std)
-                    _step_band_linear(ax_sb, channel_edges, log10_sb_ph, sigma_log10_sb_ph, color='tab:purple')
+                    _step_band_linear(ax_sb, channel_edges, log10_sb_ph, sigma_log10_sb_ph, color=SPECIES_COLORS['photon'])
                     _step(ax_sb, channel_edges, log10_sb_ph,
-                          color='tab:purple', linestyle='-', label='photon', linewidth=3)
+                          color=SPECIES_COLORS['photon'], linestyle='-', label='photon', linewidth=3)
             else:
                 log10_sb_n, sigma_log10_sb_n = _sb_and_sigma(signal, signal_std, neutron_bg_per_channel, _n_std)
-                _step_band_linear(ax_sb, channel_edges, log10_sb_n, sigma_log10_sb_n, color='tab:green')
+                _step_band_linear(ax_sb, channel_edges, log10_sb_n, sigma_log10_sb_n, color=SPECIES_COLORS['neutron'])
                 _step(ax_sb, channel_edges, log10_sb_n,
-                      color='tab:green', label=n_label, linewidth=3)
+                      color=SPECIES_COLORS['neutron'], label=n_label, linewidth=3)
                 log10_sb_ph, sigma_log10_sb_ph = _sb_and_sigma(signal, signal_std, photon_bg_per_channel, _ph_std)
-                _step_band_linear(ax_sb, channel_edges, log10_sb_ph, sigma_log10_sb_ph, color='tab:purple')
+                _step_band_linear(ax_sb, channel_edges, log10_sb_ph, sigma_log10_sb_ph, color=SPECIES_COLORS['photon'])
                 _step(ax_sb, channel_edges, log10_sb_ph,
-                      color='tab:purple', label=g_label, linewidth=3)
+                      color=SPECIES_COLORS['photon'], label=g_label, linewidth=3)
                 if neutron_bg_per_channel2 is not None and photon_bg_per_channel2 is not None and signal2 is not None:
                     _n_std2 = neutron_bg_std_per_channel2 if neutron_bg_std_per_channel2 is not None else np.zeros_like(neutron_bg_per_channel2)
                     _ph_std2 = photon_bg_std_per_channel2 if photon_bg_std_per_channel2 is not None else np.zeros_like(photon_bg_per_channel2)
                     log10_sb_n_cd2, sigma_log10_sb_n_cd2 = _sb_and_sigma(signal2, signal_std2, neutron_bg_per_channel2, _n_std2)
-                    _step_band_linear(ax_sb, channel_edges2, log10_sb_n_cd2, sigma_log10_sb_n_cd2, color='tab:green')
+                    _step_band_linear(ax_sb, channel_edges2, log10_sb_n_cd2, sigma_log10_sb_n_cd2, color=SPECIES_COLORS['neutron'])
                     _step(ax_sb, channel_edges2, log10_sb_n_cd2,
-                          color='tab:green', linestyle='--', label='neutron (d)', linewidth=3)
+                          color=SPECIES_COLORS['neutron'], linestyle='--', label='neutron (d)', linewidth=3)
                     log10_sb_ph_cd2, sigma_log10_sb_ph_cd2 = _sb_and_sigma(signal2, signal_std2, photon_bg_per_channel2, _ph_std2)
-                    _step_band_linear(ax_sb, channel_edges2, log10_sb_ph_cd2, sigma_log10_sb_ph_cd2, color='tab:purple')
+                    _step_band_linear(ax_sb, channel_edges2, log10_sb_ph_cd2, sigma_log10_sb_ph_cd2, color=SPECIES_COLORS['photon'])
                     _step(ax_sb, channel_edges2, log10_sb_ph_cd2,
-                          color='tab:purple', linestyle='--', label='photon (d)', linewidth=3)
+                          color=SPECIES_COLORS['photon'], linestyle='--', label='photon (d)', linewidth=3)
 
             ax_sb.set_xlabel('Horizontal Position [cm]')
             ax_sb.set_ylabel('log$_{10}$(S/B)')
@@ -825,9 +827,9 @@ class SpectrometerPlotter:
             fig, ax_bgt = plt.subplots(figsize=(10, 4))
             time_ns_bg = time_bins * 1e9
             ax_bgt.step(time_ns_bg, neutron_background_vs_time, where='mid',
-                        color='tab:green', linewidth=3, label='neutron')
+                        color=SPECIES_COLORS['neutron'], linewidth=3, label='neutron')
             ax_bgt.step(time_ns_bg, photon_background_vs_time, where='mid',
-                        color='tab:purple', linewidth=3, label='photon')
+                        color=SPECIES_COLORS['photon'], linewidth=3, label='photon')
             labelLines(ax_bgt.get_lines(), align=False)
             ax_bgt.set_xlabel('Time [ns]')
             ax_bgt.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
@@ -988,18 +990,18 @@ class SpectrometerPlotter:
             n_vals = neutron_background_vs_time[mask] * overlap[mask]
             ph_vals = photon_background_vs_time[mask] * overlap[mask]
             ax_bg.step(time_ns_bg[mask], n_vals, where='mid',
-                       color='tab:green', linewidth=2, label='neutron', alpha=0.8)
+                       color=SPECIES_COLORS['neutron'], linewidth=2, label='neutron', alpha=0.8)
             ax_bg.step(time_ns_bg[mask], ph_vals, where='mid',
-                       color='tab:purple', linewidth=2, label='photon', alpha=0.8)
+                       color=SPECIES_COLORS['photon'], linewidth=2, label='photon', alpha=0.8)
             ax_bg.set_yscale('log')
             _sig_vals = np.concatenate([n_vals[n_vals > 0], ph_vals[ph_vals > 0]])
             if len(_sig_vals) > 0:
                 ax_bg.set_ylim(bottom=_sig_vals.min() * 0.5)
             ax_bg.set_ylabel('$E_{dep}$ [MeV/cm$^2$/source]')
             ax_bg.text(0.90, 0.52, 'neutron', transform=ax_bg.transAxes,
-                       color='tab:green', fontsize=13, ha='right', va='center').set_path_effects(_stroke)
+                       color=SPECIES_COLORS['neutron'], fontsize=13, ha='right', va='center').set_path_effects(_stroke)
             ax_bg.text(0.25, 0.93, 'photon', transform=ax_bg.transAxes,
-                       color='tab:purple', fontsize=13, ha='right', va='center').set_path_effects(_stroke)
+                       color=SPECIES_COLORS['photon'], fontsize=13, ha='right', va='center').set_path_effects(_stroke)
 
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
@@ -1863,8 +1865,6 @@ class SpectrometerPlotter:
         plt.close(fig)
         print(f'Response matrix plot saved to {filename}')
 
-    SPECIES_COLORS = {'proton': 'tab:red', 'deuteron': 'tab:blue', 'neutron': 'tab:green', 'photon': 'tab:purple'}
-
     def plot_channel_waveforms(
         self,
         waveforms: Union[ChannelWaveforms, Dict[str, ChannelWaveforms]],
@@ -1911,7 +1911,7 @@ class SpectrometerPlotter:
                     ax.axis('off')
                     continue
                 c = channels[foil][col]
-                curves = [(s, w.current[s][c], np.sqrt(w.variance[s][c]), self.SPECIES_COLORS[s]) for s in w.current]
+                curves = [(s, w.current[s][c], np.sqrt(w.variance[s][c]), SPECIES_COLORS[s]) for s in w.current]
                 curves.append(('total', w.total_current[c], w.total_std[c], 'black'))
                 for label, mean, std, color in curves:
                     mean, std = mean[shown], std[shown]
@@ -1962,7 +1962,7 @@ class SpectrometerPlotter:
             edges = hodoscopes[foil].channel_edges * 100  # m to cm
             q_nc = {s: np.abs(q) * 1e9 for s, q in w.charge.items()}
             for s, q in q_nc.items():
-                color = self.SPECIES_COLORS[s]
+                color = SPECIES_COLORS[s]
                 self._step_band(ax, edges, q, np.sqrt(w.charge_var[s]) * 1e9, color=color)
                 self._step(ax, edges, q, color=color, label=s, linewidth=3)
             # Each label sits just above its line, at the channel with the most room (log ratio, capped) up to the
@@ -1980,7 +1980,7 @@ class SpectrometerPlotter:
                     if inner[c] and q[c] > 0 and all(abs(centers[c] - x) >= min_dx for x in placed):
                         break
                 placed.append(centers[c])
-                ax.text(centers[c], q[c] * 1.3, s, color=self.SPECIES_COLORS[s], fontsize=18,
+                ax.text(centers[c], q[c] * 1.3, s, color=SPECIES_COLORS[s], fontsize=18,
                         ha='center', va='bottom').set_path_effects(_stroke)
             # Q/CV = 1 per channel [nC]; NaN capacitance-degenerate channels are left out
             h = hodoscopes[foil]
