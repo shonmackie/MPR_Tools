@@ -1,7 +1,7 @@
 """Plotting methods for MPR spectrometer visualization."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,7 +23,7 @@ plt.rcParams['lines.linewidth'] = 3
 
 from ..core.spectrometer import MPRSpectrometer
 from ..core.dual_foil_spectrometer import DualFoilSpectrometer
-from ..analysis.performance import PerformanceAnalyzer
+from ..analysis.performance import PerformanceAnalyzer, ChannelWaveforms
 from ..config.constants import MASS_TO_MEV
 
 from ..analysis.forward_fitting import compute_spectrum_data_points
@@ -31,6 +31,7 @@ from ..analysis.forward_fitting import compute_spectrum_data_points
 if TYPE_CHECKING:
     from ..analysis.parameter_sweep import FoilSweeper
     from ..analysis.forward_fitting import ForwardFittingResult
+    from ..core.hodoscope import Hodoscope
 
 class SpectrometerPlotter:
     """Handles all plotting functionality for MPR spectrometer."""
@@ -366,6 +367,103 @@ class SpectrometerPlotter:
         print(f'  Y position range: {self.spectrometer.output_beam[:, 2].min()*100:.2f} - {self.spectrometer.output_beam[:, 2].max()*100:.2f} cm')
         print(f'Characteristic ray plot saved to {filename}')
     
+    def _energy_maps(self, performance_curve_file: Optional[str] = None) -> Optional[Dict[str, Tuple[interp1d, interp1d]]]:
+        """Position [cm] <-> incident energy [MeV] interpolants per foil material from the performance curve.
+
+        Returns:
+            Dict foil material -> (x_to_en, en_to_x), or None without a performance curve.
+        """
+        perf_df = self.performance_analyzer._load_performance_curve(performance_curve_file)
+        if perf_df is None:
+            return None
+        specs = [self.spectrometer] + ([self.dual_data['spectrometer']] if self.dual_data is not None else [])
+        maps = {}
+        for i, spec in enumerate(specs):
+            foil = spec.conversion_foil.foil_material
+            if 'foil' in perf_df.columns and (perf_df['foil'] == foil).any():
+                rows = perf_df[perf_df['foil'] == foil]
+            elif i == 0:
+                rows = perf_df  # single-foil curve applies to the primary foil only
+            else:
+                continue
+            pos_cm, en_mev = rows['position [m]'].values * 100, rows['energy [MeV]'].values
+            maps[foil] = (interp1d(pos_cm, en_mev, bounds_error=False, fill_value='extrapolate'),
+                          interp1d(en_mev, pos_cm, bounds_error=False, fill_value='extrapolate'))
+        return maps
+
+    def _add_energy_axis(
+        self,
+        ax: Axes,
+        energy_maps: Optional[Dict[str, Tuple[interp1d, interp1d]]],
+        which: Literal['all', 'primary', 'secondary'] = 'all',
+    ) -> None:
+        """Add twin top x-axis(es) showing incident neutron energy in MeV.
+
+        In dual-foil mode two axes are added (one per foil), each colored to match
+        the corresponding signal line.  The deuteron axis is offset outward so the
+        two labels do not overlap.
+
+        Args:
+            ax: Axes with horizontal position [cm] on x.
+            energy_maps: Output of _energy_maps().
+            which: 'all' adds all axes; 'primary' adds only the CH2 axis;
+                   'secondary' adds only the CD2 axis (no offset since it is alone).
+        """
+        primary_foil = self.spectrometer.conversion_foil.foil_material
+        if not energy_maps or primary_foil not in energy_maps:
+            return
+        x_lo, x_hi = ax.get_xlim()
+
+        def _make_twin(x_to_en, en_to_x, xlabel, color=None, offset=0, tick_step=None):
+            e_lo, e_hi = float(x_to_en(x_lo)), float(x_to_en(x_hi))
+            e_min, e_max = min(e_lo, e_hi), max(e_lo, e_hi)
+            e_span = e_max - e_min
+            step = tick_step if tick_step is not None else 10 ** np.floor(np.log10(e_span / 4))
+            tick_energies = np.arange(np.ceil(e_min / step) * step,
+                                      np.floor(e_max / step) * step + step * 0.5,
+                                      step)
+            tick_positions = en_to_x(tick_energies)
+            ax_top = ax.twiny()
+            ax_top.set_xlim(ax.get_xlim())
+            ax_top.set_xticks(tick_positions)
+            ax_top.set_xticklabels([f'{e:.3g}' for e in tick_energies])
+            ax_top.set_xlabel(xlabel)
+            if offset:
+                ax_top.spines['top'].set_position(('outward', offset))
+            if color is not None:
+                ax_top.xaxis.label.set_color(color)
+                ax_top.tick_params(axis='x', colors=color)
+                ax_top.spines['top'].set_edgecolor(color)
+
+        inc = self.spectrometer.conversion_foil.incident_particle.capitalize()
+        if self.dual_data is not None:
+            secondary_foil = self.dual_data['spectrometer'].conversion_foil.foil_material
+            if which in ('all', 'primary'):
+                _make_twin(*energy_maps[primary_foil],
+                           f'{inc} Energy [MeV] (p)',
+                           color=self.primary_color)
+            if which in ('all', 'secondary') and secondary_foil in energy_maps:
+                _make_twin(*energy_maps[secondary_foil],
+                           f'{inc} Energy [MeV] (d)',
+                           color=self.dual_data['secondary_color'],
+                           offset=45 if which == 'all' else 0,
+                           tick_step=1.0)
+        else:
+            _make_twin(*energy_maps[primary_foil], f'{inc} Energy [MeV]')
+
+    @staticmethod
+    def _step(ax: Axes, edges: np.ndarray, values: np.ndarray, **kwargs):
+        return ax.step(edges, np.append(values, values[-1]), where='pre', **kwargs)[0]
+
+    @staticmethod
+    def _step_band(ax: Axes, edges: np.ndarray, values: np.ndarray, sigma: np.ndarray, color: str, alpha: float = 0.25) -> None:
+        """Draw a +/-1 sigma shaded band around a step-function line."""
+        if np.all(np.isnan(sigma)):
+            return
+        y_lo = np.append(values - sigma, (values - sigma)[-1])
+        y_hi = np.append(values + sigma, (values + sigma)[-1])
+        ax.fill_between(edges, y_lo, y_hi, step='pre', color=color, alpha=alpha, linewidth=0)
+
     def plot_position_histogram(
         self,
         filename: Optional[str] = None,
@@ -484,94 +582,9 @@ class SpectrometerPlotter:
         else:
             label = f'Counts [{"particles" if incident_particle_yield else "particles/source"}]'
 
-        # Build position→energy interpolant from the performance curve (optional).
-        # x_to_en: cm → MeV,  en_to_x: MeV → cm
-        _x_to_en = _en_to_x = None
-        _x_to_en2 = _en_to_x2 = None
-        perf_df = self.performance_analyzer._load_performance_curve(performance_curve_file)
-        if perf_df is not None:
-            _pos_cm = perf_df['position [m]'].values * 100  # m → cm
-            _en_mev = perf_df['energy [MeV]'].values
-            # keep only the CH2 foil rows if dual-foil data is present
-            if 'foil' in perf_df.columns:
-                primary_foil = self.spectrometer.conversion_foil.foil_material
-                mask = perf_df['foil'] == primary_foil
-                if mask.any():
-                    _pos_cm = _pos_cm[mask.values]
-                    _en_mev = _en_mev[mask.values]
-            _x_to_en = interp1d(_pos_cm, _en_mev, bounds_error=False, fill_value='extrapolate')
-            _en_to_x = interp1d(_en_mev, _pos_cm, bounds_error=False, fill_value='extrapolate')
-            # Build a second interpolant for the CD2 (deuteron) foil in dual-foil mode
-            if self.dual_data is not None and 'foil' in perf_df.columns:
-                secondary_foil = self.dual_data['spectrometer'].conversion_foil.foil_material
-                mask2 = perf_df['foil'] == secondary_foil
-                if mask2.any():
-                    _pos_cm2 = perf_df['position [m]'].values[mask2.values] * 100
-                    _en_mev2 = perf_df['energy [MeV]'].values[mask2.values]
-                    _x_to_en2 = interp1d(_pos_cm2, _en_mev2, bounds_error=False, fill_value='extrapolate')
-                    _en_to_x2 = interp1d(_en_mev2, _pos_cm2, bounds_error=False, fill_value='extrapolate')
-
-        def _add_energy_axis(ax, which: Literal['all', 'primary', 'secondary'] = 'all'):
-            """Add twin top x-axis(es) showing incident neutron energy in MeV.
-
-            In dual-foil mode two axes are added (one per foil), each colored to match
-            the corresponding signal line.  The deuteron axis is offset outward so the
-            two labels do not overlap.
-
-            Args:
-                which: 'all' adds all axes; 'primary' adds only the CH2 axis;
-                       'secondary' adds only the CD2 axis (no offset since it is alone).
-            """
-            if _x_to_en is None or _en_to_x is None:
-                return
-            x_lo, x_hi = ax.get_xlim()
-
-            def _make_twin(x_to_en, en_to_x, xlabel, color=None, offset=0, tick_step=None):
-                e_lo, e_hi = float(x_to_en(x_lo)), float(x_to_en(x_hi))
-                e_min, e_max = min(e_lo, e_hi), max(e_lo, e_hi)
-                e_span = e_max - e_min
-                step = tick_step if tick_step is not None else 10 ** np.floor(np.log10(e_span / 4))
-                tick_energies = np.arange(np.ceil(e_min / step) * step,
-                                          np.floor(e_max / step) * step + step * 0.5,
-                                          step)
-                tick_positions = en_to_x(tick_energies)
-                ax_top = ax.twiny()
-                ax_top.set_xlim(ax.get_xlim())
-                ax_top.set_xticks(tick_positions)
-                ax_top.set_xticklabels([f'{e:.3g}' for e in tick_energies])
-                ax_top.set_xlabel(xlabel)
-                if offset:
-                    ax_top.spines['top'].set_position(('outward', offset))
-                if color is not None:
-                    ax_top.xaxis.label.set_color(color)
-                    ax_top.tick_params(axis='x', colors=color)
-                    ax_top.spines['top'].set_edgecolor(color)
-
-            inc = self.spectrometer.conversion_foil.incident_particle.capitalize()
-            if is_dual:
-                if which in ('all', 'primary'):
-                    _make_twin(_x_to_en, _en_to_x,
-                               f'{inc} Energy [MeV] (p)',
-                               color=self.primary_color)
-                if which in ('all', 'secondary') and self.dual_data is not None and _x_to_en2 is not None and _en_to_x2 is not None:
-                    _make_twin(_x_to_en2, _en_to_x2,
-                               f'{inc} Energy [MeV] (d)',
-                               color=self.dual_data['secondary_color'],
-                               offset=45 if which == 'all' else 0,
-                               tick_step=1.0)
-            else:
-                _make_twin(_x_to_en, _en_to_x, f'{inc} Energy [MeV]')
-
-        def _step(ax, edges, values, **kwargs):
-            return ax.step(edges, np.append(values, values[-1]), where='pre', **kwargs)[0]
-
-        def _step_band(ax, edges, values, sigma, color, alpha=0.25):
-            """Draw a +/-1 sigma shaded band around a step-function line."""
-            if np.all(np.isnan(sigma)):
-                return
-            y_lo = np.append(values - sigma, (values - sigma)[-1])
-            y_hi = np.append(values + sigma, (values + sigma)[-1])
-            ax.fill_between(edges, y_lo, y_hi, step='pre', color=color, alpha=alpha, linewidth=0)
+        energy_maps = self._energy_maps(performance_curve_file)
+        _add_energy_axis = lambda ax, which='all': self._add_energy_axis(ax, energy_maps, which)
+        _step, _step_band = self._step, self._step_band
 
         # Plot 1: counts
         # In dual-foil mode background labels distinguish the CH2 and CD2 halves.
@@ -1849,6 +1862,166 @@ class SpectrometerPlotter:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f'Response matrix plot saved to {filename}')
+
+    SPECIES_COLORS = {'proton': 'tab:red', 'deuteron': 'tab:blue', 'neutron': 'tab:green', 'photon': 'tab:purple'}
+
+    def plot_channel_waveforms(
+        self,
+        waveforms: Union[ChannelWaveforms, Dict[str, ChannelWaveforms]],
+        channels: Optional[Dict[str, List[int]]] = None,
+        t_max: float = 400e-9,
+        filename: Optional[str] = None,
+    ) -> None:
+        """Plot electrode current vs time for selected channels, per species and total, with +/-1 sigma bands.
+
+        Args:
+            waveforms: Output of PerformanceAnalyzer.get_channel_waveforms().
+            channels: Foil material -> channel indices. Default per hodoscope: the third channel from each end, and
+                between them the primary foil's peak recoil channel (other hodoscopes: the channel at the same x).
+            t_max: End of the plotted time axis [s].
+            filename: Output path. Default: {figure_directory}/channel_waveforms.png.
+        """
+        wfs = waveforms if isinstance(waveforms, dict) else {waveforms.foil_material: waveforms}
+        if channels is None:
+            hodoscopes = self._hodoscopes()
+            primary = self.spectrometer.conversion_foil.foil_material
+            peak = int(np.argmax(np.abs(wfs[primary].charge[self.spectrometer.conversion_foil.particle])))
+            x_peak = hodoscopes[primary].channel_edges[peak:peak + 2].mean()
+            channels = {}
+            for foil, w in wfs.items():
+                n_ch = len(w.total_charge)
+                mid = peak if foil == primary else int(np.clip(np.searchsorted(hodoscopes[foil].channel_edges, x_peak) - 1, 0, n_ch - 1))
+                channels[foil] = [2, mid, n_ch - 3]
+        if filename is None:
+            filename = f'{self.spectrometer.figure_directory}/channel_waveforms.png'
+
+        # Time window: first nonzero current to t_max
+        w0 = next(iter(wfs.values()))
+        active = np.flatnonzero(sum(np.abs(w.total_current).sum(axis=0) for w in wfs.values()) > 0)
+        t_lo = w0.t[active[0]] if len(active) else w0.t[0]
+        shown = (w0.t >= t_lo) & (w0.t <= t_max)
+        t_ns = w0.t[shown] * 1e9
+
+        n_cols = max(len(c) for c in channels.values())
+        fig, axes = plt.subplots(len(wfs), n_cols, figsize=(4 * n_cols, 3.5 * len(wfs)), squeeze=False, sharex=True)
+        for row, (foil, w) in enumerate(wfs.items()):
+            for col in range(n_cols):
+                ax = axes[row, col]
+                if col >= len(channels[foil]):
+                    ax.axis('off')
+                    continue
+                c = channels[foil][col]
+                curves = [(s, w.current[s][c], np.sqrt(w.variance[s][c]), self.SPECIES_COLORS[s]) for s in w.current]
+                curves.append(('total', w.total_current[c], w.total_std[c], 'black'))
+                for label, mean, std, color in curves:
+                    mean, std = mean[shown], std[shown]
+                    ax.plot(t_ns, mean * 1e3, color=color, label=label, linewidth=1.5)
+                    ax.fill_between(t_ns, (mean - std) * 1e3, (mean + std) * 1e3, color=color, alpha=0.25, linewidth=0)
+                title = f'{foil} ch {c}'
+                if not w.linear_valid[c]:
+                    ax.set_facecolor('0.9')
+                    title += f'  Q/CV = {w.space_charge_ratio[c]:.2g}'
+                ax.set_title(title, fontsize=12)
+                ax.grid(True, alpha=0.3)
+                if col == 0:
+                    ax.set_ylabel('Current [mA]')
+                if row == len(wfs) - 1:
+                    ax.set_xlabel('Time [ns]')
+        axes[0, 0].set_xlim(t_ns[0], t_ns[-1])
+        axes[0, 0].legend(fontsize=10)
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f'Channel waveform plot saved to {filename}')
+
+    def plot_integrated_charge(
+        self,
+        waveforms: Union[ChannelWaveforms, Dict[str, ChannelWaveforms]],
+        performance_curve_file: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> None:
+        """Plot |integrated charge| per channel vs horizontal position, one step line and +/-1 sigma band per species.
+
+        One panel per hodoscope, with incident energy on the top axis as in plot_position_histogram(). A dashed
+        line marks Q/CV = 1 (charge C V per channel), where the linear pulse sum breaks down.
+
+        Args:
+            waveforms: Output of PerformanceAnalyzer.get_channel_waveforms().
+            performance_curve_file: Performance curve for the energy axis. Default: the analyzer's.
+            filename: Output path. Default: {figure_directory}/integrated_charge.png.
+        """
+        wfs = waveforms if isinstance(waveforms, dict) else {waveforms.foil_material: waveforms}
+        if filename is None:
+            filename = f'{self.spectrometer.figure_directory}/integrated_charge.png'
+        hodoscopes = self._hodoscopes()
+        energy_maps = self._energy_maps(performance_curve_file)
+        _stroke = [pe.withStroke(linewidth=3, foreground='white')]
+
+        fig, axes = plt.subplots(len(wfs), 1, figsize=(10, 4 * len(wfs)), squeeze=False, sharex=True)
+        for ax, (foil, w) in zip(axes[:, 0], wfs.items()):
+            edges = hodoscopes[foil].channel_edges * 100  # m to cm
+            q_nc = {s: np.abs(q) * 1e9 for s, q in w.charge.items()}
+            for s, q in q_nc.items():
+                color = self.SPECIES_COLORS[s]
+                self._step_band(ax, edges, q, np.sqrt(w.charge_var[s]) * 1e9, color=color)
+                self._step(ax, edges, q, color=color, label=s, linewidth=3)
+            # Each label sits just above its line, at the channel with the most room (log ratio, capped) up to the
+            # next curve above, ties to the larger charge; away from the panel edges and 12% of the x range apart
+            centers = (edges[:-1] + edges[1:]) / 2
+            span = edges[-1] - edges[0]
+            inner = (centers > edges[0] + 0.07 * span) & (centers < edges[-1] - 0.07 * span)
+            stack = np.array(list(q_nc.values()))
+            min_dx, placed = 0.12 * span, []
+            for s, q in q_nc.items():
+                next_above = np.where(stack > q, stack, np.inf).min(axis=0)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    room = np.where(q > 0, np.minimum(np.log(next_above / q), 3.0), -np.inf)
+                for c in np.lexsort((-q, -room)):
+                    if inner[c] and q[c] > 0 and all(abs(centers[c] - x) >= min_dx for x in placed):
+                        break
+                placed.append(centers[c])
+                ax.text(centers[c], q[c] * 1.3, s, color=self.SPECIES_COLORS[s], fontsize=18,
+                        ha='center', va='bottom').set_path_effects(_stroke)
+            # Q/CV = 1 per channel [nC]; NaN capacitance-degenerate channels are left out
+            h = hodoscopes[foil]
+            cv = h.channel_capacitance() * abs(h.pulse_library.bias_voltage) * 1e9
+            cv = np.where(np.isfinite(w.space_charge_ratio), cv, np.nan)
+            self._step(ax, edges, cv, color='black', linestyle='--', linewidth=2)
+            # Its label goes where the line is farthest above the charge curves, under the same placement rules
+            with np.errstate(divide='ignore', invalid='ignore'):
+                clearance = np.where(np.isfinite(cv), np.log(cv / stack.max(axis=0)), -np.inf)
+            for c in np.argsort(-clearance):
+                if inner[c] and np.isfinite(cv[c]) and all(abs(centers[c] - x) >= min_dx for x in placed):
+                    break
+            ax.text(centers[c], cv[c] * 1.3, 'Q/CV = 1', color='black', fontsize=14,
+                    ha='center', va='bottom').set_path_effects(_stroke)
+            ax.set_yscale('log')
+            # 7 decades below the largest charge; room above the highest curve for labels
+            q_max = stack.max()
+            ax.set_ylim(q_max * 1e-7, max(q_max, np.nanmax(cv)) * 30)
+            ax.set_ylabel('|Charge| [nC]')
+            ax.grid(True, alpha=0.3)
+        axes[-1, 0].set_xlabel('Horizontal Position [cm]')
+        # x limits: outer edges of channels with charge on any hodoscope
+        lims = []
+        for foil, w in wfs.items():
+            edges, hit = hodoscopes[foil].channel_edges * 100, np.flatnonzero(np.abs(w.total_charge) > 0)
+            if len(hit):
+                lims += [edges[hit[0]], edges[hit[-1] + 1]]
+        if lims:
+            axes[0, 0].set_xlim(min(lims), max(lims))
+        # Energy axes after the shared x limits are final
+        for i, ax in enumerate(axes[:, 0]):
+            self._add_energy_axis(ax, energy_maps, which='primary' if i == 0 else 'secondary')
+        fig.tight_layout()
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f'Integrated charge plot saved to {filename}')
+
+    def _hodoscopes(self) -> Dict[str, 'Hodoscope']:
+        """Foil material -> hodoscope, for each spectrometer."""
+        specs = [self.spectrometer] + ([self.dual_data['spectrometer']] if self.dual_data is not None else [])
+        return {s.conversion_foil.foil_material: s.hodoscope for s in specs}
 
     def plot_forward_fit_spectrum(
         self,

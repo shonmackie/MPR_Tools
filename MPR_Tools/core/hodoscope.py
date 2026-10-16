@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
+from ..config.constants import VACUUM_PERMITTIVITY, SILICON_RELATIVE_PERMITTIVITY
+from .pulse_library import PulseLibrary
+
 class Hodoscope:
     """
     Detector array at the focal plane.
@@ -28,6 +31,7 @@ class Hodoscope:
         arc_radius=np.inf,
         neutron_background_file: Optional[str] = None,
         photon_background_file: Optional[str] = None,
+        pulse_library: Optional[str] = None,
     ):
         """
         Initialize a linear or arc-shaped array of recoil particle detectors in one of three ways:
@@ -69,6 +73,8 @@ class Hodoscope:
                                      get_channel_response() and plot_position_histogram() without
                                      needing to pass the path at each call site.
             photon_background_file: Same format as neutron_background_file, for photon backgrounds.
+            pulse_library: Path to an Allpix pulse library (.npz) for per-channel current waveforms.
+                           Used by PerformanceAnalyzer.get_channel_waveforms().
         """
         # Calculate detector centers
         if channels is not None:
@@ -110,6 +116,12 @@ class Hodoscope:
 
         self.neutron_background_file = neutron_background_file
         self.photon_background_file = photon_background_file
+        self.pulse_library = PulseLibrary(pulse_library) if pulse_library else None
+        if self.pulse_library and self.detector_used and not np.isclose(self.pulse_library.thickness, self.detector_thickness * 1e-3):
+            raise ValueError(
+                f"Pulse library thickness ({self.pulse_library.thickness * 1e3:g} mm) does not match "
+                f"detector_thickness ({self.detector_thickness:g} mm)."
+            )
 
     def _calculate_channel_edges_from_array(self, data: np.ndarray) -> None:
         """Calculate the dimensions and center positions of all channels"""
@@ -155,6 +167,13 @@ class Hodoscope:
         self.channel_widths = np.diff(self.channel_edges)
         
         self.channel_heights = np.full(self.total_channels, detector_height)
+
+    def channel_capacitance(self) -> np.ndarray:
+        """Parallel-plate capacitance of each Si channel [F], shape (n_channels,)."""
+        if not self.detector_used:
+            raise ValueError("Detector thickness not set.")
+        area = self.channel_widths * self.channel_heights  # m^2
+        return VACUUM_PERMITTIVITY * SILICON_RELATIVE_PERMITTIVITY * area / (self.detector_thickness * 1e-3)
 
     @property
     def detector_width_cm(self) -> float:

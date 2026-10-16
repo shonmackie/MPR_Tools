@@ -16,7 +16,7 @@ from .analysis.forward_fitting import (
     SpectrumFitter, ForwardFittingResult,
     ballabio_model, nonstop_model
 )
-from .analysis.performance import HodoscopeResponse
+from .analysis.performance import HodoscopeResponse, ChannelWaveforms
 
 __version__ = "1.0.0"
 __all__ = [
@@ -25,5 +25,5 @@ __all__ = [
     'PerformanceAnalyzer', 'HodoscopeCreator',
     'SpectrumFitter', 'ForwardFittingResult',
     'ballabio_model', 'nonstop_model',
-    'HodoscopeResponse',
+    'HodoscopeResponse', 'ChannelWaveforms',
 ]

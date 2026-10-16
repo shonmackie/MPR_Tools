@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Executor
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Tuple, Optional, Union
 import warnings
 import numpy as np
@@ -11,6 +12,7 @@ from scipy.stats import gaussian_kde
 from scipy.interpolate import UnivariateSpline
 from tqdm import tqdm
 
+from ..config.constants import ELEMENTARY_CHARGE
 from ..core.spectrometer import MPRSpectrometer
 from ..core.dual_foil_spectrometer import DualFoilSpectrometer
 
@@ -300,6 +302,49 @@ class HodoscopeResponse:
     @property
     def background_std(self) -> np.ndarray:
         return np.sqrt(self.neutron_background_std ** 2 + self.photon_background_std ** 2)
+
+
+@dataclass
+class ChannelWaveforms:
+    """Per-channel electrode current waveforms for one hodoscope (raw Allpix sign: collected electrons negative).
+
+    Species keys: 'proton', 'deuteron', 'neutron', 'photon'.
+
+    Attributes:
+        foil_material: Foil whose hodoscope these channels belong to.
+        t: Time axis [s], shape (n_t,).
+        current, variance: species -> shape (n_channels, n_t) [A, A^2]; variance is compound-Poisson shot noise.
+        charge, charge_var: species -> shape (n_channels,) [C, C^2], integrated over the full time axis.
+        space_charge_ratio: |Total charge| / (C V) per channel (NaN for zero-area channels); large values break the linear pulse sum.
+        linear_valid: space_charge_ratio below space_charge_threshold.
+        space_charge_threshold: Threshold passed to get_channel_waveforms().
+    """
+    foil_material: str
+    t: np.ndarray
+    current: Dict[str, np.ndarray]
+    variance: Dict[str, np.ndarray]
+    charge: Dict[str, np.ndarray]
+    charge_var: Dict[str, np.ndarray]
+    space_charge_ratio: np.ndarray
+    linear_valid: np.ndarray
+    space_charge_threshold: float
+
+    @property
+    def total_current(self) -> np.ndarray:
+        return sum(self.current.values())
+
+    @property
+    def total_std(self) -> np.ndarray:
+        return np.sqrt(sum(self.variance.values()))
+
+    @property
+    def total_charge(self) -> np.ndarray:
+        return sum(self.charge.values())
+
+    @property
+    def total_charge_std(self) -> np.ndarray:
+        return np.sqrt(sum(self.charge_var.values()))
+
 
 class PerformanceAnalyzer:
     """Handles performance analysis for MPR spectrometer."""
@@ -761,3 +806,162 @@ class PerformanceAnalyzer:
         secondary = _build(self.dual_spectrometer)
         return {primary.foil_material: primary, secondary.foil_material: secondary}
 
+    def get_channel_waveforms(
+        self,
+        particle_yield: float,
+        space_charge_threshold: float = 0.1,
+        chunk_size: int = 2000,
+    ) -> Union[ChannelWaveforms, Dict[str, ChannelWaveforms]]:
+        """Per-channel electrode current waveforms from the hodoscope's Allpix pulse library.
+
+        Each MC recoil adds its interpolated pulse (hit pad and both neighbors), scaled by the number of real
+        particles it represents and shifted to its arrival time. Recoils from every foil are binned against every
+        hodoscope, so protons landing on the CD2 wafer (and deuterons on the CH2 wafer) are included.
+        Background (neutron, photon) adds the pad-averaged neutral pulse for each (time, energy) fluence bin,
+        spread uniformly over the time bin. Variances are compound-Poisson: sum of N * E[h^2].
+
+        Args:
+            particle_yield: Total source yield.
+            space_charge_threshold: Q / (C V) above which a channel is flagged as outside the linear regime.
+            chunk_size: Recoils processed per vectorized batch (bounds memory).
+
+        Returns:
+            ChannelWaveforms for a single-foil spectrometer, or a dict keyed by foil material.
+        """
+        specs = [self.spectrometer] + ([self.dual_spectrometer] if hasattr(self, 'dual_spectrometer') else [])
+        # All hodoscopes need a library on a shared time grid
+        libraries = [s.hodoscope.pulse_library for s in specs]
+        if any(lib is None for lib in libraries):
+            raise ValueError("Every hodoscope needs a pulse_library.")
+        if len({(lib.dt, lib.n_t) for lib in libraries}) > 1:
+            raise ValueError("Pulse libraries must share dt and window to use a common time axis.")
+        dt, n_k = libraries[0].dt, libraries[0].n_t
+
+        # Per-foil recoils at the detector; n = real particles per MC ray
+        performance_df = self._load_performance_curve()
+        recoils = []
+        for spec in specs:
+            efficiencies = self._get_foil_efficiencies(spec, performance_df)
+            geometric = spec.foil_geometric_factor or 1.0
+            recoils.append(dict(
+                species=spec.conversion_foil.particle,
+                x=spec.output_beam[:, 0] * 100, y=spec.output_beam[:, 2] * 100,  # cm
+                energy=spec.reference_energy * (1 + spec.output_beam[:, 5]),
+                time=spec.output_beam[:, 4],
+                n=efficiencies * spec.input_beam[:, 7] * geometric / len(spec.output_beam) * particle_yield,
+            ))
+
+        # Load each distinct (time, energy) background file once
+        backgrounds = {}
+        for spec in specs:
+            h = spec.hodoscope
+            for species, path in (('neutron', h.neutron_background_file), ('photon', h.photon_background_file)):
+                if path and path not in backgrounds:
+                    if 'time' not in pd.read_csv(path, nrows=0).columns:
+                        raise ValueError(f"Background file needs a 'time' column for waveforms: {path}")
+                    backgrounds[path] = (species, *h._load_background_2d(path))
+
+        # Global time axis: earliest of 0, first arrival and first background bin edge, to last arrival plus one pulse window
+        # Background time-bin width, used to spread each bin's arrivals
+        bg_width = {p: float(np.median(np.diff(b[1]))) if len(b[1]) > 1 else 0.0 for p, b in backgrounds.items()}
+        t_start = min([0.0] + [r['time'].min() for r in recoils]
+                      + [b[1][0] - bg_width[p] / 2 for p, b in backgrounds.items()])
+        t_last = max([r['time'].max() for r in recoils] + [b[1][-1] + bg_width[p] / 2 for p, b in backgrounds.items()])
+        n_t = int(np.ceil((t_last - t_start) / dt)) + n_k + 1
+        t = t_start + np.arange(n_t) * dt
+
+        def build(spec: MPRSpectrometer) -> ChannelWaveforms:
+            h = spec.hodoscope
+            library = h.pulse_library  # this wafer's response, also for crossover recoils
+            n_ch = h.total_channels
+            # Channel geometry in cm
+            edges, heights, y_centers = h.channel_edges * 100, h.channel_heights * 100, h.channel_y_centers * 100
+            centers, widths = (edges[:-1] + edges[1:]) / 2, np.diff(edges)
+            current, variance, charge_var = {}, {}, {}  # electrons per bin, electrons^2 per bin, electrons^2
+
+            def totals(species: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                if species not in current:
+                    current[species], variance[species] = np.zeros((n_ch, n_t)), np.zeros((n_ch, n_t))
+                    charge_var[species] = np.zeros(n_ch)
+                return current[species], variance[species], charge_var[species]
+
+            # Library pad pitch nearest to each channel width
+            pitch_of = np.array([library.nearest_pitch(w * 1e-2) for w in widths])
+
+            # Signal: every foil's recoils against this hodoscope
+            for r in recoils:
+                # Keep recoils inside a channel in both x and y
+                b = np.digitize(r['x'], edges) - 1
+                inside = (b >= 0) & (b < n_ch)
+                b = np.where(inside, b, 0)
+                accepted = np.flatnonzero(inside & (np.abs(r['y'] - y_centers[b]) <= heights[b] / 2))
+                # Chunked to bound the (recoils x kernel length) arrays
+                for i in range(0, len(accepted), chunk_size):
+                    sel = accepted[i:i + chunk_size]
+                    bs = b[sel]
+                    offset_um = (widths[bs] / 2 - np.abs(r['x'][sel] - centers[bs])) * 1e4  # distance to nearest edge (gap center)
+                    side = np.where(r['x'][sel] >= centers[bs], 1, -1)  # library pad +1 is the nearest neighbor
+                    start = np.rint((r['time'][sel] - t_start) / dt).astype(int)
+                    # Kernel lookup grouped by pitch
+                    for pitch in np.unique(pitch_of[bs]):
+                        m = pitch_of[bs] == pitch
+                        mean, m2, q2 = library.kernels(r['species'], pitch, r['energy'][sel][m], offset_um[m])
+                        cur, var, qv = totals(r['species'])
+                        n = r['n'][sel][m]
+                        # Hit pad and both neighbors
+                        for k, rel in enumerate((-1, 0, 1)):
+                            ch = bs[m] + rel * side[m]
+                            ok = (ch >= 0) & (ch < n_ch)  # drop neighbors off the array
+                            # Direct sum of n-weighted kernels into channels ch at time bins start
+                            idx = ((ch[ok] * n_t + start[m][ok])[:, None] + np.arange(n_k)).ravel()
+                            cur += np.bincount(idx, (n[ok, None] * mean[ok, k]).ravel(), n_ch * n_t).reshape(n_ch, n_t)
+                            var += np.bincount(idx, (n[ok, None] * m2[ok, k]).ravel(), n_ch * n_t).reshape(n_ch, n_t)
+                            qv += np.bincount(ch[ok], n[ok] * q2[ok, k], n_ch)
+
+            # Background: response per (source x cm^2) for each pitch, then scaled by yield x area per channel
+            area = widths * heights  # cm^2
+            for path, (species, time_bins, energy_bins, fluence) in backgrounds.items():
+                # Skip files that belong to the other hodoscope
+                if path not in (h.neutron_background_file, h.photon_background_file):
+                    continue
+                # Start bins of the uniform spread across each background time bin
+                n_box = max(1, int(round(bg_width[path] / dt)))
+                first = np.rint((time_bins - bg_width[path] / 2 - t_start) / dt).astype(int)
+                for pitch in np.unique(pitch_of):
+                    mean, m2, q2 = library.kernels(species, pitch, energy_bins)
+                    # Per-source, per-cm^2 waveform on pads [-1, 0, +1]
+                    unit = np.zeros((2, 3, n_t))  # [mean, m2] x pads [-1, 0, +1] x time
+                    for a, kern in enumerate((mean, m2)):
+                        per_bin = np.einsum('jk,kpt->jpt', fluence, kern) / n_box
+                        for j in np.flatnonzero(fluence.sum(axis=1) > 0):
+                            for st in range(first[j], first[j] + n_box):  # uniform arrival within the time bin
+                                unit[a, :, st:st + n_k] += per_bin[j]
+                    unit_q2 = (fluence @ q2).sum(axis=0)  # (3,)
+                    cur, var, qv = totals(species)
+                    # Scale to each channel of this pitch, dropping neighbors off the array
+                    for c in np.flatnonzero(pitch_of == pitch):
+                        scale = particle_yield * area[c]
+                        for k, rel in enumerate((-1, 0, 1)):
+                            if 0 <= c + rel < n_ch:
+                                cur[c + rel] += scale * unit[0, k]
+                                var[c + rel] += scale * unit[1, k]
+                                qv[c + rel] += scale * unit_q2[k]
+
+            # Convert to A, A^2, C, C^2
+            to_amp = ELEMENTARY_CHARGE / dt  # electrons per bin -> A
+            current_amp = {s: v * to_amp for s, v in current.items()}
+            variance_amp2 = {s: v * to_amp ** 2 for s, v in variance.items()}
+            charge = {s: c.sum(axis=1) * dt for s, c in current_amp.items()}
+            q_var = {s: c * ELEMENTARY_CHARGE ** 2 for s, c in charge_var.items()}
+            # Space-charge ratio Q/CV per channel
+            capacitance = h.channel_capacitance()
+            # Q/CV is undefined (NaN, not flagged) for degenerate zero-area channels
+            ratio = np.divide(np.abs(sum(charge.values())), capacitance * abs(library.bias_voltage),
+                              out=np.full(n_ch, np.nan), where=capacitance > 1e-6 * np.median(capacitance))
+            return ChannelWaveforms(spec.conversion_foil.foil_material, t, current_amp, variance_amp2, charge, q_var,
+                                    ratio, ~(ratio >= space_charge_threshold), space_charge_threshold)
+
+        results = [build(s) for s in specs]
+        if len(results) == 1:
+            return results[0]
+        return {r.foil_material: r for r in results}
