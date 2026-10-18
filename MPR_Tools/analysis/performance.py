@@ -318,6 +318,10 @@ class ChannelWaveforms:
         space_charge_ratio: |Total charge| / (C V) per channel (NaN for zero-area channels); large values break the linear pulse sum.
         linear_valid: space_charge_ratio below space_charge_threshold.
         space_charge_threshold: Threshold passed to get_channel_waveforms().
+        gate_percentiles: Cumulative |current| percentiles of the intended species that bound each channel's gate.
+        gate_windows: shape (n_channels, 2) [s], start and end of each channel's gate (NaN without intended current).
+        charge_gated, charge_gated_var: species -> shape (n_channels,) [C, C^2], integrated over the gate only
+            (charge_gated_var is NaN for a pulse library without qv). Gated fields are None when get_channel_waveforms() is called with gate_percentiles=None.
     """
     foil_material: str
     t: np.ndarray
@@ -328,6 +332,10 @@ class ChannelWaveforms:
     space_charge_ratio: np.ndarray
     linear_valid: np.ndarray
     space_charge_threshold: float
+    gate_percentiles: Optional[Tuple[float, float]] = None
+    gate_windows: Optional[np.ndarray] = None
+    charge_gated: Optional[Dict[str, np.ndarray]] = None
+    charge_gated_var: Optional[Dict[str, np.ndarray]] = None
 
     @property
     def total_current(self) -> np.ndarray:
@@ -344,6 +352,14 @@ class ChannelWaveforms:
     @property
     def total_charge_std(self) -> np.ndarray:
         return np.sqrt(sum(self.charge_var.values()))
+
+    @property
+    def total_charge_gated(self) -> np.ndarray:
+        return sum(self.charge_gated.values())
+
+    @property
+    def total_charge_gated_std(self) -> np.ndarray:
+        return np.sqrt(sum(self.charge_gated_var.values()))
 
 
 class PerformanceAnalyzer:
@@ -810,6 +826,7 @@ class PerformanceAnalyzer:
         self,
         particle_yield: float,
         space_charge_threshold: float = 0.1,
+        gate_percentiles: Optional[Tuple[float, float]] = (0.5, 99.5),
         chunk_size: int = 2000,
     ) -> Union[ChannelWaveforms, Dict[str, ChannelWaveforms]]:
         """Per-channel electrode current waveforms from the hodoscope's Allpix pulse library.
@@ -820,9 +837,16 @@ class PerformanceAnalyzer:
         Background (neutron, photon) adds the pad-averaged neutral pulse for each (time, energy) fluence bin,
         spread uniformly over the time bin. Variances are compound-Poisson: sum of N * E[h^2].
 
+        Gating models post-processing of each channel's digitized waveform: the gate spans the given cumulative
+        |current| percentiles of the hodoscope's intended species (its foil's recoil, including current induced from
+        neighbor hits), and every species' current is integrated over it, so pulses cut at the edges keep their
+        residual charge. Gated variance is sum of N * E[Q_gate^2], each particle's second moment of the charge inside
+        its window of the gate (PulseLibrary.gated_q2); NaN with a warning if the library predates qv.
+
         Args:
             particle_yield: Total source yield.
             space_charge_threshold: Q / (C V) above which a channel is flagged as outside the linear regime.
+            gate_percentiles: (low, high) percentiles bounding each channel's gate; None skips gating.
             chunk_size: Recoils processed per vectorized batch (bounds memory).
 
         Returns:
@@ -877,6 +901,7 @@ class PerformanceAnalyzer:
             # Channel geometry in cm
             edges, heights, y_centers = h.channel_edges * 100, h.channel_heights * 100, h.channel_y_centers * 100
             centers, widths = (edges[:-1] + edges[1:]) / 2, np.diff(edges)
+            area = widths * heights  # cm^2
             current, variance, charge_var = {}, {}, {}  # electrons per bin, electrons^2 per bin, electrons^2
 
             def totals(species: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -888,45 +913,57 @@ class PerformanceAnalyzer:
             # Library pad pitch nearest to each channel width
             pitch_of = np.array([library.nearest_pitch(w * 1e-2) for w in widths])
 
-            # Signal: every foil's recoils against this hodoscope
-            for r in recoils:
-                # Keep recoils inside a channel in both x and y
-                b = np.digitize(r['x'], edges) - 1
-                inside = (b >= 0) & (b < n_ch)
-                b = np.where(inside, b, 0)
-                accepted = np.flatnonzero(inside & (np.abs(r['y'] - y_centers[b]) <= heights[b] / 2))
-                # Chunked to bound the (recoils x kernel length) arrays
-                for i in range(0, len(accepted), chunk_size):
-                    sel = accepted[i:i + chunk_size]
-                    bs = b[sel]
-                    offset_um = (widths[bs] / 2 - np.abs(r['x'][sel] - centers[bs])) * 1e4  # distance to nearest edge (gap center)
-                    side = np.where(r['x'][sel] >= centers[bs], 1, -1)  # library pad +1 is the nearest neighbor
-                    start = np.rint((r['time'][sel] - t_start) / dt).astype(int)
-                    # Kernel lookup grouped by pitch
-                    for pitch in np.unique(pitch_of[bs]):
-                        m = pitch_of[bs] == pitch
-                        mean, m2, q2 = library.kernels(r['species'], pitch, r['energy'][sel][m], offset_um[m])
-                        cur, var, qv = totals(r['species'])
-                        n = r['n'][sel][m]
-                        # Hit pad and both neighbors
-                        for k, rel in enumerate((-1, 0, 1)):
-                            ch = bs[m] + rel * side[m]
-                            ok = (ch >= 0) & (ch < n_ch)  # drop neighbors off the array
-                            # Direct sum of n-weighted kernels into channels ch at time bins start
-                            idx = ((ch[ok] * n_t + start[m][ok])[:, None] + np.arange(n_k)).ravel()
-                            cur += np.bincount(idx, (n[ok, None] * mean[ok, k]).ravel(), n_ch * n_t).reshape(n_ch, n_t)
-                            var += np.bincount(idx, (n[ok, None] * m2[ok, k]).ravel(), n_ch * n_t).reshape(n_ch, n_t)
-                            qv += np.bincount(ch[ok], n[ok] * q2[ok, k], n_ch)
+            def recoil_chunks():
+                """Yield (species, pitch, energy, offset_um, n, channel, side, start bin) per recoil chunk and pitch."""
+                # Signal: every foil's recoils against this hodoscope
+                for r in recoils:
+                    # Keep recoils inside a channel in both x and y
+                    b = np.digitize(r['x'], edges) - 1
+                    inside = (b >= 0) & (b < n_ch)
+                    b = np.where(inside, b, 0)
+                    accepted = np.flatnonzero(inside & (np.abs(r['y'] - y_centers[b]) <= heights[b] / 2))
+                    # Chunked to bound the (recoils x kernel length) arrays
+                    for i in range(0, len(accepted), chunk_size):
+                        sel = accepted[i:i + chunk_size]
+                        bs = b[sel]
+                        offset_um = (widths[bs] / 2 - np.abs(r['x'][sel] - centers[bs])) * 1e4  # distance to nearest edge (gap center)
+                        side = np.where(r['x'][sel] >= centers[bs], 1, -1)  # library pad +1 is the nearest neighbor
+                        start = np.rint((r['time'][sel] - t_start) / dt).astype(int)
+                        # Kernel lookup grouped by pitch
+                        for pitch in np.unique(pitch_of[bs]):
+                            m = pitch_of[bs] == pitch
+                            yield r['species'], pitch, r['energy'][sel][m], offset_um[m], r['n'][sel][m], bs[m], side[m], start[m]
+
+            def pads(bs: np.ndarray, side: np.ndarray):
+                """Yield (library pad, channel, mask of channels on the array) for the hit pad and both neighbors."""
+                for k, rel in enumerate((-1, 0, 1)):
+                    ch = bs + rel * side
+                    ok = (ch >= 0) & (ch < n_ch)  # drop neighbors off the array
+                    yield k, ch, ok
+
+            def background_files():
+                """Yield (species, energy bins, fluence, first start bin per time bin, n_box) per file of this hodoscope."""
+                for path, (species, time_bins, energy_bins, fluence) in backgrounds.items():
+                    # Skip files that belong to the other hodoscope
+                    if path not in (h.neutron_background_file, h.photon_background_file):
+                        continue
+                    # Start bins of the uniform spread across each background time bin
+                    n_box = max(1, int(round(bg_width[path] / dt)))
+                    first = np.rint((time_bins - bg_width[path] / 2 - t_start) / dt).astype(int)
+                    yield species, energy_bins, fluence, first, n_box
+
+            for species, pitch, energy, offset_um, n, bs, side, start in recoil_chunks():
+                mean, m2, q2 = library.kernels(species, pitch, energy, offset_um)
+                cur, var, qv = totals(species)
+                for k, ch, ok in pads(bs, side):
+                    # Direct sum of n-weighted kernels into channels ch at time bins start
+                    idx = ((ch[ok] * n_t + start[ok])[:, None] + np.arange(n_k)).ravel()
+                    cur += np.bincount(idx, (n[ok, None] * mean[ok, k]).ravel(), n_ch * n_t).reshape(n_ch, n_t)
+                    var += np.bincount(idx, (n[ok, None] * m2[ok, k]).ravel(), n_ch * n_t).reshape(n_ch, n_t)
+                    qv += np.bincount(ch[ok], n[ok] * q2[ok, k], n_ch)
 
             # Background: response per (source x cm^2) for each pitch, then scaled by yield x area per channel
-            area = widths * heights  # cm^2
-            for path, (species, time_bins, energy_bins, fluence) in backgrounds.items():
-                # Skip files that belong to the other hodoscope
-                if path not in (h.neutron_background_file, h.photon_background_file):
-                    continue
-                # Start bins of the uniform spread across each background time bin
-                n_box = max(1, int(round(bg_width[path] / dt)))
-                first = np.rint((time_bins - bg_width[path] / 2 - t_start) / dt).astype(int)
+            for species, energy_bins, fluence, first, n_box in background_files():
                 for pitch in np.unique(pitch_of):
                     mean, m2, q2 = library.kernels(species, pitch, energy_bins)
                     # Per-source, per-cm^2 waveform on pads [-1, 0, +1]
@@ -958,8 +995,54 @@ class PerformanceAnalyzer:
             # Q/CV is undefined (NaN, not flagged) for degenerate zero-area channels
             ratio = np.divide(np.abs(sum(charge.values())), capacitance * abs(library.bias_voltage),
                               out=np.full(n_ch, np.nan), where=capacitance > 1e-6 * np.median(capacitance))
-            return ChannelWaveforms(spec.conversion_foil.foil_material, t, current_amp, variance_amp2, charge, q_var,
-                                    ratio, ~(ratio >= space_charge_threshold), space_charge_threshold)
+            result = ChannelWaveforms(spec.conversion_foil.foil_material, t, current_amp, variance_amp2, charge, q_var,
+                                      ratio, ~(ratio >= space_charge_threshold), space_charge_threshold)
+            if gate_percentiles is None:
+                return result
+
+            # Gate per channel: time bins [lo, hi] between the intended species' cumulative |current| percentiles;
+            # empty (hi < lo) for channels without intended current
+            lo, hi = np.zeros(n_ch, int), np.full(n_ch, -1)
+            intended = current.get(spec.conversion_foil.particle, np.zeros((n_ch, n_t)))
+            cum = np.cumsum(np.abs(intended), axis=1)
+            for c in np.flatnonzero(cum[:, -1] > 0):
+                lo[c] = np.searchsorted(cum[c], gate_percentiles[0] / 100 * cum[c, -1], side='right')
+                hi[c] = min(np.searchsorted(cum[c], gate_percentiles[1] / 100 * cum[c, -1], side='left'), n_t - 1)
+            in_gate = (np.arange(n_t) >= lo[:, None]) & (np.arange(n_t) <= hi[:, None])
+            result.gate_percentiles = tuple(gate_percentiles)
+            result.gate_windows = np.where((hi >= lo)[:, None], np.column_stack([t[lo], t[hi] + dt]), np.nan)
+            result.charge_gated = {s: (c * in_gate).sum(axis=1) * ELEMENTARY_CHARGE for s, c in current.items()}
+            if not library.has_gated_moments:
+                warnings.warn("Pulse library has no cumulative-charge moments (qv); gated charge variance is NaN. "
+                              "Rebuild the library to get it.")
+                result.charge_gated_var = {s: np.full(n_ch, np.nan) for s in current}
+                return result
+
+            # Gated variance: second pass, each particle's charge inside its target channel's gate, as pulse bins
+            # [lo - start, hi + 1 - start) from its arrival
+            gated_var = {s: np.zeros(n_ch) for s in current}  # electrons^2
+            for species, pitch, energy, offset_um, n, bs, side, start in recoil_chunks():
+                for k, ch, ok in pads(bs, side):
+                    a, b = (lo[ch[ok]] - start[ok])[:, None], (hi[ch[ok]] + 1 - start[ok])[:, None]
+                    q2g = library.gated_q2(species, pitch, energy[ok], a, b, offset_um[ok], pads=(k,))[:, 0]
+                    gated_var[species] += np.bincount(ch[ok], n[ok] * q2g, n_ch)
+            for species, energy_bins, fluence, first, n_box in background_files():
+                # Nonzero (time, energy) bins, each spread uniformly over n_box start bins
+                j, e = np.nonzero(fluence)
+                starts = (first[j, None] + np.arange(n_box)).ravel()
+                energies = np.repeat(energy_bins[e], n_box)
+                per_start = np.repeat(fluence[j, e], n_box) / n_box  # per source per cm^2
+                for c in range(n_ch):
+                    scale = particle_yield * area[c]
+                    for k, rel in enumerate((-1, 0, 1)):
+                        g = c + rel
+                        if not 0 <= g < n_ch or hi[g] < lo[g]:
+                            continue
+                        q2g = library.gated_q2(species, pitch_of[c], energies, (lo[g] - starts)[:, None],
+                                               (hi[g] + 1 - starts)[:, None], pads=(k,))[:, 0]
+                        gated_var[species][g] += scale * (per_start @ q2g)
+            result.charge_gated_var = {s: v * ELEMENTARY_CHARGE ** 2 for s, v in gated_var.items()}
+            return result
 
         results = [build(s) for s in specs]
         if len(results) == 1:

@@ -1911,6 +1911,8 @@ class SpectrometerPlotter:
                     ax.axis('off')
                     continue
                 c = channels[foil][col]
+                if w.gate_windows is not None and np.isfinite(w.gate_windows[c, 0]):
+                    ax.axvspan(*(w.gate_windows[c] * 1e9), color='0.5', alpha=0.15, linewidth=0, label='gate')
                 curves = [(s, w.current[s][c], np.sqrt(w.variance[s][c]), SPECIES_COLORS[s]) for s in w.current]
                 curves.append(('total', w.total_current[c], w.total_std[c], 'black'))
                 for label, mean, std, color in curves:
@@ -1953,17 +1955,53 @@ class SpectrometerPlotter:
         wfs = waveforms if isinstance(waveforms, dict) else {waveforms.foil_material: waveforms}
         if filename is None:
             filename = f'{self.spectrometer.figure_directory}/integrated_charge.png'
+        self._plot_charge_per_channel({f: (w.charge, w.charge_var, w.space_charge_ratio) for f, w in wfs.items()},
+                                      performance_curve_file, filename)
+        print(f'Integrated charge plot saved to {filename}')
+
+    def plot_integrated_charge_filtered(
+        self,
+        waveforms: Union[ChannelWaveforms, Dict[str, ChannelWaveforms]],
+        performance_curve_file: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> None:
+        """Plot |time-gated charge| per channel vs horizontal position, styled like plot_integrated_charge().
+
+        Each channel's charge is integrated only over its gate (ChannelWaveforms.gate_windows), the span of
+        current from the hodoscope's intended species, so crossover and background outside it are dropped.
+
+        Args:
+            waveforms: Output of PerformanceAnalyzer.get_channel_waveforms() with gate_percentiles set.
+            performance_curve_file: Performance curve for the energy axis. Default: the analyzer's.
+            filename: Output path. Default: {figure_directory}/integrated_charge_filtered.png.
+        """
+        wfs = waveforms if isinstance(waveforms, dict) else {waveforms.foil_material: waveforms}
+        if any(w.charge_gated is None for w in wfs.values()):
+            raise ValueError("Waveforms have no gated charge; call get_channel_waveforms() with gate_percentiles.")
+        if filename is None:
+            filename = f'{self.spectrometer.figure_directory}/integrated_charge_filtered.png'
+        self._plot_charge_per_channel({f: (w.charge_gated, w.charge_gated_var, w.space_charge_ratio) for f, w in wfs.items()},
+                                      performance_curve_file, filename)
+        print(f'Filtered integrated charge plot saved to {filename}')
+
+    def _plot_charge_per_channel(
+        self,
+        charges: Dict[str, Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], np.ndarray]],
+        performance_curve_file: Optional[str],
+        filename: str,
+    ) -> None:
+        """Shared body of the integrated charge plots: foil -> (charge, charge_var, space_charge_ratio)."""
         hodoscopes = self._hodoscopes()
         energy_maps = self._energy_maps(performance_curve_file)
         _stroke = [pe.withStroke(linewidth=3, foreground='white')]
 
-        fig, axes = plt.subplots(len(wfs), 1, figsize=(10, 4 * len(wfs)), squeeze=False, sharex=True)
-        for ax, (foil, w) in zip(axes[:, 0], wfs.items()):
+        fig, axes = plt.subplots(len(charges), 1, figsize=(10, 4 * len(charges)), squeeze=False, sharex=True)
+        for ax, (foil, (charge, charge_var, space_charge_ratio)) in zip(axes[:, 0], charges.items()):
             edges = hodoscopes[foil].channel_edges * 100  # m to cm
-            q_nc = {s: np.abs(q) * 1e9 for s, q in w.charge.items()}
+            q_nc = {s: np.abs(q) * 1e9 for s, q in charge.items()}
             for s, q in q_nc.items():
                 color = SPECIES_COLORS[s]
-                self._step_band(ax, edges, q, np.sqrt(w.charge_var[s]) * 1e9, color=color)
+                self._step_band(ax, edges, q, np.sqrt(charge_var[s]) * 1e9, color=color)
                 self._step(ax, edges, q, color=color, label=s, linewidth=3)
             # Each label sits just above its line, at the channel with the most room (log ratio, capped) up to the
             # next curve above, ties to the larger charge; away from the panel edges and 12% of the x range apart
@@ -1971,21 +2009,24 @@ class SpectrometerPlotter:
             span = edges[-1] - edges[0]
             inner = (centers > edges[0] + 0.07 * span) & (centers < edges[-1] - 0.07 * span)
             stack = np.array(list(q_nc.values()))
+            q_floor = stack.max() * 1e-7  # lower y limit, set below
             min_dx, placed = 0.12 * span, []
             for s, q in q_nc.items():
                 next_above = np.where(stack > q, stack, np.inf).min(axis=0)
                 with np.errstate(divide='ignore', invalid='ignore'):
                     room = np.where(q > 0, np.minimum(np.log(next_above / q), 3.0), -np.inf)
                 for c in np.lexsort((-q, -room)):
-                    if inner[c] and q[c] > 0 and all(abs(centers[c] - x) >= min_dx for x in placed):
+                    if inner[c] and q[c] >= q_floor and all(abs(centers[c] - x) >= min_dx for x in placed):
                         break
+                else:
+                    continue  # curve never enters the plotted range: no label
                 placed.append(centers[c])
                 ax.text(centers[c], q[c] * 1.3, s, color=SPECIES_COLORS[s], fontsize=18,
                         ha='center', va='bottom').set_path_effects(_stroke)
             # Q/CV = 1 per channel [nC]; NaN capacitance-degenerate channels are left out
             h = hodoscopes[foil]
             cv = h.channel_capacitance() * abs(h.pulse_library.bias_voltage) * 1e9
-            cv = np.where(np.isfinite(w.space_charge_ratio), cv, np.nan)
+            cv = np.where(np.isfinite(space_charge_ratio), cv, np.nan)
             self._step(ax, edges, cv, color='black', linestyle='--', linewidth=2)
             # Its label goes where the line is farthest above the charge curves, under the same placement rules
             with np.errstate(divide='ignore', invalid='ignore'):
@@ -1997,15 +2038,14 @@ class SpectrometerPlotter:
                     ha='center', va='bottom').set_path_effects(_stroke)
             ax.set_yscale('log')
             # 7 decades below the largest charge; room above the highest curve for labels
-            q_max = stack.max()
-            ax.set_ylim(q_max * 1e-7, max(q_max, np.nanmax(cv)) * 30)
+            ax.set_ylim(q_floor, max(stack.max(), np.nanmax(cv)) * 30)
             ax.set_ylabel('|Charge| [nC]')
             ax.grid(True, alpha=0.3)
         axes[-1, 0].set_xlabel('Horizontal Position [cm]')
         # x limits: outer edges of channels with charge on any hodoscope
         lims = []
-        for foil, w in wfs.items():
-            edges, hit = hodoscopes[foil].channel_edges * 100, np.flatnonzero(np.abs(w.total_charge) > 0)
+        for foil, (charge, _, _) in charges.items():
+            edges, hit = hodoscopes[foil].channel_edges * 100, np.flatnonzero(np.abs(sum(charge.values())) > 0)
             if len(hit):
                 lims += [edges[hit[0]], edges[hit[-1] + 1]]
         if lims:
@@ -2016,7 +2056,6 @@ class SpectrometerPlotter:
         fig.tight_layout()
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f'Integrated charge plot saved to {filename}')
 
     def _hodoscopes(self) -> Dict[str, 'Hodoscope']:
         """Foil material -> hodoscope, for each spectrometer."""
