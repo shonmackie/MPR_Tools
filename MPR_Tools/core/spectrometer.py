@@ -230,10 +230,8 @@ class MPRSpectrometer:
             executor: Pool of workers to use (if None, a new pool is created).
             max_workers: Maximum number of worker processes (None -> CPU count).
             y_restriction: Restrict sampled foil y position to 'positive' or 'negative' half.
-            importance_sampling: If True, sample all energies with equal (uniform) probability and
-                                 attach a per-particle weight w = p(E) * n so that each energy's
-                                 contribution is correctly probability-weighted. Without IS, energies
-                                 are sampled directly from the probability distribution.
+            importance_sampling: If True, sample all energies with equal (uniform) probability; otherwise
+                                 sample from the probability distribution. Weights are the same either way.
         """
         if max_workers is None:
             max_workers = mp.cpu_count()
@@ -246,8 +244,7 @@ class MPRSpectrometer:
 
         weighted_distribution = probability_distribution / np.sum(probability_distribution)
 
-        # With importance sampling, draw energies from a flat distribution and weight each
-        # particle by weighted_distribution / uniform_distribution (source biasing).
+        # With importance sampling, draw energies from a flat distribution (source biasing)
         if importance_sampling:
             sampling_distribution = np.ones_like(weighted_distribution) / len(weighted_distribution)
         else:
@@ -274,19 +271,23 @@ class MPRSpectrometer:
                     y_restriction,
                     self.min_energy,
                     self.max_energy,
-                    importance_sampling,
-                    weighted_distribution,
                 ))
-        
+
         output_batches = run_concurrently(
             self._generate_batch_worker, worker_args, executor,
             progress_counter_total=num_recoil_particles,
             task_title=f'Generating Monte Carlo {self.conversion_foil.particle} trajectories',
         )
-        
+
         # Collect results
-        self.input_beam = np.concatenate(output_batches)
-        
+        self.input_beam = np.concatenate([rays for rays, _ in output_batches])
+        self.attempts_per_energy = np.sum([attempts for _, attempts in output_batches], axis=0)
+
+        # Per-bin weight p_i * N_kept / attempts_i
+        bin_idx = np.searchsorted(incident_energies, self.input_beam[:, 6])
+        self.input_beam[:, 7] = (weighted_distribution[bin_idx] * len(self.input_beam)
+                                 / self.attempts_per_energy[bin_idx])
+
         # Save input beam to file
         if save_beam:
             self.save_input_beam()
@@ -308,16 +309,16 @@ class MPRSpectrometer:
         y_restriction: Optional[Literal['positive', 'negative']],
         min_energy: float,
         max_energy: float,
-        importance_sampling: bool,
-        importance_weights: np.ndarray,
         progress_counter,
         progress_lock,
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Generate a batch of recoil particles in a separate process.
 
-        Each row of the returned array is:
-            [x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy, importance_weight]
+        Returns:
+            rays: rows [x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy, weight],
+                  weight left at 1 (set by generate_monte_carlo_rays).
+            attempts: per incident energy bin, draws that reached the recoil-energy window check.
         """
         # Create an independent RNG for this worker to ensure reproducibility
         rng = np.random.default_rng(seed_offset)
@@ -326,6 +327,7 @@ class MPRSpectrometer:
         reference_gamma = 1 + reference_energy / particle_rest_energy   # Lorentz factor of the central ray
 
         batch_results = np.empty((0, 8), dtype=float)
+        attempts = np.zeros(len(incident_energies))
 
         while len(batch_results) < batch_size:
             try:
@@ -340,6 +342,8 @@ class MPRSpectrometer:
                         y_restriction=y_restriction,
                     )
                 )
+                # Draws that failed the aperture raised above and are not counted (foil efficiency covers them)
+                attempts[np.searchsorted(incident_energies, incident_energy)] += 1
 
                 # Reject recoil particles outside the spectrometer acceptance window.
                 # This is the correct place to filter: for heavier recoils (e.g. deuterons),
@@ -383,17 +387,11 @@ class MPRSpectrometer:
                     timing_noise = rng.normal(0, burn_duration / (2 * np.sqrt(2 * np.log(2))))
                     foil_time += timing_noise
 
-                if importance_sampling:
-                    idx = int(np.searchsorted(incident_energies, incident_energy))
-                    particle_weight = importance_weights[idx] * len(incident_energies)
-                else:
-                    particle_weight = 1.0
-
-                # Row: [x0, px, y0, py, foil_time, energy_relative, incident_energy, importance_weight]
+                # Row: [x0, px, y0, py, foil_time, energy_relative, incident_energy, weight]
                 batch_results = np.vstack((
                     batch_results,
                     np.array([x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative,
-                               incident_energy, particle_weight])
+                               incident_energy, 1.0])
                 ))
 
                 # Update progress counter thread-safely
@@ -405,7 +403,7 @@ class MPRSpectrometer:
                 print(f'Failed to generate {self.conversion_foil.particle}')
                 pass  # Skip failed generations
 
-        return batch_results
+        return batch_results, attempts
     
     def apply_transfer_map(
         self,

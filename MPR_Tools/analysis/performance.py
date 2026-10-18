@@ -747,12 +747,17 @@ class PerformanceAnalyzer:
 
             foil_efficiencies = self._get_foil_efficiencies(spec, performance_df)
             bin_idx = np.searchsorted(energy_grid, spec.input_beam[:, 6])
+            attempts = np.zeros(n_energies)
+            attempts[in_range] = spec.attempts_per_energy
             full_input, full_output = spec.input_beam, spec.output_beam
             for i in tqdm(range(n_energies), desc=key):
                 m = bin_idx == i
                 if not m.any():
                     continue
-                spec.input_beam, spec.output_beam = full_input[m], full_output[m]
+                # Each row's weight is its recoil-energy window acceptance, kept / attempts
+                row_input = full_input[m].copy()
+                row_input[:, 7] = m.sum() / attempts[i]
+                spec.input_beam, spec.output_beam = row_input, full_output[m]
                 signal, _, _, _, _ = HodoscopeResponse._bin_to_channels(spec, foil_efficiencies[m])
                 R[i, :] = signal
             spec.input_beam, spec.output_beam = full_input, full_output
