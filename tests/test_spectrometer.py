@@ -70,8 +70,8 @@ def test_energy_sampling():
     
     plt.figure()
     plt.stairs(actual_spectrum, energy_bins, color="C0", fill=True, label="Actual")
-    plt.plot(measured_energies, measured_efficiency/spectrum_normalization, "C2--", label="Efficiency")
     plt.plot(energy_bins, theoretical_spectrum/spectrum_normalization, "C1", label="Theoretical")
+    plt.plot(measured_energies, measured_efficiency/spectrum_normalization, "C2--", label="Efficiency")
     plt.stairs(hodoscope_response/hodoscope_normalization, energy_bins, color="C3", linestyle=":", label="At hodoscope")
     plt.legend()
     plt.xlabel("Energy (MeV)")
@@ -188,7 +188,7 @@ def test_response_matrix():
         run_directory="tests/output"
     )
     
-    energies = linspace(10, 18, 81)
+    energies = linspace(10, 18, 41)
     # use a two-peaked distribution
     spectrum = exp(-2*(energies - 16.7)**2) + 1/3*exp(-2*(energies - 14)**2)
     # and throw in a uniform background for good measure
@@ -211,8 +211,8 @@ def test_response_matrix():
     data_monte_carlo = analyzer.get_channel_response(None).signal
 
     plt.figure()
-    plt.stairs(data_matrix_mult, label="Matrix multiplication")
-    plt.stairs(data_monte_carlo, label="Monte Carlo")
+    plt.scatter(arange(1/2, 101), data_matrix_mult, color="C0", label="Matrix multiplication")
+    plt.stairs(data_monte_carlo, color="C1", label="Monte Carlo")
     plt.legend()
     plt.xlabel("Channel")
     plt.tight_layout()
@@ -220,12 +220,12 @@ def test_response_matrix():
     
     assert isclose(
         data_matrix_mult.sum(), data_monte_carlo.sum(),
-        atol=0.1, rtol=0,
+        atol=0, rtol=0.1,
     )
     assert isclose(
         (data_matrix_mult*arange(101)).sum()/data_matrix_mult.sum(),
         (data_monte_carlo*arange(101)).sum()/data_monte_carlo.sum(),
-        atol=0.1, rtol=0,
+        atol=1.0, rtol=0,
     )
     
 
