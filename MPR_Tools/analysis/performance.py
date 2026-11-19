@@ -151,7 +151,7 @@ class HodoscopeResponse:
             energies=output_energies_MeV,
             particle=spec.conversion_foil.particle,
         )
-        particle_weights = spec.input_beam[:, 7] * spec.input_beam_efficiency / np.sum(spec.input_beam[:, 7])
+        particle_weights = spec.input_beam[:, 7] * spec.beam_efficiency / np.sum(spec.input_beam[:, 7])
         signal_weights = particle_weights * sensitivities
 
         bin_edges_cm = hodoscope.channel_edges * 100
@@ -451,7 +451,6 @@ class PerformanceAnalyzer:
         self,
         num_energies: int = 40,
         num_recoils_per_energy: int = 10000,
-        num_efficiency_samples: int = 10000,
         fractional_max: float = 0.5,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -468,7 +467,6 @@ class PerformanceAnalyzer:
         Args:
             num_energies: Number of energy points to simulate
             num_recoils_per_energy: Number of recoil events per energy point for location/resolution
-            num_efficiency_samples: Number of samples for efficiency calculation
             fractional_max: Fraction of maximum of spatial peak to use for resolution calculation (defaults to 0.5 for FWHM)
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
@@ -528,18 +526,11 @@ class PerformanceAnalyzer:
                         map_order=map_order)
                     
                     positions = spec.output_beam[:,0]
-                    positions_width[i], positions_center[i], positions_lower[i], positions_upper[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
-                    
-                    # Calculate efficiency for this energy
-                    scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
-                        energy,
-                        num_samples=num_efficiency_samples,
-                        executor=executor,
-                        max_workers=max_workers,
-                    )
-                    scattering_efficiencies[i] = scattering_efficiency
-                    geometric_efficiencies[i] = geometric_efficiency
-                    total_efficiencies[i] = total_efficiency
+                    positions_width[i], positions_center[i], positions_lower[i], positions_upper[i] = PerformanceAnalyzer.fwfm(
+                        positions, fractional_max=fractional_max)
+                    scattering_efficiencies[i] = spec.beam_scattering_efficiency
+                    geometric_efficiencies[i] = spec.beam_geometric_efficiency
+                    total_efficiencies[i] = spec.beam_efficiency
                 
                 gradients = np.gradient(positions_center, energies)
                 energy_resolutions = positions_width / gradients * 1000

@@ -86,7 +86,9 @@ class MPRSpectrometer:
         print(f'Loaded COSY transfer map from {transfer_map_path}\n')
         
         # Initialize recoil beam arrays
-        self.input_beam_efficiency: float = np.nan
+        self.beam_scattering_efficiency: float = np.nan
+        self.beam_geometric_efficiency: float = np.nan
+        self.beam_efficiency: float = np.nan
         # columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy, weight
         self.input_beam: np.ndarray = np.zeros((0, 8))
         # columns: x0, p_x_relative, y0, p_y_relative, detector_time, energy_relative
@@ -240,7 +242,7 @@ class MPRSpectrometer:
                                  preserving the correct weighted response.
         """
         # Run the foil's generation routine
-        self.input_beam, scattering_efficiency, geometric_efficiency = self.conversion_foil.generate_monte_carlo_rays(
+        beam, scattering_efficiency, geometric_efficiency = self.conversion_foil.generate_monte_carlo_rays(
             incident_energies, probability_distribution, num_recoil_particles,
             stop_condition='successes',
             reference_energy=self.reference_energy,
@@ -255,8 +257,11 @@ class MPRSpectrometer:
             continuous_energy_sampling=continuous_energy_sampling,
             importance_sampling=importance_sampling)
         
-        # Store the fluence of the input beam as well
-        self.input_beam_efficiency = scattering_efficiency * geometric_efficiency
+        # Store the generated rays along with the total particle fluence
+        self.input_beam = beam
+        self.beam_scattering_efficiency = scattering_efficiency
+        self.beam_geometric_efficiency = geometric_efficiency
+        self.beam_efficiency = scattering_efficiency * geometric_efficiency
         
         # Save input beam to file
         if save_beam:
@@ -271,8 +276,7 @@ class MPRSpectrometer:
         max_workers: Optional[int] = None,
     ) -> None:
         """
-        Apply ion optical transfer map to transport recoil particles through spectrometer using multiprocessing,
-        and remove any input beams that don't make it to the detector plane.
+        Apply ion optical transfer map to transport recoil particles through spectrometer using multiprocessing.
         
         Args:
             map_order: Order of transfer map to apply (1-5 typically)

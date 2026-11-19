@@ -57,7 +57,6 @@ def test_energy_sampling():
         performance_curve = analyzer.generate_performance_curve(
             num_energies=25,
             num_recoils_per_energy=1000,
-            num_efficiency_samples=1000,
             executor=executor,
         )
     measured_energies = performance_curve["energy [MeV]"]
