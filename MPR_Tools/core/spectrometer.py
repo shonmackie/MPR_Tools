@@ -86,6 +86,7 @@ class MPRSpectrometer:
         print(f'Loaded COSY transfer map from {transfer_map_path}\n')
         
         # Initialize recoil beam arrays
+        self.input_beam_efficiency: float = np.nan
         # columns: x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy, weight
         self.input_beam: np.ndarray = np.zeros((0, 8))
         # columns: x0, p_x_relative, y0, p_y_relative, detector_time, energy_relative
@@ -239,7 +240,7 @@ class MPRSpectrometer:
                                  preserving the correct weighted response.
         """
         # Run the foil's generation routine
-        self.input_beam = self.conversion_foil.generate_monte_carlo_rays(
+        self.input_beam, scattering_efficiency, geometric_efficiency = self.conversion_foil.generate_monte_carlo_rays(
             incident_energies, probability_distribution, num_recoil_particles,
             stop_condition='successes',
             reference_energy=self.reference_energy,
@@ -253,6 +254,9 @@ class MPRSpectrometer:
             y_restriction=y_restriction,
             continuous_energy_sampling=continuous_energy_sampling,
             importance_sampling=importance_sampling)
+        
+        # Store the fluence of the input beam as well
+        self.input_beam_efficiency = scattering_efficiency * geometric_efficiency
         
         # Save input beam to file
         if save_beam:
