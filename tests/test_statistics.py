@@ -1,10 +1,10 @@
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
-from numpy import random, isclose, array, inf, empty, mean, std, sqrt, linspace, concatenate
+from numpy import random, isclose, array, inf, empty, mean, std, sqrt, linspace, concatenate, count_nonzero
 
 from MPR_Tools import PerformanceAnalyzer
-from MPR_Tools.core.matter_interactions import ProbabilityDistribution
+from MPR_Tools.core.matter_interactions import ContinuousProbabilityDistribution, DiscreteProbabilityDistribution
 
 
 def test_gaussian_fwhm():
@@ -50,11 +50,11 @@ def test_gamma_fwhm():
     assert upper < 10
 
 
-def test_probability_distribution():
+def test_continuous_probability_distribution():
     # the probability distribution is defined by the linear interpolation between these three points
-    x_table = array([10, 20, 30])
-    p_table = array([20, 10, 20])
-    distribution = ProbabilityDistribution(x_table, p_table)
+    x_table = array([10., 20., 30.])
+    p_table = array([20., 10., 20.])
+    distribution = ContinuousProbabilityDistribution(x_table, p_table)
     
     assert distribution.integral(20, inf) == 1/2
     
@@ -74,3 +74,29 @@ def test_probability_distribution():
     plt.tight_layout()
     plt.savefig("tests/output/figures/test_probability_distribution.png")
     plt.close()
+
+
+def test_discrete_probability_distribution():
+    x_table = array([10., 20., 30.])
+    p_table = array([0., 9., 1.])
+    distribution = DiscreteProbabilityDistribution(x_table, p_table)
+    
+    rng = random.default_rng(0)
+    samples = empty(10000)
+    for i in range(samples.size):
+        samples[i] = distribution.draw(rng)
+    assert all((samples == 20) | (samples == 30))
+    assert isclose(count_nonzero(samples == 20)/samples.size, .90, atol=3*.03)
+    assert isclose(count_nonzero(samples == 30)/samples.size, .10, atol=3*.03)
+
+
+def test_dirac_probability_distribution():
+    x_table = array([10.])
+    p_table = array([1.])
+    distribution = ContinuousProbabilityDistribution(x_table, p_table)
+    
+    rng = random.default_rng(0)
+    samples = empty(1000)
+    for i in range(samples.size):
+        samples[i] = distribution.draw(rng)
+    assert all(samples == 10)

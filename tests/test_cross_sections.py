@@ -8,7 +8,7 @@ from numpy import random, pi, isclose, empty, degrees, log, exp, hypot, median, 
 
 from MPR_Tools import ConversionFoil
 from MPR_Tools.core.matter_interactions import Interaction, GenericInteraction, ElasticScattering, ComptonScattering, \
-    PairProduction, ProbabilityDistribution
+    PairProduction, ContinuousProbabilityDistribution
 
 os.makedirs('tests/output/figures', exist_ok=True)
 
@@ -142,9 +142,10 @@ def test_z_sampling():
         aperture_radius=1.5,
         foil_material='B',
     )
+    foil.max_angle = pi/2  # disable the angle limiting for this test
     
     rng = random.default_rng(0)
-    dirac_delta = ProbabilityDistribution(array([-1e-20, 1e-20]), array([1, 1]))
+    dirac_delta = ContinuousProbabilityDistribution(array([-1e-20, 1e-20]), array([1, 1]))
     N = 10000
     x, y, z0, theta, phi = empty(N), empty(N), empty(N), empty(N), empty(N)
     for i in range(N):
@@ -152,7 +153,6 @@ def test_z_sampling():
             rng,
             dirac_delta,
             attenuation=1/20e-6,
-            max_angle=pi/2,
         )
     
     theoretical_median = -50e-6 - 20e-6*log(0.5 + 0.5*exp(-50/20))
