@@ -16,7 +16,7 @@ def test_energy_sampling():
             thickness=10,
             aperture_distance=100,
             aperture_radius=0.5,
-            foil_material="LiH",
+            foil_material="CH2",
             aperture_type="circ",
         ),
         "tests/map_ideal.txt",  # dispersion = 1 cm/MeV
@@ -30,18 +30,7 @@ def test_energy_sampling():
         ),
         run_directory="tests/output"
     )
-    
-    # calculate the foil efficiency curve
     analyzer = PerformanceAnalyzer(spectrometer)
-    with ProcessPoolExecutor(max_workers=4) as executor:
-        performance_curve = analyzer.generate_performance_curve(
-            num_energies=25,
-            num_recoils_per_energy=1000,
-            num_efficiency_samples=1000,
-            executor=executor,
-        )
-    measured_energies = performance_curve["energy [MeV]"]
-    measured_efficiency = performance_curve["total efficiency"]
     
     # use a trapezoidal incident energy distribution
     spectrum_energies = array([10., 11., 13., 18.])
@@ -62,6 +51,17 @@ def test_energy_sampling():
     hodoscope_response = analyzer.get_channel_response(particle_yield=1.).signal
     energy_bins = linspace(10, 18, 41)  # this lines up with the hodoscope bins
     hodoscope_normalization = (hodoscope_response*diff(energy_bins)).sum()
+    
+    # calculate the foil efficiency curve
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        performance_curve = analyzer.generate_performance_curve(
+            num_energies=25,
+            num_recoils_per_energy=1000,
+            num_efficiency_samples=1000,
+            executor=executor,
+        )
+    measured_energies = performance_curve["energy [MeV]"]
+    measured_efficiency = performance_curve["total efficiency"]
     
     actual_spectrum = histogram(sampled_energies, weights=sampled_weights, bins=energy_bins, density=True)[0]
     theoretical_spectrum = (interp(energy_bins, measured_energies, measured_efficiency)*

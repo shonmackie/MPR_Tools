@@ -27,8 +27,6 @@ class HodoscopeResponse:
     ----------
     spectrometer : MPRSpectrometer
         Spectrometer whose output_beam is used.
-    foil_efficiencies : np.ndarray, shape (n_particles,)
-        Per-particle foil efficiency from ``PerformanceAnalyzer._get_foil_efficiencies()``.
     particle_yield : float or None
         Total source yield for absolute-unit scaling. When None, signal is
         in [particles/source] and signal_std is NaN.
@@ -62,7 +60,6 @@ class HodoscopeResponse:
     def __init__(
         self,
         spectrometer: MPRSpectrometer,
-        foil_efficiencies: np.ndarray,
         particle_yield: Optional[float] = None,
         response_matrix: Optional[np.ndarray] = None,
         energy_grid: Optional[np.ndarray] = None,
@@ -75,7 +72,7 @@ class HodoscopeResponse:
         hodoscope = spectrometer.hodoscope
 
         self.signal, count, total, self.channel_time_windows = self._bin_to_channels(
-            spectrometer, foil_efficiencies, time_gate_percentiles
+            spectrometer, time_gate_percentiles
         )
 
         n_bins = len(self.signal)
@@ -110,7 +107,7 @@ class HodoscopeResponse:
 
         if compute_density:
             density_map, response_map_2d, density_x, density_y = self._compute_density_map(
-                spectrometer, foil_efficiencies, dx, dy,
+                spectrometer, dx, dy,
             )
             if particle_yield is not None:
                 density_map = density_map * particle_yield
@@ -131,7 +128,6 @@ class HodoscopeResponse:
     @staticmethod
     def _bin_to_channels(
         spec: MPRSpectrometer,
-        foil_efficiencies: np.ndarray,
         time_gate_percentiles: Tuple[float, float] = (0, 100),
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Bin the output beam into hodoscope channels.
@@ -150,14 +146,13 @@ class HodoscopeResponse:
         x_positions = spec.output_beam[:, 0] * 100  # m → cm
         y_positions = spec.output_beam[:, 2] * 100  # m → cm
         output_energies_MeV = spec.reference_energy * (1 + spec.output_beam[:, 5])
-        total_particles = len(x_positions)
 
         sensitivities = hodoscope.get_detector_response(
             energies=output_energies_MeV,
             particle=spec.conversion_foil.particle,
         )
-        importance_weights = spec.input_beam[:, 7]
-        weights = foil_efficiencies * sensitivities * importance_weights
+        particle_weights = spec.input_beam[:, 7] * spec.input_beam_efficiency / np.sum(spec.input_beam[:, 7])
+        signal_weights = particle_weights * sensitivities
 
         bin_edges_cm = hodoscope.channel_edges * 100
         bin_heights_cm = hodoscope.channel_heights * 100
@@ -175,18 +170,14 @@ class HodoscopeResponse:
             accepted = in_bin & (
                 np.abs(y_positions - channel_y_centers_cm[b]) <= bin_heights_cm[b] / 2
             )
-            total_per_bin[b] = np.sum(weights[in_bin])
-            signal_per_bin[b] = np.sum(weights[accepted])
-            count_per_bin[b] = np.sum(foil_efficiencies[accepted] * importance_weights[accepted])
+            total_per_bin[b] = np.sum(signal_weights[in_bin])
+            signal_per_bin[b] = np.sum(signal_weights[accepted])
+            count_per_bin[b] = np.sum(particle_weights[accepted])
             if hodoscope.use_time_gating:
                 times_in_channel = arrival_times[accepted]
                 if len(times_in_channel) > 0:
                     channel_time_windows[b, 0] = np.percentile(times_in_channel, time_gate_percentiles[0])
                     channel_time_windows[b, 1] = np.percentile(times_in_channel, time_gate_percentiles[1])
-
-        signal_per_bin /= total_particles
-        count_per_bin /= total_particles
-        total_per_bin /= total_particles
 
         if spec.foil_geometric_factor:
             signal_per_bin *= spec.foil_geometric_factor
@@ -198,7 +189,6 @@ class HodoscopeResponse:
     @staticmethod
     def _compute_density_map(
         spec: MPRSpectrometer,
-        foil_efficiencies: np.ndarray,
         dx: float = 0.5,
         dy: float = 0.5,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -232,9 +222,9 @@ class HodoscopeResponse:
         for i in range(total_particles):
             xi = min(max(int((x_positions[i] - x_min) / dx), 0), density_map.shape[1] - 1)
             yi = min(max(int((y_positions[i] - y_min) / dy), 0), density_map.shape[0] - 1)
-            density_map[yi, xi] += foil_efficiencies[i] * importance_weights[i]
+            density_map[yi, xi] += importance_weights[i]
             if hodoscope.detector_used:
-                response_map_2d[yi, xi] += foil_efficiencies[i] * sensitivities[i] * importance_weights[i]
+                response_map_2d[yi, xi] += sensitivities[i] * importance_weights[i]
 
         density_map /= (cell_area_cm2 * total_particles)
         response_map_2d /= (cell_area_cm2 * total_particles)
@@ -683,8 +673,7 @@ class PerformanceAnalyzer:
                     executor=executor,
                     max_workers=max_workers,
                 )
-                foil_efficiencies = self._get_foil_efficiencies(spec, performance_df)
-                signal, _, _, _ = HodoscopeResponse._bin_to_channels(spec, foil_efficiencies)
+                signal, _, _, _ = HodoscopeResponse._bin_to_channels(spec)
                 R[i, :] = signal
 
             bin_edges_cm = spec.hodoscope.channel_edges * 100  # m → cm
@@ -725,14 +714,10 @@ class PerformanceAnalyzer:
             Dict[str, HodoscopeResponse] for a dual-foil spectrometer,
             keyed by foil material name.
         """
-        performance_df = self._load_performance_curve()
-
         def _build(spec: MPRSpectrometer) -> HodoscopeResponse:
             foil = spec.conversion_foil.foil_material
-            foil_efficiencies = self._get_foil_efficiencies(spec, performance_df)
             return HodoscopeResponse(
                 spectrometer=spec,
-                foil_efficiencies=foil_efficiencies,
                 particle_yield=particle_yield,
                 response_matrix=response_matrices.get(foil) if response_matrices else None,
                 energy_grid=energy_grid,
