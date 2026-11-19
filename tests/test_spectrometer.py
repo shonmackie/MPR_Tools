@@ -1,7 +1,7 @@
 from concurrent.futures.process import ProcessPoolExecutor
 
 from matplotlib import pyplot as plt
-from numpy import array, interp, histogram, average, isclose, linspace, exp, where, arange
+from numpy import array, interp, histogram, average, isclose, linspace, exp, where, arange, diff, stack, full
 from scipy import integrate
 
 from MPR_Tools import MPRSpectrometer, ConversionFoil, Hodoscope, SpectrometerPlotter, PerformanceAnalyzer
@@ -12,24 +12,36 @@ def test_energy_sampling():
     # instantiate a gamma spectrometer
     spectrometer = MPRSpectrometer(
         ConversionFoil(
-            foil_radius=1.00,
-            thickness=500,
-            aperture_distance=50,
-            aperture_radius=1.25,
-            foil_material="Be",
+            foil_radius=0.5,
+            thickness=10,
+            aperture_distance=100,
+            aperture_radius=0.5,
+            foil_material="LiH",
             aperture_type="circ",
         ),
-        "tests/map_identity.txt",
-        16.2,
-        9.5, 17.5,
+        "tests/map_ideal.txt",  # dispersion = 1 cm/MeV
+        10.0,
+        10.0, 18.0,
         Hodoscope(
-            channels_left=-10,
-            channels_right=10,
-            detector_width=200,
-            detector_height=200,
+            channels=stack([
+                linspace(0.0, 8.0, 41),  # 2 mm (200 keV) channels
+                full(41, 1000.0),
+            ], axis=1),
         ),
         run_directory="tests/output"
     )
+    
+    # calculate the foil efficiency curve
+    analyzer = PerformanceAnalyzer(spectrometer)
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        performance_curve = analyzer.generate_performance_curve(
+            num_energies=25,
+            num_recoils_per_energy=1000,
+            num_efficiency_samples=1000,
+            executor=executor,
+        )
+    measured_energies = performance_curve["energy [MeV]"]
+    measured_efficiency = performance_curve["total efficiency"]
     
     # use a trapezoidal incident energy distribution
     spectrum_energies = array([10., 11., 13., 18.])
@@ -45,28 +57,22 @@ def test_energy_sampling():
     sampled_energies = spectrometer.input_beam[:, 6]
     sampled_weights = spectrometer.input_beam[:, 7]
     
-    # calculate the foil efficiency curve
-    analyzer = PerformanceAnalyzer(spectrometer)
-    with ProcessPoolExecutor(max_workers=4) as executor:
-        performance_curve = analyzer.generate_performance_curve(
-            num_energies=25,
-            num_recoils_per_energy=1000,
-            num_efficiency_samples=1000,
-            executor=executor,
-        )
-    measured_energies = performance_curve["energy [MeV]"]
-    measured_efficiency = performance_curve["total efficiency"]
+    # calculate the hodoscope response
+    spectrometer.apply_transfer_map()
+    hodoscope_response = analyzer.get_channel_response(particle_yield=1.).signal
+    energy_bins = linspace(10, 18, 41)  # this lines up with the hodoscope bins
+    hodoscope_normalization = (hodoscope_response*diff(energy_bins)).sum()
     
-    energy_bins = linspace(10, 18, 41)
     actual_spectrum = histogram(sampled_energies, weights=sampled_weights, bins=energy_bins, density=True)[0]
     theoretical_spectrum = (interp(energy_bins, measured_energies, measured_efficiency)*
                             interp(energy_bins, spectrum_energies, spectrum_values))
-    normalization = integrate.trapezoid(theoretical_spectrum, energy_bins)
+    spectrum_normalization = integrate.trapezoid(theoretical_spectrum, energy_bins)
     
     plt.figure()
     plt.stairs(actual_spectrum, energy_bins, color="C0", fill=True, label="Actual")
-    plt.plot(measured_energies, measured_efficiency/normalization, "C2--", label="Efficiency")
-    plt.plot(energy_bins, theoretical_spectrum/normalization, "C1", label="Theoretical")
+    plt.plot(measured_energies, measured_efficiency/spectrum_normalization, "C2--", label="Efficiency")
+    plt.plot(energy_bins, theoretical_spectrum/spectrum_normalization, "C1", label="Theoretical")
+    plt.stairs(hodoscope_response/hodoscope_normalization, energy_bins, color="C3", linestyle=":", label="At hodoscope")
     plt.legend()
     plt.xlabel("Energy (MeV)")
     plt.tight_layout()
