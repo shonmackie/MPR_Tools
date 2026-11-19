@@ -579,6 +579,9 @@ class ConversionFoil:
             
             num_generated += 1
             weight_generated += particle_weight
+            if stop_condition == 'attempts':
+                with progress_lock:
+                    progress_counter.value += 1
             
             # Check if recoil particle passes through aperture
             if self._check_aperture_acceptance(x0, y0, theta_scatter, phi_scatter):
@@ -640,14 +643,14 @@ class ConversionFoil:
                 timing_noise = rng.normal(0, burn_duration / (2 * np.sqrt(2 * np.log(2))))
                 foil_time += timing_noise
             
-            num_accepted += 1
             batch_results.append(
                 (x0, p_x_relative, y0, p_y_relative, foil_time, energy_relative, incident_energy, particle_weight)
             )
             
-            # Update progress counter thread-safely
-            with progress_lock:
-                progress_counter.value += 1
+            num_accepted += 1
+            if stop_condition == 'successes':
+                with progress_lock:
+                    progress_counter.value += 1
                 
         # Consolidate in a numpy array, making sure it's the right shape even if we generated 0 rays
         if len(batch_results) == 0:
@@ -806,7 +809,7 @@ class ConversionFoil:
             reference_energy=1,  # it doesn't matter what this reference energy is because we're only looking at the number of acceptances
         )
         
-        # Calculate total efficiencie
+        # Calculate total efficiencies
         total_efficiency = scattering_efficiency * geometric_efficiency
         
         print(f'Processed {num_samples} samples using {max_workers} processes')
