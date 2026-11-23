@@ -44,7 +44,7 @@ class GenericInteraction:
         cross_section_m2 = cross_section_barns * 1e-28  # barns to m^2
         return self.target_density * cross_section_m2
         
-    def get_angle_distribution(self, incident_energy: float) -> Optional[ProbabilityDistribution]:
+    def get_angle_distribution(self, incident_energy: float) -> Optional[ContinuousProbabilityDistribution]:
         """ return the recoil angle probability distribution (radians) for the given incident particle energy"""
         raise ValueError("This interaction does not produce recoil particles.")
 
@@ -160,9 +160,9 @@ class ElasticScattering(GenericInteraction):
         energy_eV = energy_MeV * 1e6
         return self.diff_xs_recoil_interpolator(energy_eV)*np.sin(self.theta_lab)
     
-    def get_angle_distribution(self, incident_energy: float) -> Optional[ProbabilityDistribution]:
+    def get_angle_distribution(self, incident_energy: float) -> Optional[ContinuousProbabilityDistribution]:
         """ return the recoil angle probability distribution (radians) for the given incident particle energy """
-        return ProbabilityDistribution(
+        return ContinuousProbabilityDistribution(
             self.theta_lab,
             self._calculate_differential_xs_lab(incident_energy))
     
@@ -256,13 +256,13 @@ class ComptonScattering:
         a_0 = incident_energy / ELECTRON_REST_ENERGY
         return -2 * (1 + a_0) / np.cos(electron_angle)**2 / (1 + (1 + a_0)**2 * np.tan(electron_angle)**2)
     
-    def get_angle_distribution(self, incident_energy: float) -> Optional[ProbabilityDistribution]:
+    def get_angle_distribution(self, incident_energy: float) -> Optional[ContinuousProbabilityDistribution]:
         """ return the recoil angle probability distribution (radians) for the given incident particle energy """
         electron_angles = ComptonScattering._convert_to_electron_angle(incident_energy, self.photon_angles)
         photon_angle_distribution = self.photon_angle_distribution_interpolator(incident_energy)
         electron_angle_distribution = photon_angle_distribution * abs(
             ComptonScattering._photon_to_electron_jacobian(incident_energy, electron_angles))
-        return ProbabilityDistribution(
+        return ContinuousProbabilityDistribution(
             electron_angles, electron_angle_distribution)
     
     def get_recoil_energy(self, incident_energy: float, electron_angle: float, rng: np.random.Generator) -> float:
@@ -449,12 +449,12 @@ class PairProduction:
                 0,
             )
     
-    def get_angle_distribution(self, incident_energy: float) -> Optional[ProbabilityDistribution]:
+    def get_angle_distribution(self, incident_energy: float) -> Optional[ContinuousProbabilityDistribution]:
         """ return the recoil angle probability distribution (radians) for the given incident particle energy """
         # calculate the angular distribution
         differential_xs = self.differential_xs_interpolator(incident_energy)
         angle_table = PairProduction._convert_CM_to_lab(self.angle_CM_table, incident_energy)
-        return ProbabilityDistribution(
+        return ContinuousProbabilityDistribution(
             angle_table,
             differential_xs * np.sin(angle_table))
     
@@ -463,7 +463,7 @@ class PairProduction:
         # calculate the energy distribution
         electron_energy_table = self.energy_fraction_table * (incident_energy - 2*ELECTRON_REST_ENERGY)
         electron_angle_CM = PairProduction._convert_lab_to_CM(electron_angle, incident_energy)
-        electron_energy_distribution = ProbabilityDistribution(
+        electron_energy_distribution = ContinuousProbabilityDistribution(
             electron_energy_table,
             self.double_differential_xs_interpolator((incident_energy, electron_angle_CM)),
         )
@@ -483,10 +483,10 @@ Interaction = GenericInteraction | ComptonScattering | PairProduction
 """ an interaction between radiation and matter """
 
 
-class ProbabilityDistribution:
+class ContinuousProbabilityDistribution:
     def __init__(self, values: np.ndarray, probability_densities: np.ndarray):
         """
-        A one-dimensional probability distribution based on interpolating between some known probability densities
+        A one-dimensional continuous probability distribution based on interpolating between some known probability densities
         
         Args:
             values: The values of the random variable at which the probability density is defined
@@ -496,14 +496,22 @@ class ProbabilityDistribution:
             raise ValueError("the x-axis for a probability distribution must always be monotonically increasing.")
         self.min_value = values[0]
         self.max_value = values[-1]
+        
         # make a piecewise 1st-order polynomial out of the given PDF
-        intercepts = probability_densities[0:-1]
-        slopes = np.diff(probability_densities)/np.diff(values)
-        self.pdf = PPoly(
-            np.stack([slopes, intercepts], axis=0),
-            values, extrapolate=False)
-        # this object can then be integrated efficiently and exactly
-        self.cdf = self.pdf.antiderivative()
+        if self.max_value != self.min_value:
+            intercepts = probability_densities[0:-1]
+            slopes = np.diff(probability_densities)/np.diff(values)
+            self.pdf = PPoly(
+                np.stack([slopes, intercepts], axis=0),
+                values, extrapolate=False)
+            # this object can then be integrated efficiently and exactly
+            self.cdf = self.pdf.antiderivative()
+        # or, if there's only one probability, it gets a bit degenerate so do this hacky lambda stuff
+        else:
+            value = self.max_value
+            self.pdf = lambda x: np.inf if x == value else 0
+            self.cdf = lambda x: 0 if x < value else 1
+            self.cdf.solve = lambda x: [value]
     
     def integral(self, lower: float, upper: float):
         """
@@ -528,3 +536,29 @@ class ProbabilityDistribution:
         u_max = self.cdf(min(upper, self.max_value))
         u = rng.uniform(u_min, u_max)
         return self.cdf.solve(u)[0]
+
+
+class DiscreteProbabilityDistribution:
+    def __init__(self, values: np.ndarray, probabilities: np.ndarray):
+        """
+        A one-dimensional discrete probability distribution with explicitly tabulated probabilities
+        
+        Args:
+            values: The values of the random variable at which the probability density is defined
+            probabilities: The probability of each given value (it does not need to be normalized)
+        """
+        self.values = values
+        self.probabilities = probabilities/probabilities.sum()
+
+    def draw(self, rng: np.random.Generator):
+        """
+        randomly draw a number from the probability distribution
+        
+        Args:
+            rng: the random number generator to use
+        """
+        return rng.choice(self.values, p=self.probabilities)
+
+
+ProbabilityDistribution = ContinuousProbabilityDistribution | DiscreteProbabilityDistribution
+""" A one-dimensional probability distribution """

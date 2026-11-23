@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from concurrent.futures import Executor
 from typing import Dict, Tuple, Optional, Union
-import warnings
 import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
@@ -28,8 +27,6 @@ class HodoscopeResponse:
     ----------
     spectrometer : MPRSpectrometer
         Spectrometer whose output_beam is used.
-    foil_efficiencies : np.ndarray, shape (n_particles,)
-        Per-particle foil efficiency from ``PerformanceAnalyzer._get_foil_efficiencies()``.
     particle_yield : float or None
         Total source yield for absolute-unit scaling. When None, signal is
         in [particles/source] and signal_std is NaN.
@@ -63,7 +60,6 @@ class HodoscopeResponse:
     def __init__(
         self,
         spectrometer: MPRSpectrometer,
-        foil_efficiencies: np.ndarray,
         particle_yield: Optional[float] = None,
         response_matrix: Optional[np.ndarray] = None,
         energy_grid: Optional[np.ndarray] = None,
@@ -76,7 +72,7 @@ class HodoscopeResponse:
         hodoscope = spectrometer.hodoscope
 
         self.signal, count, total, self.channel_time_windows = self._bin_to_channels(
-            spectrometer, foil_efficiencies, time_gate_percentiles
+            spectrometer, time_gate_percentiles
         )
 
         n_bins = len(self.signal)
@@ -111,7 +107,7 @@ class HodoscopeResponse:
 
         if compute_density:
             density_map, response_map_2d, density_x, density_y = self._compute_density_map(
-                spectrometer, foil_efficiencies, dx, dy,
+                spectrometer, dx, dy,
             )
             if particle_yield is not None:
                 density_map = density_map * particle_yield
@@ -132,7 +128,6 @@ class HodoscopeResponse:
     @staticmethod
     def _bin_to_channels(
         spec: MPRSpectrometer,
-        foil_efficiencies: np.ndarray,
         time_gate_percentiles: Tuple[float, float] = (0, 100),
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Bin the output beam into hodoscope channels.
@@ -151,14 +146,13 @@ class HodoscopeResponse:
         x_positions = spec.output_beam[:, 0] * 100  # m → cm
         y_positions = spec.output_beam[:, 2] * 100  # m → cm
         output_energies_MeV = spec.reference_energy * (1 + spec.output_beam[:, 5])
-        total_particles = len(x_positions)
 
         sensitivities = hodoscope.get_detector_response(
             energies=output_energies_MeV,
             particle=spec.conversion_foil.particle,
         )
-        importance_weights = spec.input_beam[:, 7]
-        weights = foil_efficiencies * sensitivities * importance_weights
+        particle_weights = spec.input_beam[:, 7] * spec.beam_efficiency / np.sum(spec.input_beam[:, 7])
+        signal_weights = particle_weights * sensitivities
 
         bin_edges_cm = hodoscope.channel_edges * 100
         bin_heights_cm = hodoscope.channel_heights * 100
@@ -176,18 +170,14 @@ class HodoscopeResponse:
             accepted = in_bin & (
                 np.abs(y_positions - channel_y_centers_cm[b]) <= bin_heights_cm[b] / 2
             )
-            total_per_bin[b] = np.sum(weights[in_bin])
-            signal_per_bin[b] = np.sum(weights[accepted])
-            count_per_bin[b] = np.sum(foil_efficiencies[accepted] * importance_weights[accepted])
+            total_per_bin[b] = np.sum(signal_weights[in_bin])
+            signal_per_bin[b] = np.sum(signal_weights[accepted])
+            count_per_bin[b] = np.sum(particle_weights[accepted])
             if hodoscope.use_time_gating:
                 times_in_channel = arrival_times[accepted]
                 if len(times_in_channel) > 0:
                     channel_time_windows[b, 0] = np.percentile(times_in_channel, time_gate_percentiles[0])
                     channel_time_windows[b, 1] = np.percentile(times_in_channel, time_gate_percentiles[1])
-
-        signal_per_bin /= total_particles
-        count_per_bin /= total_particles
-        total_per_bin /= total_particles
 
         if spec.foil_geometric_factor:
             signal_per_bin *= spec.foil_geometric_factor
@@ -199,7 +189,6 @@ class HodoscopeResponse:
     @staticmethod
     def _compute_density_map(
         spec: MPRSpectrometer,
-        foil_efficiencies: np.ndarray,
         dx: float = 0.5,
         dy: float = 0.5,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -233,9 +222,9 @@ class HodoscopeResponse:
         for i in range(total_particles):
             xi = min(max(int((x_positions[i] - x_min) / dx), 0), density_map.shape[1] - 1)
             yi = min(max(int((y_positions[i] - y_min) / dy), 0), density_map.shape[0] - 1)
-            density_map[yi, xi] += foil_efficiencies[i] * importance_weights[i]
+            density_map[yi, xi] += importance_weights[i]
             if hodoscope.detector_used:
-                response_map_2d[yi, xi] += foil_efficiencies[i] * sensitivities[i] * importance_weights[i]
+                response_map_2d[yi, xi] += sensitivities[i] * importance_weights[i]
 
         density_map /= (cell_area_cm2 * total_particles)
         response_map_2d /= (cell_area_cm2 * total_particles)
@@ -462,7 +451,6 @@ class PerformanceAnalyzer:
         self,
         num_energies: int = 40,
         num_recoils_per_energy: int = 10000,
-        num_efficiency_samples: int = 10000,
         fractional_max: float = 0.5,
         include_kinematics: bool = True,
         include_stopping_power_loss: bool = True,
@@ -479,7 +467,6 @@ class PerformanceAnalyzer:
         Args:
             num_energies: Number of energy points to simulate
             num_recoils_per_energy: Number of recoil events per energy point for location/resolution
-            num_efficiency_samples: Number of samples for efficiency calculation
             fractional_max: Fraction of maximum of spatial peak to use for resolution calculation (defaults to 0.5 for FWHM)
             include_kinematics: Include kinematic effects
             include_stopping_power_loss: Include stopping power energy loss via SRIM
@@ -539,18 +526,11 @@ class PerformanceAnalyzer:
                         map_order=map_order)
                     
                     positions = spec.output_beam[:,0]
-                    positions_width[i], positions_center[i], positions_lower[i], positions_upper[i] = PerformanceAnalyzer.fwfm(positions, fractional_max=fractional_max)
-                    
-                    # Calculate efficiency for this energy
-                    scattering_efficiency, geometric_efficiency, total_efficiency = spec.conversion_foil.calculate_efficiency(
-                        energy,
-                        num_samples=num_efficiency_samples,
-                        executor=executor,
-                        max_workers=max_workers,
-                    )
-                    scattering_efficiencies[i] = scattering_efficiency
-                    geometric_efficiencies[i] = geometric_efficiency
-                    total_efficiencies[i] = total_efficiency
+                    positions_width[i], positions_center[i], positions_lower[i], positions_upper[i] = PerformanceAnalyzer.fwfm(
+                        positions, fractional_max=fractional_max)
+                    scattering_efficiencies[i] = spec.beam_scattering_efficiency
+                    geometric_efficiencies[i] = spec.beam_geometric_efficiency
+                    total_efficiencies[i] = spec.beam_efficiency
                 
                 gradients = np.gradient(positions_center, energies)
                 energy_resolutions = positions_width / gradients * 1000
@@ -583,35 +563,33 @@ class PerformanceAnalyzer:
 
         return df
     
-    def _load_performance_curve(self, performance_curve_file: Optional[str] = None) -> Optional[pd.DataFrame]:
+    def _load_performance_curve(self, performance_curve_file: Optional[str] = None) -> pd.DataFrame:
         filename = performance_curve_file or 'comprehensive_performance.csv'
         try:
             return pd.read_csv(f'{self.spectrometer.data_directory}/{filename}')
-        except Exception:
-            warnings.warn(
+        except FileNotFoundError:
+            raise FileNotFoundError(
                 f'Performance curve {filename} not found in {self.spectrometer.data_directory}. '
-                'Run generate_performance_curve() first.',
-                RuntimeWarning,
-            )
-            return None
+                'Run generate_performance_curve() first.')
 
     @staticmethod
     def _get_foil_efficiencies(
         spec: MPRSpectrometer,
-        performance_df: Optional[pd.DataFrame],
+        performance_df: pd.DataFrame,
     ) -> np.ndarray:
         """Interpolate per-particle foil efficiency from the performance curve."""
         df = performance_df
-        if df is not None and 'foil' in df.columns:
+        if 'foil' in df.columns:
             df = df[df['foil'] == spec.conversion_foil.foil_material]
         input_energies = spec.input_beam[:, 6]
-        if df is not None and len(df) > 0:
+        if len(df) > 0:
             return np.interp(
                 input_energies,
                 df['energy [MeV]'].to_numpy(),
                 df['total efficiency'].to_numpy(),
             )
-        return np.ones(len(input_energies))
+        else:
+            raise ValueError("the performance dataframe is empty, or has the wrong foil.")
 
     def build_response_matrix(
         self,
@@ -686,8 +664,7 @@ class PerformanceAnalyzer:
                     executor=executor,
                     max_workers=max_workers,
                 )
-                foil_efficiencies = self._get_foil_efficiencies(spec, performance_df)
-                signal, _, _, _ = HodoscopeResponse._bin_to_channels(spec, foil_efficiencies)
+                signal, _, _, _ = HodoscopeResponse._bin_to_channels(spec)
                 R[i, :] = signal
 
             bin_edges_cm = spec.hodoscope.channel_edges * 100  # m → cm
@@ -728,14 +705,10 @@ class PerformanceAnalyzer:
             Dict[str, HodoscopeResponse] for a dual-foil spectrometer,
             keyed by foil material name.
         """
-        performance_df = self._load_performance_curve()
-
         def _build(spec: MPRSpectrometer) -> HodoscopeResponse:
             foil = spec.conversion_foil.foil_material
-            foil_efficiencies = self._get_foil_efficiencies(spec, performance_df)
             return HodoscopeResponse(
                 spectrometer=spec,
-                foil_efficiencies=foil_efficiencies,
                 particle_yield=particle_yield,
                 response_matrix=response_matrices.get(foil) if response_matrices else None,
                 energy_grid=energy_grid,
